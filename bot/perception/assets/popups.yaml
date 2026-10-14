@@ -1,0 +1,20 @@
+# Fenêtres connues et comment les fermer, dans l'ordre où les traiter (celle du dessus d'abord).
+# Les images sont des découpes de captures, rangées dans ce dossier.
+#
+# - name: fin_de_combat          nom affiché dans le journal
+#   detect: fin_de_combat.png    morceau de la fenêtre qui la reconnaît (son titre par exemple)
+#   close: fin_de_combat_x.png   bouton à cliquer pour la fermer
+#   key: escape                  ou, à la place de close, touche qui la ferme
+#   threshold: 0.85              ressemblance minimale (0 à 1), facultatif
+
+popups:
+  - name: informations (niveau supérieur)
+    detect: informations_titre.png      # titre « Informations » ; s'ouvre par-dessus le résultat du combat
+    close: informations_ok.png          # bouton « Ok »
+  - name: résultat du combat
+    detect: fin_de_combat_titre.png     # « Résultat du combat » (sans le nombre de tours, qui varie)
+    close: fin_de_combat_fermer.png     # bouton « Fermer » sous la fenêtre
+  - name: menu principal
+    detect: menu_principal_titre.png    # « Menu principal » : Échap sans rien à fermer l'ouvre (11/10, un suiveur)
+    key: escape                         # Échap = « Annuler » ; jamais de clic : « Quitter Dofus » et « Déconnecter »
+                                        # sont juste au-dessus

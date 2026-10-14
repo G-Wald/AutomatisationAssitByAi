@@ -1,0 +1,52 @@
+# Session 1 du plan de tests (docs/plan_de_tests.md, docs/sessions/session_1_deplacements.md) : déplacements autour
+# et dans la cité d'Astrub. Chaque étape part de l'arrivée de la précédente. Lancement :
+#   .venv\Scripts\python -m tools.scenario_trajets config/scenarios/session1_deplacements.yaml
+nom: Session 1, déplacements d'Astrub
+equipe:
+  principal: Gela-[A13]
+  monde: douze
+depart: "1,-27"          # forêt d'Astrub : là où l'équipe est restée le 11/10 au soir
+
+etapes:
+  # D5 : parcours de référence (11/10 : 16 cartes, environ 2 min)
+  - {test: D5, vers: "4,-16", minutes: 6, note: "forêt -> banque, porte nord"}
+  # D4 : porte sud, dans les deux sens
+  - {test: D4, vers: "4,-14", minutes: 3, note: "vers la porte sud"}
+  - {test: D4, vers: "4,-13", minutes: 2, note: "porte sud, sortie"}
+  - {test: D4, vers: "4,-14", minutes: 2, note: "porte sud, entrée"}
+  # D1 : pas simple, aller-retour (8 passages)
+  - {test: D1, vers: "2,-13", minutes: 4, note: "vers le banc D1"}
+  - {test: D1, vers: "2,-14", minutes: 2}
+  - {test: D1, vers: "2,-13", minutes: 2}
+  - {test: D1, vers: "2,-14", minutes: 2}
+  - {test: D1, vers: "2,-13", minutes: 2}
+  - {test: D1, vers: "2,-14", minutes: 2}
+  - {test: D1, vers: "2,-13", minutes: 2}
+  - {test: D1, vers: "2,-14", minutes: 2}
+  # D2 : cartes coupées par un rempart, mémoire vide d'abord ; D3 : vrai mur en 0,-14 (gauche)
+  - {test: D2, vers: "1,-14", minutes: 3, note: "2,-14 : deux soleils à gauche",
+     oublier: ["2,-14", "1,-14", "0,-14", "-1,-19", "5,-19", "4,-19"]}
+  - {test: D3, vers: "-1,-14", minutes: 5, note: "0,-14 gauche : mur, contourner par -1,-13"}
+  # D4 : porte sud-ouest
+  - {test: D4, vers: "-1,-13", minutes: 2, note: "porte sud-ouest, sortie"}
+  - {test: D4, vers: "-1,-14", minutes: 2, note: "porte sud-ouest, entrée"}
+  # D2 : -1,-19 (deux soleils en bas) depuis le bas, puis porte ouest
+  - {test: D2, vers: "-1,-20", minutes: 5, note: "bande ouest de la cité, -1,-19 par le bas"}
+  - {test: D4, vers: "-2,-20", minutes: 2, note: "porte ouest, sortie"}
+  - {test: D4, vers: "-1,-20", minutes: 2, note: "porte ouest, entrée"}
+  - {test: D2, vers: "-1,-18", minutes: 3, note: "-1,-19 bas depuis le haut : mémoire apprise, aucun mauvais soleil"}
+  - {test: D2, vers: "-1,-20", minutes: 3, note: "retour"}
+  # D4 : portes nord et est ; D2 : 5,-19 (deux soleils à droite) en route
+  - {test: D4, vers: "5,-22", minutes: 5, note: "traversée de la cité vers le nord"}
+  - {test: D4, vers: "5,-23", minutes: 2, note: "porte nord, sortie"}
+  - {test: D4, vers: "5,-22", minutes: 2, note: "porte nord, entrée"}
+  - {test: D2, vers: "7,-19", minutes: 4, note: "par 5,-19 (deux soleils à droite)"}
+  - {test: D4, vers: "8,-19", minutes: 2, note: "porte est, sortie"}
+  - {test: D4, vers: "7,-19", minutes: 2, note: "porte est, entrée"}
+  # D5 : parcours longs de référence (11/10 au soir)
+  - {test: D5, vers: "4,-13", minutes: 6, note: "référence : 10 cartes, 75 s"}
+  - {test: D5, vers: "5,-23", minutes: 6, note: "référence : 12 cartes, 75 s ; 4,-19 haut (deux soleils)"}
+  - {test: D5, vers: "-2,-20", minutes: 6, note: "référence : 10 cartes, 71 s"}
+  - {test: D5, vers: "-1,-13", minutes: 6, note: "référence : 8 cartes, 52 s"}
+  - {test: D5, vers: "4,-16", minutes: 6, note: "référence : 8 cartes, 57 s"}
+  - {test: D5, vers: "1,-27", minutes: 6, note: "retour en forêt ; 4,-22 haut ne doit plus être réessayé"}

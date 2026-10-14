@@ -1,0 +1,176 @@
+# Réglages du bot. Les positions et couleurs de l'interface sont calibrées dans bot/perception.
+
+window:
+  title: "- Dofus Retro"   # partie du titre de la fenêtre du jeu (« Jesuisleking - Dofus Retro v1.49.5 »)
+  arriere_plan: true       # true : jouer en arrière-plan (08/10) : gestes envoyés aux fenêtres du jeu, ta souris et ton
+                           # clavier restent libres ; fenêtres recouvertes possibles, jamais réduites. --arriere-plan
+  ecran: "auto"            # au lancement du bot, les fenêtres du jeu sont déplacées sur cet écran (11/10 : le launcher
+                           # les ouvre petites sur l'écran principal, un 4K) : auto : un écran 1080p (celui des captures
+                           # de référence), sinon le principal ; principal ; secondaire ; 1, 2... (de gauche à droite,
+                           # comme dans l'interface) ; aucun : laissées où elles sont (en ligne de commande : --ecran)
+  plein_ecran: true        # et agrandies (le bouton à côté de la croix), comme pour les captures de référence
+
+safety:
+  stop_key: "f12"          # arrêt immédiat, même quand le jeu a le focus
+  pause_key: "f9"          # pause / reprise ("" pour désactiver)
+
+session:                   # début de session, une fois par personnage : ses sorts et ses caractéristiques (04/10)
+  mode: "controle"         # controle : lus à l'écran (fenêtre des sorts, fenêtres des caractéristiques), puis retenus ;
+                           # memoire : repris de la dernière session, sans ouvrir de fenêtre ; ce qui n'a jamais été
+                           # retenu pour un personnage est lu à l'écran (en ligne de commande : --lecture controle|memoire)
+  stats: true              # caractéristiques lues (Force, Intelligence, Chance, Agilité, bonus aux dommages fixes et %)
+                           # et comptées dans les dégâts des sorts : base x (100 + carac. de l'élément + %) / 100 + fixe,
+                           # par ligne de dégâts (formule validée le 04/10 ; le bonus aux dégâts physiques est lu mais
+                           # jamais compté, décision du 04/10) ; false : dégâts de base, comme avant
+  memory: "data/personnages"  # un fichier par personnage (<Nom>.json) : sa dernière lecture réussie, rien de plus
+
+combat:
+  auto_ready: true         # clique sur « Prêt » au placement
+  my_team: auto            # auto | red | blue — auto : repérée au timer de mon premier tour de chaque combat
+  spell:
+    slot: 3                # case de la barre de sorts : 1-7 = 1re ligne, 8-14 = 2e ligne, 0 = bouton à gauche de la barre
+    key: auto              # raccourci : auto = celui de la case (touches 1 à 7 de la rangée du haut), "" = clic sur la case
+                           # les sorts d'attaque sont toujours pris au clavier ; les sorts sur soi, par clic droit sur leur case
+    casts_per_turn: 1      # Flèche Magique : 4 PA, le personnage en a 6
+    range: [1, 7]          # portée supposée tant que le bot ne l'a pas mesurée (elle l'est à chaque sélection du sort)
+  cancel_key: "escape"     # désélectionne un sort
+  end_turn_key: "f1"       # touche de fin de tour ("" : clic sur le bouton) ; si elle ne passe pas le tour, le bot clique
+  max_pm: 3                # PM par tour, si la bulle des PM est illisible
+  max_pa: 6                # PA au début de chaque tour, si la bulle bleue des PA est illisible (sinon : lus)
+  danger_distance: 3       # ennemi à 3 cases ou moins : le repousser (Flèche de Recul) vaut des points en plus
+  # Moteur de tour (brain/engine.py) : déplacement + sorts + repli comparés en points de dégâts. Un seul style de
+  # combat, polyvalent (03/10 ; plus d'agressif ni de prudent, l'ancien réglage style est ignoré) : taper un ennemi à
+  # chaque tour si possible (achever les ennemis entamés, toute l'équipe sur le même), sans finir au contact, sans se
+  # coller aux alliés ni s'aligner derrière eux ni couper leurs lignes de vue ; si rien ne touche : se placer d'où
+  # taper au tour suivant. Les autres poids sont dans brain/engine.py (Weights).
+  contact_penalty: 10      # finir le tour au contact d'un ennemi : y aller seulement pour plus de 10 dégâts en plus
+                           # (sinon, ou après avoir lancé, le bot s'écarte avec ses PM restants)
+  tackle_penalty: 5        # quitter une case au contact d'un ennemi (tacle : PM perdus, on reste au contact)
+  move_cost: 1.0           # par PM dépensé : ne bouger que pour un vrai gain (le double sur une carte à relief)
+  zone_falloff: 0.10       # zone dégressive : -10 % de dégâts par case entre la case visée et l'ennemi touché
+                           # (règle de Dofus 2, validée pour le Rétro le 01/10 ; 0 : pas de dégressivité)
+  burst: true              # rafale (à l'essai, 03/10) : quand le plan relance le même sort sur la même cible (Lancer de
+                           # Pièces x3, Flèche Magique x2 avec 8 PA... tout sort sauf ceux qui repoussent), les lancers
+                           # s'enchaînent sans nouvelle capture complète ni nouveau plan ; la vie de la cible, lue sur sa
+                           # fiche au survol, limite les lancers à ceux qui devraient la tuer, puis nouveau plan (autre
+                           # cible). Arrêt si la cible disparaît. false : un plan après chaque sort, comme avant
+  creature_mode: true      # combat : mode créature activé (bouton boule à côté du cube du mode tactique, 04/10) :
+                           # personnages réduits, ils cachent moins les cases ; jamais recliqué s'il est déjà coché
+  fast_end: true           # vitesse (04/10) : dernier sort du tour, fin de tour aussitôt sans attendre son animation ;
+                           # en rafale, la touche du sort suivant pressée sans attendre que les PA baissent (false :
+                           # chaque sort confirmé avant la suite)
+
+engage:                    # hors combat : attaquer les groupes de monstres (désactivé par --combat-only)
+  enabled: true
+  show_groups_key: "z"     # touche qui affiche l'infobulle de tous les groupes de la carte
+  max_monsters: 8          # ignore les groupes plus gros (lignes de monstres de l'infobulle)
+  pause_between_fights: [1.5, 2.5]   # secondes entre la fin d'un combat et l'attaque suivante
+  retry_delay: 5          # secondes avant de rechercher quand aucun groupe n'est attaquable, ou que tous ceux de la
+                          # carte viennent d'être ratés (introuvables, clic sans menu « Attaquer ») : retentés à 10 s
+  clic_sonde: "droit"      # arrière-plan (window.arriere_plan) : sans survol, le groupe est cherché par 2 clics directs
+                           # au plus ; droit (08/10, vérifié par l'utilisateur) : le personnage marche jusqu'au groupe
+                           # et lance le combat, sans menu ; gauche : menu « Attaquer » puis clic dessus
+
+travel:                    # changement de carte par les soleils du bord (repérage : nom et coordonnées en haut à gauche)
+  mode: ""                 # "" : rester sur la carte ; zone : combats + carte voisine de la même zone quand elle est vide
+                           # test : 2 cartes puis retour, sans combat ; explore : toute la région, sans combat
+                           # aller : jusqu'à la carte `destination` par le plus court chemin, sans combat
+                           # (ou en ligne de commande : --zone, --travel-test, --explore, --aller x,y)
+  destination: ""          # mode aller : carte d'arrivée « x,y » (--aller x,y la remplace)
+  region: "Monde des Douze"  # où le bot circule : "Incarnam" ou "Monde des Douze" (au lancement : --monde incarnam|douze)
+  show_exits_key: "a"      # entoure les soleils de blanc (un appui), essayée seulement si le soleil voulu n'est pas vu
+  memory: "data/carte.json"  # cartes connues et leurs sorties, gardées d'une session à l'autre
+  walk_timeout: 20         # secondes au plus entre le clic sur le soleil et la nouvelle carte (11/10 : 12 s
+                           # trop court pour une longue marche, demi-tour vers une autre sortie)
+  still_after: 1.0         # soleil inatteignable (rempart) : personnage immobile pendant still_for s, après
+  still_for: 2.0           # still_after s laissées au départ -> soleil suivant de ce côté, sans attendre walk_timeout
+                           # (11/10 : 60 s perdues à chaque mur) ; still_for 0 : attente complète
+  motion_cells: 6          # cases de la vue réduite (160 x 90) qui changent quand le personnage marche
+  empty_searches: 2        # mode zone : recherches sans groupe attaquable avant de changer de carte
+  test_steps: 2            # --travel-test : cartes à parcourir avant de revenir
+  avoid_zones: ["Incarnam (Cimetière)"]  # zones où ne jamais aller : « Région (Zone) », ou « Zone » pour toutes
+                                         # les régions ; Cimetière d'Incarnam : Chafers agressifs (mort le 28/09)
+  avoid_maps: []           # cartes où ne jamais aller : ["Incarnam 3,6"], ou ["3,6"] pour toutes les régions
+
+rest:                      # s'asseoir sur le tabouret entre deux combats si la vie est basse (lue au remplissage du cœur)
+  enabled: true
+  below: 0.5               # s'asseoir sous 50 % de vie
+  until: 0.9               # jusqu'à 90 % ; le clic suivant sur la carte relève le personnage
+  max_seconds: 180
+
+popups:
+  unknown_window_key: "escape"   # touche essayée sur une fenêtre inconnue juste après un combat ("" : ne rien tenter)
+  unknown_window_delay: 20       # secondes après un combat pendant lesquelles on tente de fermer une fenêtre inconnue
+
+team:                      # mode équipe : une fenêtre du jeu par personnage, tous sur la même carte (--equipe)
+  enabled: auto            # auto : mode équipe dès que plusieurs fenêtres de personnages sont ouvertes ; true : toujours ;
+                           # false : jamais sans --equipe
+  leader: ""               # personnage principal (nom avant « - Dofus Retro » dans le titre de sa fenêtre) ; il attaque
+                           # et choisit le chemin ; "" : le premier de members, sinon le premier par ordre alphabétique
+                           # (en ligne de commande : --principal NOM)
+  members: []              # personnages de l'équipe, ex. ["Jesuisleking", "Autreperso"] ; [] : toutes les fenêtres du jeu
+  switch_delay: 0.25       # secondes après le passage d'une fenêtre au premier plan, le temps que le jeu se redessine
+                           # (avant une capture seulement : un clic ou une touche part aussitôt)
+  ready_key: "f1"          # touche « Prêt » au placement, dans chaque fenêtre ("" : clic sur le bouton)
+  join_timeout: 20         # secondes au plus, pour chaque autre personnage, pour rejoindre le combat (épée -> Rejoindre)
+  round_every: 15          # hors combat, tour des fenêtres au plus toutes les 15 s (fenêtres à fermer, agression...)
+  place: false             # placement : false : personne ne bouge, Prêt tout de suite, chacun repéré à son
+                           # premier tour par la portée d'un sort (rapide à 8) ; true : chacun choisit sa case
+  turn_signal: "notifications"  # qui joue : timeline (portrait et timer du tour, lus à l'écran) ; notifications : aussi les
+                           # notifications Windows que le jeu envoie au début du tour d'un personnage (option du jeu
+                           # « Notifications en arrière-plan »), lues par l'API de Windows pendant l'attente d'un tour :
+                           # sa fenêtre aussitôt, vérifiée au timer (paquets winrt à installer : bot/team/signals.py ;
+                           # en ligne de commande : --notifications). Toutes les notifications de Dofus (pas celles des
+                           # autres applications) sont enregistrées dans logs/<date_heure>/notifications.jsonl
+  turn_words: ["c'est à {nom} de jouer"]
+                           # notifications : seule compte comme tour une notification qui nomme UN personnage de
+                           # l'équipe ET contient une de ces expressions ({nom} : ce personnage ; sans accents ni
+                           # majuscules, mots entiers) ; les autres (succès, invitation, échange, message...) sont
+                           # ignorées. Texte du jeu vu le 03/10 : « C'est à Walitcoin de jouer »
+
+connexion:                 # connexion automatique (08/10) ; connexion seule : python -m bot.connection
+  auto: false              # true : au lancement du bot, les fenêtres du jeu restées à l'écran de connexion sont menées
+                           # en jeu (serveur, personnage), le groupe est reformé ; pendant le jeu, un personnage
+                           # déconnecté (inactivité) est reconnecté puis réinvité (en ligne de commande : --connexion)
+  serveur: "Allisteria"    # serveur choisi (en ligne de commande : --serveur NOM)
+  personnages: ["Gela-[A13]", "Brawli-[Gal]"]
+                           # personnages à choisir, tels qu'écrits dans le jeu ; sur chaque compte, le premier présent
+                           # est choisi, sinon le plus à gauche (le dernier joué) ; le premier de la liste invite les
+                           # autres dans son groupe (sauf team.leader ou --principal) ; [] : ceux de team.members
+  launcher: '%LOCALAPPDATA%\Programs\Ankama Launcher\Ankama Launcher.exe'
+                           # fenêtres déjà ouvertes connectées d'abord ; s'il manque un des personnages, le launcher
+                           # (lancé s'il ne l'est pas) lance tous les comptes disponibles (Ctrl+8, launcher passé
+                           # devant) ; chaque nouvelle fenêtre est connectée avec un personnage voulu, ou refermée
+  delai_connexion: 120     # secondes au plus pour qu'une fenêtre arrive en jeu
+  delai_launcher: 180      # secondes au plus pour voir s'ouvrir les fenêtres du jeu
+  verifier_toutes: 5       # pendant le jeu : titres des fenêtres relus au plus toutes les 5 s (sans capture)
+  groupe: true             # mode équipe : groupe reformé (fenêtre « Amis » du principal, « Inviter dans mon groupe »,
+                           # « Oui » chez l'autre) ; les personnages doivent être amis du principal
+  replier_groupe: true     # cadre du groupe replié (flèche en haut à droite) dans chaque fenêtre
+
+human:                    # rythme des gestes, en secondes [min, max] tirées au hasard à chaque fois
+  move_time: [0.07, 0.18]  # trajet de souris (sur ~800 px ; plus court pour un petit trajet)
+  reaction: [0.05, 0.14]   # pause avant chaque clic ou touche
+  hold: [0.04, 0.09]       # durée d'appui sur un bouton ou une touche
+  hesitation_chance: 0.04  # probabilité d'une hésitation en plus avant une action
+  hesitation: [0.3, 0.8]
+  slowdown: [0.85, 1.1]    # facteur appliqué à toutes les attentes du bot
+
+logs:                      # journaux et captures dans logs/<date_heure>/
+  keep_sessions: 20        # au démarrage, ne garder que les 20 dernières sessions (celle qui commence comprise) ;
+                           # le 01/10, 5 lancements d'affilée avaient effacé les journaux des tests précédents
+  max_total_mb: 300        # et pas plus de 300 Mo en tout (les plus vieilles sont supprimées d'abord)
+                           # les bilans chiffrés de chaque session restent dans data/bilans/ (jamais effacés)
+  max_images: 300          # captures au plus par session
+  images: "toutes"         # captures enregistrées : toutes (tests), problemes (seulement les échecs), aucune
+                           # (le bot regarde toujours l'écran ; ceci ne règle que ce qui est gardé dans logs/)
+
+timing:                    # secondes (avant l'allongement aléatoire human.slowdown)
+  poll: 0.15               # entre deux observations de l'écran (une capture + son analyse : quelques ms)
+  after_cast: 0.5          # attente après un sort, avant de surveiller les PA (mis à jour en fin d'animation)
+  cast_confirm: 3.0        # surveillance des PA toutes les 0,15 s, avant de conclure que le sort n'est pas parti
+  per_cell_moved: 0.3      # attente par case parcourue (puis vérification toutes les 0,2 s)
+  wait_mode: "fixe"        # attentes en combat. fixe : pauses ci-dessus puis vérification (comportement validé) ;
+                           # condition (à l'essai) : une capture toutes les 0,1 s dès la touche ou le clic, jusqu'à voir
+                           # la portée du sort, le curseur interdit, les PA changés, l'arrivée, la main passée ; mêmes
+                           # délais au plus, mêmes conclusions. Comparer les lignes « Tour : ... » de bot.log

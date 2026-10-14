@@ -1,0 +1,29 @@
+[project]
+name = "autobot"
+version = "0.1.0"
+description = "Bot d'automatisation par lecture d'écran pour un jeu de combat tour par tour"
+requires-python = ">=3.12"
+dependencies = [
+    "mss>=9",             # capture d'écran Windows
+    "numpy>=2",
+    "opencv-python>=4.10", # analyse d'image (couleurs, formes, comparaison de motifs)
+    "pywin32>=306",       # fenêtres Windows, souris et clavier
+    "pynput>=1.7",        # écoute de la touche d'arrêt d'urgence
+    "pyyaml>=6",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["bot*"]
+
+[tool.setuptools.package-data]
+"bot.perception" = ["assets/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

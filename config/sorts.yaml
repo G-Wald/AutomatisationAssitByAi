@@ -1,0 +1,38 @@
+# Rôle tactique des sorts. Leurs caractéristiques (PA, portée, effets, lancers par tour et par cible, relance...)
+# viennent de config/sorts/solomonk.json (tools/import_sorts.py), au niveau lu dans la fenêtre « Tes sorts ».
+#
+# Sans entrée ici, le rôle se déduit des effets du sort :
+#   boost_portee  : bonus de portée lancé sur soi (portée 0), en début de tour s'il reste de quoi attaquer ensuite
+#   boost_degats  : bonus de dégâts lancé sur soi (Maîtrise de l'Arc, Tir Puissant, Puissance, Compulsion,
+#                   Amplification), avant les attaques du tour quand un ennemi est à portée et que le bonus rapporte
+#                   plus que les PA qu'il prend ; pas les bonus de zone (Guide de Bravoure), ni ceux qui blessent le
+#                   lanceur ou le transforment (Mutilation, Colère de Zatoïshwan)
+#   repousser     : dégâts + recul de 2 cases ou plus : éloigner un ennemi trop proche (plus de dégâts s'il est
+#                   bloqué contre un obstacle)
+#   degats_zone   : dégâts sur une ligne de cases (plusieurs ennemis alignés)
+#   retrait_pa    : dégâts + retrait de PA (l'ennemi frappera moins fort)
+#   poison        : dégâts sur plusieurs tours
+#   degats        : dégâts
+#   autre         : la tactique ne s'en sert pas : ni dégâts ni bonus (soins, invocations, autres bonus, malus :
+#                   Sac Animé, Clé Réductrice...), ou un malus (recul, vol...) avec moins d'1 dégât moyen par PA
+#                   (Aveuglement du Féca au niveau 1 : 1 dégât pour 3 PA)
+# Une entrée ici l'impose (clé : nom du sort sans accents, comme dans solomonk.json).
+#
+# Chaque sort est aussi reconnu par son icône quand elle est connue (bot/perception/assets/sorts/icones/<clé>.png),
+# en plus de ses PA, de sa portée et de son niveau lus dans la fenêtre « Tes sorts ».
+
+# Classe d'un personnage (nom avant « - Dofus Retro » dans le titre de sa fenêtre), quand celle déduite de la
+# fenêtre des sorts est fausse ou incertaine (« Classe incertaine » dans le journal) : prioritaire. Clé ou nom de la
+# classe : feca, osamodas, enutrof, sram, xelor, ecaflip, eniripsa, iop, cra, sadida, sacrieur, pandawa.
+# Exemple : classes: {Walitcoin: enutrof, Jesuisleking: cra}
+classes: {}
+
+sorts:
+  fleche_de_recul: {role: repousser}
+  fleche_empoisonnee: {role: poison}
+  fleche_magique: {role: degats}
+  fleche_glacee: {role: retrait_pa}
+  fleche_enflammee: {role: degats_zone}
+  tir_eloigne: {role: boost_portee}
+  # Ne frappent que des invocations (le jeu refuse de les lancer sur un monstre) : jamais utilisés pour attaquer.
+  sacrifice_poupesque: {role: autre}  # Sadida (03/10 : essayé à chaque tour, jamais parti)

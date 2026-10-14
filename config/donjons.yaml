@@ -1,0 +1,290 @@
+# Donjons candidats pour le farm en équipe (12/10). Conception et explications : docs/rapports/donjons.md.
+# Pas encore lu par le bot.
+#
+# Chaque valeur est écrite {valeur, source, a_verifier_en_jeu} :
+#   source « client (...) » : langue du client Retro 1.49.6 copiée dans data/client_retro/lang, lue par
+#     tools/langue_client.py ; entre parenthèses la table : DU donjons, HI indices de la carte du monde, MA cartes
+#     (p1, p2 : cases de placement), I objets, CR recettes, M monstres, N PNJ, D dialogues (q = texte du PNJ,
+#     a = réponse du joueur). Données officielles.
+#   source « web N » : page N de « sources.web » (Dofus Retro / 1.29 seulement), relevée par un agent de recherche.
+#   source « déduction » : raisonnement sur les données, pas écrit tel quel.
+#   source « à apprendre » : à relever sur capture ou par le bot à la première visite.
+#   a_verifier_en_jeu : non = donnée du client ; oui = à confirmer en jeu ou sur capture.
+
+sources:
+  client:
+    fichiers: data/client_retro/lang/ANKXTRASO_0_*.sol et ANKLANGSO_0.sol (lecture seule)
+    outil: .venv/Scripts/python -m tools.langue_client --donjon 2
+  web:
+    1: {url: "https://xixou.io/guides/donjons/donjon-des-champs/", retro: oui, confiance: haute}
+    2: {url: "https://xixou.io/guides/donjons/donjon-des-bouftous/", retro: oui, confiance: haute}
+    3: {url: "https://xixou.io/guides/donjons/donjon-ensable/", retro: oui, confiance: haute}
+    4: {url: "https://xixou.io/encyclopedie/ressources/ecaille-poisseuse/", retro: oui, confiance: haute}
+    5: {url: "https://solomonk.fr/fr/donjon/champs", retro: oui, confiance: haute, note: "relue le 12/10"}
+    6: {url: "https://solomonk.fr/fr/donjon/bouftous", retro: oui, confiance: haute}
+    7: {url: "https://solomonk.fr/fr/donjon/ensable", retro: oui, confiance: haute}
+    8: {url: "https://guidedofus.com/donjon-des-champs/", retro: oui, confiance: moyenne}
+    9: {url: "https://guidedofus.com/donjon-bouftou/", retro: oui, confiance: moyenne}
+    10: {url: "https://guidedofus.com/donjon-ensable/", retro: oui, confiance: moyenne}
+    11: {url: "https://dofusretro.jeuxonline.info/article/14804/donjons-astrub", retro: oui, confiance: haute}
+    12: {url: "https://dofusretro.jeuxonline.info/article/14805/donjon-tainela", retro: oui, confiance: haute}
+    13: {url: "https://dofusretro.jeuxonline.info/article/14800/dofus-retro-donjons", retro: oui, confiance: haute}
+    14: {url: "https://wgpanel.net/encyclopedie/craft/clef-des-champs (et clef-du-donjon-des-bouftous, clef-du-donjon-ensable)", retro: oui, confiance: haute}
+    15: {url: "https://wiki-dofus.eu/w/Donjon_des_Champs (et Donjon_des_Bouftous, Donjon_Ensabl%C3%A9)", retro: incertain (2012), confiance: moyenne}
+    16: {url: "https://www.millenium.org/news/357321.html", retro: "oui (1.31)", confiance: haute, note: "relue le 12/10"}
+    17: {url: "https://www.millenium.org/guide/344664.html", retro: oui, confiance: haute}
+    18: {url: "https://www.millenium.org/guide/345297.html (et 345090, 345147)", retro: oui, confiance: haute}
+    19: {url: "https://www.gamosaurus.com/?p=45090", retro: oui, confiance: "moyenne (quantités des recettes fausses)"}
+    20: {url: "https://www.gamosaurus.com/?p=44309", retro: oui, confiance: moyenne}
+    21: {url: "https://www.gamosaurus.com/?p=54067", retro: oui, confiance: moyenne}
+    22: {url: "https://www.breakflip.com/guides/106212.html", retro: oui, confiance: moyenne}
+    23: {url: "https://dofus.jeuxonline.info/actualite/30247/devblog-sauvegarde-progression-donjon", retro: "non (Dofus 2) : inférence seulement", confiance: moyenne}
+    24: {url: "https://wow.allakhazam.com/wiki/Life_%28DoFus%29", retro: "incertain (2008)", confiance: faible}
+    25: {url: "https://barbok.fr/index.php?type=clefs", retro: "non explicite (site 1.x, mêle des donjons de Frigost)", confiance: moyenne, note: "31 clés sur 40 ; 16 recettes différentes du client"}
+    26: {url: "https://xixou.io/wp-json/xixou/v1/resource/<slug> (API des ressources)", retro: "oui (1.49)", confiance: haute, note: "40 clés ; numéros d'image = gfx du client ; recettes et niveaux = client"}
+
+equipe:  # réponses de l'utilisateur du 12/10
+  niveaux: {valeur: {"Gela-[A13]": 113, "Brawli-[Gal]": 103, "Jesuisleking": 14, "Imthebest": 6}, source: "utilisateur (12/10)", a_verifier_en_jeu: non}
+  remplacement: {valeur: "Imthebest pourrait être remplacé par un autre personnage", source: "utilisateur (12/10)", a_verifier_en_jeu: non}
+  comptes: {valeur: "quatre comptes différents : un coffre par personnage", source: "utilisateur (12/10)", a_verifier_en_jeu: non}
+  acces_coffre: {valeur: {"Gela-[A13]": true, "Brawli-[Gal]": true, "Jesuisleking": true, "Imthebest": false}, source: "déduction (niveau > 10 exigé, client D q6205)", a_verifier_en_jeu: non}
+  point_de_sauvegarde: {valeur: "zaap d'Astrub 4,-19 (à régler pour chacun)", source: "utilisateur (12/10)", a_verifier_en_jeu: oui}
+  touche_inventaire: {valeur: "i", source: "utilisateur (12/10)", a_verifier_en_jeu: non}
+  depart: {valeur: "au démarrage : annoncer le nombre de clés de chaque personnage, puis les répartir par échanges ; s'il n'y en a pas assez pour tout le monde, le dire", source: "utilisateur (12/10), exigence du mode farm de donjon", a_verifier_en_jeu: non}
+
+communs:
+  icones: {valeur: "dessin de chaque objet : retroclient/clips/items/<type>/<gfx>.swf (installation, lecture seule) ; formes vectorielles, rendu PNG possible (essai : data/donjons_essai/)", source: "installation du client ; tools/langue_client.py --objet", a_verifier_en_jeu: non}
+  type_des_cles: {valeur: "84 « Clefs », super-type 9 (celui des ressources) : onglet ressources", source: "client (I.t)", a_verifier_en_jeu: oui}
+  fabrication: {valeur: "Bricoleur, « Confectionner une clef » (34 clés) ; Champs et Bouftous parmi les recettes des premiers niveaux", source: "client (SK 182) ; web 19", a_verifier_en_jeu: oui}
+  acces: {valeur: "parler au gardien avec la clé ou le trousseau de clefs ; une clé par personnage", source: "web 18, web 1", a_verifier_en_jeu: oui}
+  acces_coffre: {valeur: "niveau supérieur à 10", source: "client (D q6205)", a_verifier_en_jeu: non}
+  recherche_coffre: {valeur: "« Recherche d'un objet », « Nom de l'objet (%1 caractères minimum) : » ; 2 caractères en banque depuis la 1.31", source: "client (ANKLANGSO INVENTORY_SEARCH) ; web 16", a_verifier_en_jeu: oui}
+  transfert_maximum: {valeur: "un transfert entre inventaires propose le maximum permis par les pods (1.31)", source: "web 16", a_verifier_en_jeu: oui}
+  mort_en_donjon: {valeur: "ramené au dernier point de sauvegarde (tombes interdites en donjon)", source: "client (ANKLANGSO ERROR_142)", a_verifier_en_jeu: oui}
+  mort_equipe_gagnante: {valeur: "revient à 1 PV en fin de combat", source: "web 24", a_verifier_en_jeu: oui}
+  defaite: {valeur: "tout recommencer, clé et énergie perdues", source: "web 23 (inférence)", a_verifier_en_jeu: oui}
+  quitter_en_cours: {valeur: "pas de potion : mourir ou battre le boss", source: "web 21", a_verifier_en_jeu: oui}
+  trousseau_de_clefs: {valeur: "objet 10207, 1 doplon au temple de classe : chaque donjon une fois par semaine sans clé ; réponse « Utiliser le trousseau de clefs. » à éviter par défaut", source: "client (I 10207, D q7613) ; web 17", a_verifier_en_jeu: oui}
+  coordonnees_des_salles: {valeur: "salles aux coordonnées de l'entrée dans 40 donjons sur 49 (dont les trois ci-dessous)", source: "client (MA, HI)", a_verifier_en_jeu: non}
+  carte_en_plus: {valeur: "chaque donjon a une carte de plus que de salles de combat (salle de fin ou variante)", source: "client (DU, MA) ; web 1 à 7", a_verifier_en_jeu: oui}
+  passage_de_salle: {valeur: "inconnu pour ces trois donjons ; il faut battre le groupe de la salle ; aux Bulbes, soleil en haut de la carte", source: "web 12, web 18", a_verifier_en_jeu: oui}
+  donjon_incarnam: {valeur: "exclu : retour à Incarnam impossible après le niveau 15", source: "web 22", a_verifier_en_jeu: oui}
+
+donjons:
+
+  donjon_des_champs:
+    rang: {valeur: 1, source: "déduction (docs/rapports/donjons.md, section 4)", a_verifier_en_jeu: non}
+    nom: {valeur: Donjon des Champs, source: "client (DU 2, sous-zone 306)", a_verifier_en_jeu: non}
+    niveau: {valeur: 20, source: "client (DU 2 lvl)", a_verifier_en_jeu: non}
+    niveau_conseille: {valeur: "environ 15, groupe de 3 à 8 (xixou : 10)", source: "web 8, web 1", a_verifier_en_jeu: oui}
+    sous_zone_dedans: {valeur: "Donjon des Champs (306), région Astrub", source: "client (MA.sa)", a_verifier_en_jeu: non}
+    distance_banque: {valeur: "environ 12 cartes depuis 4,-16 (mémoire du bot jusqu'à 8,-25) ; zaap Cité d'Astrub 4,-19", source: "déduction ; web 1", a_verifier_en_jeu: oui}
+    entree:
+      coordonnees: {valeur: "7,-25", source: "client (HI 338 -> carte 7453) ; web 11", a_verifier_en_jeu: non}
+      carte: {valeur: 7453, source: "client (HI 338)", a_verifier_en_jeu: non}
+      lieu: {valeur: "atelier des paysans d'Astrub (carte intérieure 7613 aux mêmes coordonnées ?)", source: "web 11, web 15 ; client (MA 7613) : déduction", a_verifier_en_jeu: oui}
+      sous_zone_dehors: {valeur: "Champs d'Astrub (98)", source: "client (MA)", a_verifier_en_jeu: non}
+      pnj: {valeur: "Mawy Ingalsse (PNJ 780)", source: "client (N 780, D q3178 : sa grange, une clef perdue dans les champs) ; web 15", a_verifier_en_jeu: oui}
+      case_pnj: {valeur: null, source: "à apprendre", a_verifier_en_jeu: oui}
+      dialogue:
+        valeur:
+          - {pnj: "Hey, bonjour aventurier, comment vas-tu ? Je m'appelle Mawy...", reponse: "Donner la clef et rentrer (supposée)"}
+        source: "client (D q3178) ; réponse non identifiée"
+        a_verifier_en_jeu: oui
+      cle_consommee: {valeur: null, source: "non dit (description de la clé muette ; web : rien)", a_verifier_en_jeu: oui}
+      une_cle_par_personnage: {valeur: true, source: "web 1 (peut-être un gabarit du site)", a_verifier_en_jeu: oui}
+    cle:
+      id: {valeur: 8143, source: "client (I)", a_verifier_en_jeu: non}
+      nom: {valeur: Clef des Champs, source: "client (I)", a_verifier_en_jeu: non}
+      dessin: {valeur: "clips/items/84/13.swf (2 036 octets, vectoriel) ; rendu d'essai data/donjons_essai/cle_8143_clef_des_champs.png", source: "client (I gfx 13) ; installation", a_verifier_en_jeu: non}
+      images_web: {valeur: ["https://xixou.io/wp-content/uploads/xixou-ressources/images_clefs/13.svg (taille inconnue)", "https://barbok.fr/images/Clefs/champs.jpg (2 120 octets)"], source: "web 26, web 25 ; non téléchargées", a_verifier_en_jeu: non}
+      nom_barbok: {valeur: "Clé Donjon des Champs ; recette Barbok 10 + 10 (écart, ancienne version ?)", source: "web 25", a_verifier_en_jeu: non}
+      niveau: {valeur: 10, source: "client (I)", a_verifier_en_jeu: non}
+      poids: {valeur: 1, source: "client (I)", a_verifier_en_jeu: non}
+      detruite_ecrit_dans_la_description: {valeur: false, source: "client (I)", a_verifier_en_jeu: oui}
+      recette: {valeur: ["3 Pétale de Tournesol Sauvage (2659)", "3 Fleur de Pissenlit Diabolique (306)"], source: "client (CR) ; web 1, web 14 (web 19 dit 10 + 10 : faux)", a_verifier_en_jeu: non}
+      ingredients_butin: {valeur: {"Pétale de Tournesol Sauvage": "Tournesol Sauvage (8-15)", "Fleur de Pissenlit Diabolique": "Pissenlit Diabolique (2-9)"}, source: "client (I drop)", a_verifier_en_jeu: non}
+      butin: {valeur: "46 monstres des champs et du donjon ; environ 0,5 % sur larves, Tournesol Sauvage, Champ Champ", source: "client (I drop) ; web 1 (taux)", a_verifier_en_jeu: oui}
+      obtention: {valeur: "Bricoleur de bas niveau, butin, hôtel de vente (prix non trouvé)", source: "web 19, web 8", a_verifier_en_jeu: oui}
+    salles:
+      nombre_de_cartes: {valeur: 8, source: "client (DU 2)", a_verifier_en_jeu: non}
+      nombre_de_combats: {valeur: 7, source: "web 1, web 5", a_verifier_en_jeu: oui}
+      cartes:
+        valeur:
+          - {carte: 9768, nom: "Salle 1", plan: [0, 0], places_p1: 9, places_p2: 8}
+          - {carte: 9769, nom: "Salle 2", plan: [10, 0], places_p1: 9, places_p2: 9}
+          - {carte: 9770, nom: "Salle 3", plan: [20, 0], places_p1: 3, places_p2: 8}
+          - {carte: 9771, nom: "Salle 4", plan: [30, 0], places_p1: 8, places_p2: 8}
+          - {carte: 9772, nom: "Salle 5", plan: [30, 10], places_p1: 4, places_p2: 8}
+          - {carte: 9773, nom: "Salle 6", plan: [30, 20], places_p1: 10, places_p2: 8}
+          - {carte: 9774, nom: "Salle 7", plan: [30, 30], places_p1: 9, places_p2: 25}
+          - {carte: 9786, nom: "Salle 7 (nom repris)", plan: [0, 30], places_p1: 9, places_p2: 25}
+        source: "client (DU 2, MA)"
+        a_verifier_en_jeu: non
+      places_joueurs: {valeur: "salle 3 : 3 ; salle 5 : 4 ; autres : 8 et plus (si p1 est le côté des joueurs)", source: "client (MA p1) : déduction ; web 8 (une salle à 3, une à 4)", a_verifier_en_jeu: oui}
+      ordre: {valeur: "salles 1 à 7 le long du plan ; 9786 : variante de la salle 7 ?", source: "déduction", a_verifier_en_jeu: oui}
+      passage: {valeur: null, source: "non trouvé : à observer", a_verifier_en_jeu: oui}
+      monstres:
+        valeur:
+          1: "3 parmi Champ Champ, Moskito, Pissenlit Diabolique"
+          2: "4 parmi Larve Bleue, Champ Champ, Moskito, Pissenlit Diabolique"
+          3: "5 parmi Larve Bleue, Larve Verte, Champ Champ, Moskito, Pissenlit Diabolique"
+          4: "6 parmi Larve Bleue, Larve Verte, Larve Orange, Tournesol Sauvage"
+          5: "7 parmi Tournesol Sauvage, Champ Champ, Rose Démoniaque"
+          6: "8 parmi Tournesol Sauvage, Moskito, Rose Démoniaque, Pissenlit Diabolique"
+          7: "Tournesol Affamé + 1 Larve Bleue, Verte, Orange, Tournesol Sauvage, Champ Champ, Rose Démoniaque, Pissenlit Diabolique"
+        niveaux: "Moskito 1-2, Champ Champ 3-7, Larve Bleue 2-6, Pissenlit 2-9, Rose 4-8, Larve Verte 6-10, Larve Orange 8-12, Tournesol Sauvage 8-15"
+        source: "web 5 (relue), web 1 ; niveaux : client (M)"
+        a_verifier_en_jeu: oui
+    boss:
+      nom: {valeur: Tournesol Affamé, source: "client (M 799) ; web 1, web 5", a_verifier_en_jeu: non}
+      niveaux_vie: {valeur: "grades 1 à 5 : niveau 40 à 48, 500 à 620 PV, 6 PA, 2 PM", source: "client (M 799)", a_verifier_en_jeu: non}
+      salle: {valeur: 7, source: "web 1, web 5", a_verifier_en_jeu: oui}
+    sortie: {valeur: null, source: "non trouvé en Retro (Dofus 2 : reparler à Mawy, retour dans l'atelier)", a_verifier_en_jeu: oui}
+    restrictions: {valeur: "aucun niveau minimum trouvé ; salle 3 limitée à 3 combattants, salle 5 à 4", source: "web 8 ; client (MA p1)", a_verifier_en_jeu: oui}
+
+  donjon_des_bouftous:
+    rang: {valeur: 2, source: "déduction (docs/rapports/donjons.md, section 4)", a_verifier_en_jeu: non}
+    nom: {valeur: Donjon des Bouftous, source: "client (DU 1 « Donjon Bouftou », sous-zone 82)", a_verifier_en_jeu: non}
+    niveau: {valeur: 30, source: "client (DU 1 lvl)", a_verifier_en_jeu: non}
+    niveau_conseille: {valeur: "à partir de 20 ; groupe de 4 à 8 vers 30 (xixou : 10)", source: "web 12, web 9, web 2", a_verifier_en_jeu: oui}
+    sous_zone_dedans: {valeur: "Donjon des Bouftous (82), région Tainéla", source: "client (MA.sa, MA.a)", a_verifier_en_jeu: non}
+    distance_banque: {valeur: "environ 20 cartes depuis 4,-16 (7 hors de la mémoire du bot) ; zaap du Berceau 1,-32", source: "déduction ; web 2", a_verifier_en_jeu: oui}
+    entree:
+      coordonnees: {valeur: "2,-34", source: "client (HI 328 -> carte 1856) ; web 12", a_verifier_en_jeu: non}
+      carte: {valeur: 1856, source: "client (HI 328)", a_verifier_en_jeu: non}
+      sous_zone_dehors: {valeur: "Le berceau (30), région Tainéla", source: "client (MA)", a_verifier_en_jeu: non}
+      pnj: {valeur: "inconnu (« Rotabla le berger triste », PNJ 173, d'après une source Dofus 2 seulement)", source: "client (N 173) ; gambin.co (Dofus 2, écarté)", a_verifier_en_jeu: oui}
+      case_pnj: {valeur: null, source: "à apprendre", a_verifier_en_jeu: oui}
+      dialogue:
+        valeur:
+          - {pnj: "Toi, tu veux aller tondre la laine du roi des Bouftous, pas vrai ?", reponse: "Donner la clé des bouftous."}
+          - {pnj: "Et voilà, bonne tonte !"}
+        sans_cle: "Hey, hey! Tu n'as pas de clé!"
+        source: "client (D q3353, a564, q3358, q3355) ; association au gardien par le contenu : déduction"
+        a_verifier_en_jeu: oui
+      cle_consommee: {valeur: true, source: "client (I 1568 : « elle sera détruite après utilisation ») ; web 2", a_verifier_en_jeu: non}
+      une_cle_par_personnage: {valeur: true, source: "web 2", a_verifier_en_jeu: oui}
+    cle:
+      id: {valeur: 1568, source: "client (I)", a_verifier_en_jeu: non}
+      nom: {valeur: Clef du Donjon des Bouftous, source: "client (I)", a_verifier_en_jeu: non}
+      dessin: {valeur: "clips/items/84/226.swf (1 014 octets, vectoriel) ; rendu d'essai data/donjons_essai/cle_1568_clef_du_donjon_des_bouftous.png", source: "client (I gfx 226) ; installation", a_verifier_en_jeu: non}
+      images_web: {valeur: ["https://xixou.io/wp-content/uploads/xixou-ressources/images_clefs/226.svg (taille inconnue)", "https://barbok.fr/images/Clefs/bouftou.jpg (1 714 octets)"], source: "web 26, web 25 ; non téléchargées", a_verifier_en_jeu: non}
+      nom_barbok: {valeur: "Clé Donjon Bouftou ; recette identique au client", source: "web 25", a_verifier_en_jeu: non}
+      niveau: {valeur: 10, source: "client (I)", a_verifier_en_jeu: non}
+      poids: {valeur: 2, source: "client (I)", a_verifier_en_jeu: non}
+      detruite_ecrit_dans_la_description: {valeur: true, source: "client (I)", a_verifier_en_jeu: non}
+      recette: {valeur: ["10 Laine de Bouftou (384)", "1 Oeil de Bouftou (2453)", "1 Sabot de Bouftou (2451)"], source: "client (CR) ; web 2, web 14", a_verifier_en_jeu: non}
+      ingredients_butin: {valeur: {"Laine de Bouftou": "Bouftou, environ 80 %", "Oeil et Sabot de Bouftou": "Bouftou, environ 1 %"}, source: "client (I drop) ; web 2 (taux)", a_verifier_en_jeu: oui}
+      butin: {valeur: "14 monstres (Bouftou, Boufton Blanc et Noir, Chef de Guerre Bouftou...) ; environ 0,5 %", source: "client (I drop) ; web 2 (taux), web 13", a_verifier_en_jeu: oui}
+      obtention: {valeur: "Bricoleur niveau 10 à 20 (recette très demandée), butin des Bouftous, hôtel de vente (prix non trouvé)", source: "web 19, web 13", a_verifier_en_jeu: oui}
+    salles:
+      nombre_de_cartes: {valeur: 11, source: "client (DU 1)", a_verifier_en_jeu: non}
+      nombre_de_combats: {valeur: 10, source: "web 2, web 6, web 15", a_verifier_en_jeu: oui}
+      cartes:
+        valeur:
+          - {carte: 2073, nom: "Salle 1", plan: [0, 0], icone: 900}
+          - {carte: 2074, nom: "Salle 2", plan: [1, 0]}
+          - {carte: 2075, nom: "Salle 3", plan: [2, 0]}
+          - {carte: 2076, nom: "Salle 4", plan: [3, 0]}
+          - {carte: 2077, nom: "Salle 5", plan: [4, 0]}
+          - {carte: 2079, nom: "Salle 6", plan: [4, 1]}
+          - {carte: 2080, nom: "Salle 7", plan: [4, 2]}
+          - {carte: 2081, nom: "Salle 8", plan: [3, 2]}
+          - {carte: 2082, nom: "Salle 9", plan: [2, 2]}
+          - {carte: 2083, nom: "Salle 10", plan: [1, 2], icone: 905}
+          - {carte: 2084, nom: "Salle 11", plan: [0, 2], icone: 901}
+        source: "client (DU 1, MA)"
+        a_verifier_en_jeu: non
+      places_joueurs: {valeur: "8 dans chaque salle", source: "client (MA p1)", a_verifier_en_jeu: non}
+      ordre: {valeur: "chaîne en U, salles 1 à 10 de combat, salle 11 de fin (icônes : 900 entrée ? 905 boss ? 901 fin ?)", source: "déduction ; web 2 (10 combats)", a_verifier_en_jeu: oui}
+      passage: {valeur: "battre le groupe de la salle pour passer ; geste non trouvé", source: "web 12", a_verifier_en_jeu: oui}
+      monstres:
+        valeur:
+          1: "2 Boufton Blanc, 2 Boufton Noir"
+          2: "4 Boufton Blanc, 4 Boufton Noir"
+          3: "2 Bouftou, 2 Boufton Blanc, 2 Boufton Noir"
+          4: "3 Bouftou, 3 Boufton Blanc, 2 Boufton Noir"
+          5: "4 Bouftou, 2 Boufton Blanc, 2 Boufton Noir"
+          6: "6 Bouftou, 1 Boufton Blanc, 1 Boufton Noir"
+          7: "8 Bouftou"
+          8: "6 Bouftou, 2 Chef de Guerre Bouftou"
+          9: "4 Bouftou, 4 Chef de Guerre Bouftou"
+          10: "Bouftou Royal, 3 Chef de Guerre Bouftou, 4 Bouftou"
+        niveaux: "Bouftons 1-3, Bouftou 3-15, Chef de Guerre Bouftou 15-23"
+        source: "web 6, web 2, web 15 ; niveaux : client (M)"
+        a_verifier_en_jeu: oui
+    boss:
+      nom: {valeur: Bouftou Royal, source: "client (M 147) ; web 2, web 6", a_verifier_en_jeu: non}
+      niveaux_vie: {valeur: "grades 1 à 5 : niveau 35 à 43, 500 à 700 PV, 7 PA, 5 PM", source: "client (M 147)", a_verifier_en_jeu: non}
+      salle: {valeur: 10, source: "web 2, web 6 ; client (icône 905 en salle 10)", a_verifier_en_jeu: oui}
+    sortie:
+      valeur: "salle 11 : « Félicitations, vous avez réussi avec brio l'épreuve de ce donjon » + un familier (Chacha), réponse « Prendre le familier avec soi et sortir du donjon. » ; lieu d'arrivée inconnu"
+      source: "client (D q677, a2578) : association par déduction ; web 9, web 13 (Chacha)"
+      a_verifier_en_jeu: oui
+    restrictions: {valeur: "aucun niveau minimum ni taille de groupe imposés trouvés", source: "web 9, web 12", a_verifier_en_jeu: oui}
+
+  donjon_ensable:
+    rang: {valeur: 3, source: "déduction (docs/rapports/donjons.md, section 4)", a_verifier_en_jeu: non}
+    nom: {valeur: Donjon Ensablé, source: "client (DU 9, sous-zone 336)", a_verifier_en_jeu: non}
+    niveau: {valeur: 20, source: "client (DU 9 lvl)", a_verifier_en_jeu: non}
+    niveau_conseille: {valeur: "20 à 30, groupe de 4 à 8, 15 à 25 minutes (xixou : 10)", source: "web 10, web 3", a_verifier_en_jeu: oui}
+    sous_zone_dedans: {valeur: "Donjon Ensablé (336), région Astrub", source: "client (MA.sa)", a_verifier_en_jeu: non}
+    distance_banque: {valeur: "environ 21 cartes depuis 4,-16 (mémoire du bot jusqu'à 12,-28) ; zaap Village d'Aerdala 17,-31", source: "déduction ; web 3", a_verifier_en_jeu: oui}
+    entree:
+      coordonnees: {valeur: "13,-28", source: "client (HI 353 -> carte 10155) ; web 11", a_verifier_en_jeu: non}
+      carte: {valeur: 10155, source: "client (HI 353)", a_verifier_en_jeu: non}
+      sous_zone_dehors: {valeur: "Calanques d'Astrub (335)", source: "client (MA)", a_verifier_en_jeu: non}
+      pnj: {valeur: "Capitaine Igloute (PNJ 798)", source: "client (N 798, D q3281 « je suis Igloute, le célèbre capitaine ») ; web 15, web 10", a_verifier_en_jeu: oui}
+      case_pnj: {valeur: null, source: "à apprendre", a_verifier_en_jeu: oui}
+      dialogue:
+        valeur:
+          - {pnj: "Bonjour, je suis Igloute, le célèbre capitaine ! ... (puis 7 autres textes)", reponse: "Continuer la discussion", fois: 8}
+          - {pnj: "... Ah tu veux rentrer dans le donjon ensablé ? ...", reponse: "Donner la clef et rentrer"}
+        source: "client (D q3281 à q3289, a2936 à a2944) ; enchaînement par identifiants voisins : déduction ; web 10 (« longue discussion »)"
+        a_verifier_en_jeu: oui
+      cle_consommee: {valeur: null, source: "non dit", a_verifier_en_jeu: oui}
+      une_cle_par_personnage: {valeur: true, source: "web 3", a_verifier_en_jeu: oui}
+    cle:
+      id: {valeur: 8437, source: "client (I)", a_verifier_en_jeu: non}
+      nom: {valeur: Clef du Donjon Ensablé, source: "client (I)", a_verifier_en_jeu: non}
+      dessin: {valeur: "clips/items/84/237.swf (2 889 octets, vectoriel)", source: "client (I gfx 237) ; installation", a_verifier_en_jeu: non}
+      images_web: {valeur: ["https://xixou.io/wp-content/uploads/xixou-ressources/images_clefs/237.svg (taille inconnue)", "https://barbok.fr/images/donjon/Ensable/cleebob.jpg (11 371 octets, contenu inconnu)"], source: "web 26, web 25 ; non téléchargées", a_verifier_en_jeu: non}
+      nom_barbok: {valeur: "absente de la page des clés de Barbok", source: "web 25", a_verifier_en_jeu: non}
+      niveau: {valeur: 10, source: "client (I)", a_verifier_en_jeu: non}
+      poids: {valeur: 1, source: "client (I)", a_verifier_en_jeu: non}
+      detruite_ecrit_dans_la_description: {valeur: false, source: "client (I)", a_verifier_en_jeu: oui}
+      recette: {valeur: ["5 Goujon (1782)", "3 Ecaille poisseuse (8680)"], source: "client (CR) ; web 3, web 14 (web 19 dit 10 écailles : faux)", a_verifier_en_jeu: non}
+      ingredients_butin: {valeur: {"Goujon": "pêche, Pêcheur niveau 1 (aucun monstre)", "Ecaille poisseuse": "Pichons (environ 5 %), Mob l'Eponge (5 %), Raul Mops"}, source: "client (I drop) ; web 4, web 20, web 10 (taux)", a_verifier_en_jeu: oui}
+      butin: {valeur: "13 monstres (Pichons, Etoile de la Mer d'Asse, Raul Mops...) ; environ 1 %", source: "client (I drop) ; web 3 (taux)", a_verifier_en_jeu: oui}
+      obtention: {valeur: "Bricoleur de bas niveau, butin des Pichons, hôtel de vente (prix non trouvé)", source: "web 19, web 10", a_verifier_en_jeu: oui}
+    salles:
+      nombre_de_cartes: {valeur: 10, source: "client (MA, sous-zone 336)", a_verifier_en_jeu: non}
+      nombre_de_combats: {valeur: 9, source: "web 3, web 7, web 15", a_verifier_en_jeu: oui}
+      cartes: {valeur: [10156, 10157, 10158, 10159, 10160, 10161, 10162, 10163, 10164, 10165], source: "client (MA)", a_verifier_en_jeu: non}
+      places_joueurs: {valeur: "8 à 14 selon la salle", source: "client (MA p1)", a_verifier_en_jeu: non}
+      ordre: {valeur: null, source: "inconnu (pas de plan dans DU 9) : à apprendre", a_verifier_en_jeu: oui}
+      passage: {valeur: null, source: "non trouvé : à observer", a_verifier_en_jeu: oui}
+      monstres:
+        valeur:
+          1: "8 Crabe"
+          2: "6 Crabe, 2 Etoile de la Mer d'Asse"
+          3: "4 Crabe, Pichon Bleu, Pichon Blanc, 2 Etoile"
+          4: "2 Crabe, 2 Pichon Bleu, 2 Pichon Blanc"
+          5: "2 Crabe, 2 Pichon Orange, 2 Pichon Vert"
+          6: "1 Pichon de chaque couleur, 4 Etoile"
+          7: "2 Pichon de chaque couleur"
+          8: "3 Crabe, 1 Pichon de chaque couleur, Pichon Kloune"
+          9: "1 Pichon de chaque couleur, Pichon Kloune, Raul Mops, Etoile, Mob l'Eponge"
+        niveaux: "Crabe 2-6, Pichons et Etoile 10-30, Pichon Kloune 25-45, Raul Mops 40-80"
+        source: "web 7, web 3, web 15 ; niveaux : client (M)"
+        a_verifier_en_jeu: oui
+    boss:
+      nom: {valeur: Mob l'Eponge, source: "client (M 928) ; web 3, web 7", a_verifier_en_jeu: non}
+      niveaux_vie: {valeur: "grades 1 à 5 : niveau 30 à 34, 240 à 320 PV, 6 PA, 3 PM ; Raul Mops (40-80) dans la même salle", source: "client (M 928) ; web 7", a_verifier_en_jeu: oui}
+      salle: {valeur: 9, source: "web 3, web 7", a_verifier_en_jeu: oui}
+    sortie:
+      valeur: "le capitaine : « Toi aussi tu viens de vaincre, le terrible Mob l'Eponge ! », il apprend l'émote « s'allonger » ; réponses « Se laisser faire » / « Se sauver en courant » ; lieu d'arrivée inconnu"
+      source: "client (D q3290, q3291, a2945, a2946) : association par déduction ; web 10, web 11 (émote)"
+      a_verifier_en_jeu: oui
+    restrictions: {valeur: "aucun niveau minimum ni taille de groupe imposés trouvés", source: "web 10", a_verifier_en_jeu: oui}

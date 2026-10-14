@@ -1,0 +1,18 @@
+# Lecture des notifications de Windows (team.turn_signal: notifications, bot/team/signals.py), facultatif.
+# Projet PyWinRT (github.com/pywinrt/pywinrt, MIT), organisation PyPI « pywinrt » ; versions et empreintes épinglées
+# (pas d'attestation de provenance publiée : l'empreinte garantit que les fichiers sont ceux vérifiés le 03/10/2026).
+# Installation : .venv\Scripts\python -m pip install --require-hashes --only-binary=:all: -r requirements-winrt.txt
+winrt-runtime==3.2.1 \
+    --hash=sha256:06510db215d4f0dc45c00fbb1251c6544e91742a0ad928011db33b30677e1576
+winrt-Windows.Foundation==3.2.1 \
+    --hash=sha256:45550c5b6c2125cde495c409633e6b1ea5aa1677724e3b95eb8140bfccbe30c9
+winrt-Windows.Foundation.Collections==3.2.1 \
+    --hash=sha256:550dfb8c82fe74d9e0728a2a16a9175cc9e34ca2b8ef758d69b2a398894b698b
+winrt-Windows.UI.Notifications==3.2.1 \
+    --hash=sha256:7f2378246f6db14d16bf93830f1bcd8efa1c5b4c740878ad86d2f482fb08feab
+winrt-Windows.UI.Notifications.Management==3.2.1 \
+    --hash=sha256:5e93b229e2fdc549cc2cd3c21f9c8d7a9f722ade9812668025305f6e1e4a1498
+winrt-Windows.ApplicationModel==3.2.1 \
+    --hash=sha256:3cc6a3a014942b25b5876f46a95fb16640c22290561081563cf1bb5810a0e263
+typing_extensions==4.16.0 \
+    --hash=sha256:481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8
