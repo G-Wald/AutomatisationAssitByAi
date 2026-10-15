@@ -1,6 +1,6 @@
 """Fermeture des fenêtres qui s'ouvrent par-dessus la carte.
 
-- Menu de Flash (clic droit tombé à côté d'un monstre) : fermé d'un clic dans le chat, jamais par Échap.
+- Menu de Flash (clic droit tombé à côté d'un monstre) : fermé d'un clic sur le fond beige sous la barre de sorts, jamais par Échap.
 - Fenêtre connue (assets/popups.yaml) : fermée à tout moment hors combat.
 - Fenêtre inconnue : fermée avec la touche de secours seulement juste après un combat (résultat, niveau
   supérieur...) ; plus tard, c'est sans doute une fenêtre que tu as ouverte toi-même, le bot n'y touche pas.
@@ -13,7 +13,7 @@ import time
 from bot.brain.game import Game
 from bot.perception.frame import Frame
 from bot.perception.layout import Point
-from bot.perception.popups import (PopupSpec, chat_point, find_flash_menu, find_known_popup, find_quit_dialog_no,
+from bot.perception.popups import (FLASH_CLOSE_CLEARANCE, PopupSpec, find_flash_menu, flash_close_point, find_known_popup, find_quit_dialog_no,
                                    find_unknown_window)
 
 log = logging.getLogger(__name__)
@@ -22,24 +22,24 @@ MAX_ATTEMPTS = 2
 AFTER_CLOSE = 0.4  # clic sur « Fermer » -> capture suivante (01/10 : 0,8, trop long en fin de combat)
 RECLICK_AFTER = 0.8  # la même fenêtre revue avant ce délai : elle se ferme peut-être encore, pas de second clic tout
 # de suite (il tomberait sur la carte) ; ensuite, nouvel essai (01/10 : un clic de fin de combat n'avait pas pris)
-FLASH_CLICKS = 2  # clics dans le chat pour fermer le menu de Flash, avant d'abandonner
-FLASH_CLOSE_WAIT = 1.0  # clic dans le chat -> menu de Flash disparu
+FLASH_CLICKS = 2  # clics sous la barre de sorts pour fermer le menu de Flash, avant d'abandonner
+FLASH_CLOSE_WAIT = 1.0  # clic -> menu de Flash disparu
 
 
 def close_flash_menu(game: Game, frame: Frame, around: Point | None = None) -> bool:
     """Menu de Flash ouvert (perception.popups.find_flash_menu ; `around` : où chercher, le clic qui l'a ouvert) :
-    fermé d'un clic gauche sur le fond du chat, jamais sur la carte (le personnage y marcherait) ni par Échap (14/10 :
-    il reste ouvert et le Menu principal s'ouvre derrière). True s'il a disparu."""
+    fermé d'un clic gauche sur le fond beige en bas à gauche de la barre de sorts (15/10 : un clic dans le chat ne le
+    ferme pas), jamais sur la carte (le personnage y marcherait) ni par Échap (14/10 : il reste ouvert et le Menu
+    principal s'ouvre derrière). True s'il a disparu."""
     for attempt in range(1, FLASH_CLICKS + 1):
-        spot = chat_point(frame)
-        if spot is None or frame.layout.on_map(spot[0]):
-            log.warning("Menu de Flash ouvert, mais pas de fond de chat libre où cliquer : ferme-le toi-même "
+        point = flash_close_point(frame)
+        if point is None or frame.layout.on_map(point):
+            log.warning("Menu de Flash ouvert, mais le fond sous la barre de sorts n'est pas libre : ferme-le toi-même "
                         "(clic à côté du menu)")
             return False
-        point, clearance = spot
-        reach = min(clearance / 3, frame.layout.length(8))
-        log.info("Menu de Flash ouvert : je clique dans le chat en (%d, %d) pour le fermer, sans Échap (essai %d/%d)",
-                 *point, attempt, FLASH_CLICKS)
+        reach = frame.layout.length(FLASH_CLOSE_CLEARANCE / 2)
+        log.info("Menu de Flash ouvert : je clique sous la barre de sorts en (%d, %d) pour le fermer, sans Échap "
+                 "(essai %d/%d)", *point, attempt, FLASH_CLICKS)
         game.click(point, (reach, reach))
         after = game.wait_until(lambda f: find_flash_menu(f, around) is None, FLASH_CLOSE_WAIT, park=False)
         if after is not None:

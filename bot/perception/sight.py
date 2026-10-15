@@ -11,12 +11,15 @@ Vérifié sur tests/fixtures/combat_portee_sort.png : 102 cases sur 103 prédite
 import math
 from dataclasses import dataclass
 
+import cv2
 import numpy as np
 
 from bot.perception.colors import RANGE_BLUE, near
 from bot.perception.fighters import Fighter
 from bot.perception.frame import Frame
 from bot.perception.grid import Cell, distance, lattice_cell
+from bot.perception.layout import MAP_BOTTOM
+from bot.perception.ui import TIMELINE_ZONE
 
 NO_SIGHT_BLUE = (137, 117, 95)  # BGR, bleu clair : à portée mais ligne de vue bloquée
 
@@ -65,12 +68,39 @@ def range_center(frame: Frame, spell_range: tuple[int, int], min_match: float = 
     return best if score >= min_match else None
 
 
+PORTRAIT_SIZE = ((15, 48), (48, 66))  # fond blanc d'un portrait de la timeline, en px de référence (largeur, hauteur) ;
+# 15 de large : le dernier, à moitié sous la flèche de défilement
+PORTRAIT_MARGIN = (6, 6, 16, 8)  # autour de ce fond : cadre, et barre de vie à droite (gauche, haut, droite, bas)
+
+
+def timeline_portraits(frame: Frame) -> list[tuple[int, int, int, int]]:
+    """Portraits des combattants dans la timeline (fond blanc, 38 x 56 de référence), avec leur cadre et leur barre
+    de vie : ce qu'ils cachent de la carte. 2 portraits en duel ; 9 en équipe de 8, sur 600 px de large (15/10)."""
+    layout = frame.layout
+    x0, y0, x1, y1 = layout.box(*TIMELINE_ZONE)
+    white = (frame.image[y0:y1, x0:x1].min(axis=2) >= 225).astype(np.uint8)
+    count, _, stats, _ = cv2.connectedComponentsWithStats(white, connectivity=8)
+    (w_min, w_max), (h_min, h_max) = PORTRAIT_SIZE
+    left, top, right, bottom = (layout.length(v) for v in PORTRAIT_MARGIN)
+    return [(round(x0 + x - left), round(y0 + y - top), round(x0 + x + w + right), round(y0 + y + h + bottom))
+            for x, y, w, h, _ in stats[1:count]
+            if layout.length(w_min) <= w <= layout.length(w_max) and layout.length(h_min) <= h <= layout.length(h_max)]
+
+
 def read_range(frame: Frame, me: Fighter, fighters: list[Fighter]) -> RangeView:
     grid = frame.grid
     dark = near(frame.image, RANGE_BLUE, 25)
     light = near(frame.image, NO_SIGHT_BLUE, 22)
     height, width = dark.shape
     castable, no_sight, uncolored = set(), set(), set()
+    portraits = timeline_portraits(frame)
+    # La rangée des portraits, jusqu'au bord droit (flèches de défilement), et le bas de la carte sous l'interface.
+    row = (min(b[0] for b in portraits), min(b[1] for b in portraits), max(b[3] for b in portraits)) if portraits else None
+    map_bottom = frame.layout.y(MAP_BOTTOM) - frame.layout.length(2)
+
+    def hidden(px: int, py: int) -> bool:
+        return py >= map_bottom or (row is not None and px >= row[0] and row[1] <= py <= row[2])
+
     for cell in grid.cells():
         if cell == me.cell:
             continue
@@ -81,8 +111,12 @@ def read_range(frame: Frame, me: Fighter, fighters: list[Fighter]) -> RangeView:
             castable.add(cell)
         elif sum(light[py, px] for px, py in points) >= 2:
             no_sight.add(cell)
-        else:
+        elif sum(hidden(px, py) for px, py in points) < 2:
             uncolored.add(cell)
+        # Sinon la case est cachée sous un portrait de la timeline ou sous l'interface du bas : ni colorée ni obstacle,
+        # inconnue. 15/10, équipe de 8 :
+        # la timeline de 9 portraits couvrait le bas de la portée de Lancer de Pièces, ses cases prises pour des blocs,
+        # ligne de vue prédite juste sur 55 % des cases et toute la carte crue à relief.
     distances = [distance(c, me.cell) for c in castable | no_sight]
     if not distances:
         return RangeView(castable, no_sight, set(), None)

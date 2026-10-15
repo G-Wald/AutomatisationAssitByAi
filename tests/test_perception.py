@@ -3,17 +3,18 @@ import numpy as np
 import pytest
 
 from bot.perception.colors import BLUE, RED, UI_BEIGE
-from bot.perception.fighters import find_fighters
+from bot.perception.fighters import Fighter, find_fighters
 from bot.perception.frame import Frame
 from bot.perception.grid import distance
 from bot.perception.groups import find_group_tooltips
 from bot.perception.layout import Layout
-from bot.perception.popups import (chat_point, find_flash_menu, find_known_popup, find_unknown_window,
+from bot.perception.popups import (find_flash_menu, flash_close_point, find_known_popup, find_unknown_window,
                                    load_popup_specs)
 from bot.perception.placement import entry_banner, read_placement
 from bot.perception.spellbook import identify, locate_in_bar, read_spell_window, slot_greyed
 from bot.perception.spellsheet import read_sheet
-from bot.perception.sight import in_line_only, line_of_sight, read_blocks, read_range, read_terrain, sight_agreement
+from bot.perception.sight import (in_line_only, line_of_sight, read_blocks, read_range, read_terrain, sight_agreement,
+                                  timeline_portraits)
 from bot.perception.templates import match_template
 from bot.perception.ui import (
     PA_BUBBLE,
@@ -249,7 +250,9 @@ def test_pm_read_in_the_bubble(name, pm):
                                       ("combat_3pa_sorts_grises", 3),  # puis Tir Éloigné (2 PA)
                                       # 04/10, personnages plus haut niveau : 10 PA, puis 8 (lu « 0 », le Crâ avait passé
                                       # son tour après Tir Éloigné) et 7 (illisible).
-                                      ("combat_cra_10pa_4pm", 10), ("combat_cra_8pa_4pm", 8), ("combat_iop_7pa_3pm", 7)])
+                                      ("combat_cra_10pa_4pm", 10), ("combat_cra_8pa_4pm", 8), ("combat_iop_7pa_3pm", 7),
+                                      # 15/10, fenêtre de 1057 px de haut : le 6 à 0,58 de son modèle (seuil 0,6).
+                                      ("bulle_pa_6_1057", 6)])
 def test_pa_read_in_the_bubble(name, pa):
     assert read_pa(load_frame(name)) == pa
 
@@ -496,24 +499,32 @@ def test_flash_menu_only_searched_near_the_click():
     assert find_flash_menu(frame, around=(800, 600)) is None
 
 
-@pytest.mark.parametrize("name", ["menu_flash_clic_droit", "hors_combat", "hors_combat_prairie", "combat_cra_10pa_4pm",
-                                  "placement_moi_et_monstre", "groupes_z_bord_droit", "fin_de_combat"])
-def test_chat_point_is_empty_chat_background_off_the_map(name):
+@pytest.mark.parametrize("name", ["menu_flash_clic_droit", "hors_combat", "hors_combat_prairie",
+                                  "groupes_z_bord_droit"])
+def test_flash_close_point_is_plain_beige_under_the_spell_bar(name):
+    # 15/10 : le clic dans le chat ne fermait pas le menu de Flash ; ailleurs dans la fenêtre, si (utilisateur).
     frame = load_frame(name)
-    (x, y), clearance = chat_point(frame)
-    assert not frame.layout.on_map((x, y)) and x < frame.layout.map_box[0]
-    assert clearance >= frame.layout.length(12)
-    r = round(frame.layout.length(10))
+    x, y = flash_close_point(frame)
+    assert not frame.layout.on_map((x, y)) and x > frame.layout.width * 0.7 and y > frame.layout.height * 0.9
+    r = round(frame.layout.length(6))
     patch = frame.image[y - r : y + r + 1, x - r : x + r + 1].astype(int)
-    assert (np.abs(patch - np.array(UI_BEIGE)).max(axis=2) <= 10).all()  # fond du chat uni, sans texte
+    assert (np.abs(patch - np.array(UI_BEIGE)).max(axis=2) <= 10).all()
 
 
-def test_chat_point_on_the_flash_menu_capture_is_in_the_empty_lower_pane():
-    (x, y), _ = chat_point(load_frame("menu_flash_clic_droit"))
-    assert x < 500 and 500 <= y <= 1000  # chat du bas, vide sous « Bienvenue sur DOFUS Retro »
+@pytest.mark.parametrize("name", ["combat_cra_10pa_4pm", "combat_mon_tour"])
+def test_no_flash_close_point_in_combat_where_the_end_turn_button_is(name):
+    assert flash_close_point(load_frame(name)) is None
 
 
-def test_no_chat_point_when_the_chat_is_full_of_text():
-    image = load_frame("menu_flash_clic_droit").image.copy()
-    image[:, : image.shape[1] // 4 : 2] = 0  # une colonne sur deux : plus aucune étendue libre
-    assert chat_point(Frame.of(image)) is None
+def test_cells_under_a_long_timeline_are_not_obstacles():
+    # 15/10, équipe de 8 : la timeline de 9 portraits couvre le bas de la portée de Lancer de Pièces (1 à 8) ; ses cases
+    # non colorées étaient prises pour des blocs (ligne de vue prédite juste sur 55 % des cases, carte crue à relief).
+    frame = load_frame("combat_equipe_8_timeline_longue")
+    portraits = timeline_portraits(frame)
+    assert len(portraits) == 9
+    fighters = find_fighters(frame)
+    me = Fighter(RED, *frame.grid.center((18, 30)), (18, 30))  # Dinarpepe, caché sous la timeline
+    view = read_range(frame, me, fighters)
+    left, top = min(b[0] for b in portraits), min(b[1] for b in portraits)
+    assert not any(frame.grid.center(c)[0] >= left and frame.grid.center(c)[1] >= top for c in view.obstacles)
+    assert view.castable  # la portée reste lue

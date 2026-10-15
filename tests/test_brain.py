@@ -644,7 +644,7 @@ def test_unknown_window_closed_only_after_combat():
     assert game.actions == [("press", "escape"), ("press", "escape")]
 
 
-def test_flash_menu_closed_by_a_click_in_the_chat_never_escape():
+def test_flash_menu_closed_by_a_click_under_the_spell_bar_never_escape():
     # 14/10 : clic droit à côté d'un Piou, menu de Flash ouvert ; Échap ne le fermait pas (Menu principal ouvert
     # derrière). Juste après un combat, la touche de secours des fenêtres inconnues ne doit pas partir non plus.
     frame = load_frame("menu_flash_clic_droit")
@@ -653,20 +653,20 @@ def test_flash_menu_closed_by_a_click_in_the_chat_never_escape():
     assert closer.describe(frame) == "menu de Flash"
     assert closer.handle(frame, seconds_since_combat=2)
     ((x, y),) = clicks(game)  # un seul clic, gauche
-    assert x < frame.layout.map_box[0] and not frame.layout.on_map((x, y))  # dans le chat, jamais sur la carte
+    assert not frame.layout.on_map((x, y)) and x > frame.layout.width * 0.7  # sous la barre de sorts, pas la carte
     assert presses(game) == []
 
 
 def test_flash_menu_staying_open_is_left_to_the_player_without_escape(caplog):
     caplog.set_level("INFO")
     frame = load_frame("menu_flash_clic_droit")
-    game = FakeGame(frame)  # le clic dans le chat ne le ferme pas
+    game = FakeGame(frame)  # le clic ne le ferme pas
     closer = PopupCloser(game, load_popup_specs(), unknown_key="escape", unknown_delay=20)
     assert closer.handle(frame, seconds_since_combat=2)
     assert closer.handle(frame, seconds_since_combat=3)
     assert not closer.handle(frame, seconds_since_combat=4)  # abandon : à toi de le fermer
     assert not closer.handle(frame, seconds_since_combat=5)
-    assert len(clicks(game)) == 4 and all(x < frame.layout.map_box[0] for x, _ in clicks(game))
+    assert len(clicks(game)) == 4 and not any(frame.layout.on_map(c) for c in clicks(game))
     assert presses(game) == []
     assert "ferme-le toi-même" in caplog.text
     assert not closer.handle(without_flash_menu(), seconds_since_combat=None)  # fermé par le joueur

@@ -129,13 +129,14 @@ FLASH_MENU_SCALE = 1057 / REF_HEIGHT  # découpé tel quel dans une fenêtre de 
 FLASH_MENU_THRESHOLD = 0.8  # 1,0 sur sa capture ; 0,5 au plus sur les autres captures entières (14/10)
 FLASH_MENU_REACH = (350, 300)  # px de référence autour du clic : le menu s'ouvre au clic (à gauche ou au-dessus près
 # d'un bord), d'environ 300 x 220
-CHAT_CLEARANCE = 12  # px de référence : distance minimale entre le point cliqué dans le chat et tout texte
+FLASH_CLOSE_REF = (1465, 991)  # repère de référence : fond beige en bas à gauche de la barre de sorts (15/10)
+FLASH_CLOSE_CLEARANCE = 6  # px de référence autour de ce point : beige uni exigé
 
 
 def find_flash_menu(frame: Frame, around: Point | None = None) -> Point | None:
     """Menu contextuel de Flash (« DOFUS RETRO Client », « Flash player WIN », « Qualité Flash », « Options »...) :
     ouvert par un clic droit tombé à côté d'un monstre (14/10, un Piou, clic de sonde en arrière-plan). Échap ne le
-    ferme pas (il ouvre le Menu principal derrière) : il se ferme d'un clic ailleurs (chat_point). Centre de sa
+    ferme pas (il ouvre le Menu principal derrière) : il se ferme d'un clic ailleurs (flash_close_point). Centre de sa
     1re ligne, None s'il n'est pas là. Cherché autour de `around` (le clic) s'il est donné, sinon au-dessus des
     grandes surfaces beiges de la carte (ses autres lignes), pas sur tout l'écran (0,16 s)."""
     layout = frame.layout
@@ -163,23 +164,17 @@ def find_flash_menu(frame: Frame, around: Point | None = None) -> Point | None:
     return None
 
 
-def chat_point(frame: Frame) -> tuple[Point, float] | None:
-    """Où cliquer pour fermer le menu de Flash sans rien déclencher : le fond du chat, à gauche de la carte (JAMAIS la
-    carte : le personnage y marcherait), au milieu de la plus grande étendue sans texte (ni nom, ni lien cliquable).
-    Point et rayon libre autour ; None si le chat est trop étroit (fenêtre plus large que haute ?) ou plein de texte."""
-    layout = frame.layout
-    margin = round(layout.length(CHAT_CLEARANCE))
-    right = layout.map_box[0] - margin
-    top, bottom = round(layout.length(45)), layout.height - round(layout.length(60))  # ni ses cases, ni sa saisie
-    if right <= 0 or bottom <= top:
+def flash_close_point(frame: Frame) -> Point | None:
+    """Où cliquer pour fermer le menu de Flash sans rien déclencher : le fond beige en bas à gauche de la barre de
+    sorts, sous aucun raccourci. Un clic dans le chat ne le ferme pas (15/10, deux fois en jeu : le chat n'est pas
+    dans la scène Flash). None si ce fond n'est pas beige uni à cet endroit : en combat, le bouton de fin de tour y
+    est (le menu de Flash ne s'ouvre qu'en cherchant un groupe, hors combat), ou une fenêtre assombrit l'écran."""
+    x, y = frame.layout.point(*FLASH_CLOSE_REF)
+    r = round(frame.layout.length(FLASH_CLOSE_CLEARANCE))
+    patch = frame.image[max(0, y - r) : y + r + 1, max(0, x - r) : x + r + 1]
+    if patch.size == 0 or not near(patch, UI_BEIGE, 10).all():
         return None
-    free = near(frame.crop((0, top, right, bottom)), UI_BEIGE, 10).astype(np.uint8)
-    free[0, :] = free[-1, :] = free[:, 0] = free[:, -1] = 0  # le bord de la zone compte comme du texte
-    distance = cv2.distanceTransform(free, cv2.DIST_L2, 3)
-    _, clearance, _, (x, y) = cv2.minMaxLoc(distance)
-    if clearance < margin:
-        return None
-    return (x, top + y), float(clearance)
+    return x, y
 
 
 def find_unknown_window(frame: Frame) -> Box | None:

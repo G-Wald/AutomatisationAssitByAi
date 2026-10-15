@@ -22,7 +22,7 @@ gauche), puis Z de nouveau (les groupes ont pu bouger) et le point suivant. Éch
 premier plan ; nouvelle recherche aussitôt, avec Z, plutôt que le groupe suivant de la capture d'avant la marche.
 Bouton du clic : engage.clic_sonde (droit : à côté, le personnage ne bouge pas ; sur un groupe, menu ou attaque
 directe : à essayer en jeu, les deux sont gérés). Clic droit à côté d'un petit monstre (14/10, un Piou) : le menu de
-Flash s'ouvre ; Échap ne le ferme pas (il ouvre le Menu principal derrière), un clic gauche dans le chat si.
+Flash s'ouvre ; Échap ne le ferme pas (il ouvre le Menu principal derrière), un clic gauche sous la barre de sorts si (pas dans le chat).
 """
 
 import logging
@@ -448,7 +448,7 @@ class Engager:
         return Outcome.LEFT
 
     def _no_menu_after_click(self, group: Point, tooltip: GroupTooltip, z_frame: Frame) -> Outcome:
-        """Clic sans menu « Attaquer » : le menu de Flash (clic droit dans le vide) est fermé d'un clic dans le chat ;
+        """Clic sans menu « Attaquer » : le menu de Flash (clic droit dans le vide) est fermé d'un clic sous la barre de sorts ;
         un autre menu (personnage ou PNJ devant le groupe) est fermé par Échap, puis combat lancé directement ? Sinon
         le clic est tombé à côté du groupe (le personnage y marche)."""
         frame = self.game.look(park=False)

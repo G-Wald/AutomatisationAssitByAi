@@ -639,16 +639,16 @@ class FlashMenuGame(BackgroundGame):
         return True
 
 
-def test_background_right_click_beside_closes_the_flash_menu_in_the_chat(caplog):
-    # Le 1er clic droit tombe à côté du groupe : menu de Flash. Fermé aussitôt d'un clic gauche dans le chat (pas sur
+def test_background_right_click_beside_closes_the_flash_menu_under_the_spell_bar(caplog):
+    # Le 1er clic droit tombe à côté du groupe : menu de Flash. Fermé aussitôt d'un clic gauche sous la barre de sorts (pas sur
     # la carte, pas d'Échap, pas d'attente du combat), puis Z et le point suivant, sur le groupe : combat.
     caplog.set_level("INFO")
     game = FlashMenuGame(load_frame("hors_combat_detection_enemi"), load_frame("hors_combat"), [(1186, 456, 1206, 470)],
                          opens=(), direct=("right",))
     assert Engager(game, EngageSettings()).engage()
     assert game.buttons == ["right", "left", "right"]
-    beside, chat, group = clicks(game)
-    assert chat[0] < game.empty.layout.map_box[0] and game.walks == []
+    beside, close, group = clicks(game)
+    assert not game.empty.layout.on_map(close) and close[0] > game.empty.layout.width * 0.7 and game.walks == []
     assert ("press", "escape") not in game.actions
     assert game.click_times[1] - game.click_times[0] < 1  # vu dès la 1re capture, pas RIGHT_CLICK_WAIT d'attente
     assert "menu de Flash" in caplog.text and "Menu de Flash fermé" in caplog.text
@@ -661,7 +661,7 @@ def test_background_flash_menu_that_stays_open_is_never_escaped(caplog):
     assert not Engager(game, EngageSettings()).engage()
     assert ("press", "escape") not in game.actions and game.walks == []
     assert game.buttons[0] == "right" and set(game.buttons[1:]) <= {"left", "right"}
-    assert all(x < game.empty.layout.map_box[0] for x, _ in (c for c, b in zip(clicks(game), game.buttons) if b == "left"))
+    assert not any(game.empty.layout.on_map(c) for c, b in zip(clicks(game), game.buttons) if b == "left")
     assert "ferme-le toi-même" in caplog.text
 
 
