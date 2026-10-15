@@ -218,7 +218,11 @@ def surveiller_combat(reference: dict, window, secondes: float, dossier: Path) -
     print(f"Surveillance du combat pendant {secondes:.0f} s (Ctrl+C pour arrêter plus tôt)...")
     try:
         while time.monotonic() < fin:
-            frame = capturer(window)
+            try:
+                frame = capturer(window)
+            except RuntimeError:  # 15/10 : fenêtre réduite un instant, 47 lectures perdues avec le rapport
+                time.sleep(1)
+                continue
             if carte_propre(frame):
                 lectures.append(lire_terrain(frame))
                 if n < 5 or len(lectures) % 10 == 0:

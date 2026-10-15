@@ -687,3 +687,13 @@ def test_zone_mode_searches_all_suns_when_the_known_ones_leave_the_zone():
     assert roamer.zone_name == "Champs d'Astrub"
     roamer.step()
     assert calls == [False, True] and sim.pos == (8, -25)  # la carte de gauche, dans les Champs
+
+
+def test_label_read_in_a_taller_window():
+    # 15/10 : barre des tâches masquée, fenêtre de 1920x1057 (échelle 1,049) : le « 1 » de « -19 » à 0,74 de son modèle,
+    # le « 9 » à égalité avec le « 8 », et « Astrub » / « Cité d'Astrub » écartés pour 2 px de largeur de trop.
+    image = np.zeros((1057, 1920, 3), np.uint8)
+    image[0:120, 500:1100] = cv2.imread(str(FIXTURES / "nom_de_carte_echelle_1057.png"))
+    label = read_map_label(Frame.of(image))
+    assert label is not None and label.coords == (-1, -19)
+    assert label.region_name == "Astrub" and label.zone_name == "Cité d'Astrub"

@@ -179,10 +179,18 @@ def _masks(folder: str) -> list[tuple[str, np.ndarray]]:
     return found
 
 
-def _name(word: np.ndarray | None, folder: str) -> str | None:
+def _name(word: np.ndarray | None, folder: str, scale: float = 1.0) -> str | None:
+    """Nom connu du mot. Modèles découpés à l'échelle 1 : mis à l'échelle de la fenêtre avant la comparaison, sinon
+    same_word les écarte sur la taille (15/10, fenêtre de 1057 de haut : « Astrub » 66 px de large, modèle 64)."""
     if word is None:
         return None
-    return next((name for name, mask in _masks(folder) if same_word(word, mask)), None)
+    for name, mask in _masks(folder):
+        if abs(scale - 1) > 0.02:
+            mask = cv2.resize(mask, (round(mask.shape[1] * scale), round(mask.shape[0] * scale)),
+                              interpolation=cv2.INTER_AREA)
+        if same_word(word, mask):
+            return name
+    return None
 
 
 def read_digit(glyph: Glyph) -> str | None:
@@ -286,9 +294,9 @@ def read_map_label(frame: Frame) -> MapLabel | None:
         coords=(int(parsed[1]), int(parsed[2])) if parsed else None,
         text=text,
         zone=zone,
-        zone_name=_name(zone, "zones"),
+        zone_name=_name(zone, "zones", frame.layout.scale),
         region=region,
-        region_name=_name(region, "regions"),
+        region_name=_name(region, "regions", frame.layout.scale),
         signature=_word_mask([g for _, g in coords_glyphs]),
         glyphs=tuple((char, g.mask) for char, g in coords_glyphs),
     )
