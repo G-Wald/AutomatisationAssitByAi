@@ -101,6 +101,7 @@ SELF_CAST_METHODS = ("clic droit", "raccourci + clic sur moi")  # sort sur moi :
 ALLY_RANGE_BONUS = 2
 MAX_CASTS_PER_TURN = 5  # garde-fou
 RELIEF_MARGIN = 4  # cases de marge sur la portée prévue, sur une carte à plusieurs niveaux
+RELIEF_MIN_WRONG = 2  # cases à portée mal prédites, au moins, pour croire la carte à relief (une seule : animation, ombre)
 # Arrière-plan, 2e rangée de la barre (cases 8 à 14) : Ctrl+1 à Ctrl+7 ne passent pas (l'état de Ctrl est celui du
 # vrai clavier) et un clic gauche sur la case ne sélectionne pas le sort (Épée du destin, 11/10). Le jeu leur donne un
 # 2e raccourci, « 1 » à « 7 » (Raccourcis clavier, capture de l'utilisateur du 11/10) : touches du pavé numérique.
@@ -1021,7 +1022,11 @@ class CombatAI:
         agreement = sight_agreement(view, me.cell, blockers)
         log.debug("Obstacles connus : %d ; ligne de vue prédite juste sur %.0f %% des cases à portée",
                   len(self.map.obstacles), 100 * agreement)
-        if agreement < 0.9 and self._map_reliable:
+        # 15/10 : sorts en ligne, 7 à 10 cases colorées : UNE case fausse (sous l'animation du sort, ombre d'un mur)
+        # donnait 86-90 % et tout le combat passait en « carte à relief ». Il en faut au moins deux.
+        shown_cells = len(view.castable | view.no_sight)
+        wrong = round((1 - agreement) * shown_cells) if shown_cells else 0
+        if agreement < 0.9 and wrong >= RELIEF_MIN_WRONG and self._map_reliable:
             self._map_reliable = False
             log.info("Carte à relief (ligne de vue prédite juste sur %.0f %% des cases) : je ne me fie plus à mes "
                      "prévisions de portée et de ligne de vue, je vérifie avec le sort", 100 * agreement)

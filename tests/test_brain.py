@@ -1179,3 +1179,22 @@ def test_no_more_moves_once_the_character_cannot_move(caplog):
     CombatAI(game, CombatSettings()).play_turn(RED)
     moves = [m for m in caplog.messages if m.startswith(("Déplacement de", "Placement pour le prochain tour"))]
     assert len(moves) == 2 and any("plus de déplacement ce tour" in m for m in caplog.messages)
+
+
+def test_one_wrong_cell_of_an_in_line_spell_is_not_a_relief_map(monkeypatch):
+    from bot.perception.sight import RangeView
+
+    # 15/10, -1,-19 et 1,-18 : Épée Céleste en ligne, 7 cases colorées ; une seule mal prédite (86 %) faisait passer
+    # tout le combat en « carte à relief ». Deux cases fausses sur peu de cases, oui.
+    frame = load_frame("combat_portee_sort")
+    magique = CombatSpell(3, "fleche_magique", "Flèche Magique", 4, (1, 8), range_modifiable=True, damage=11)
+    me = Fighter(RED, *frame.grid.center((10, 20)), (10, 20))
+    seven = {(10 + k, 20 + k) for k in range(1, 8)}
+    monkeypatch.setattr("bot.brain.combat.read_range", lambda *a: RangeView(seven, set(), set(), (1, 7)))
+    ai = CombatAI(FakeGame(frame), CombatSettings())
+    monkeypatch.setattr("bot.brain.combat.sight_agreement", lambda *a: 6 / 7)
+    ai._learn_range(frame, me, [me], magique)
+    assert ai._map_reliable
+    monkeypatch.setattr("bot.brain.combat.sight_agreement", lambda *a: 5 / 7)
+    ai._learn_range(frame, me, [me], magique)
+    assert not ai._map_reliable
