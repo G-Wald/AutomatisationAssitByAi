@@ -60,15 +60,19 @@ class Joiner:
         self.timeout = timeout  # par personnage
         self.known: tuple[float, float] | None = None  # point de l'épée qui a marché (repère de référence), ce combat
         self.quick: dict[str, float] = {}  # personnage -> heure du clic parti sans vérification (ask rapide)
+        # Épée introuvable pour un suiveur, ce combat : les suivants ne l'attendent plus. 16/10, Incarnam 6,2 : 7 suiveurs
+        # x 2 recherches de 4 s, le principal 1 min 30 au placement avant son premier tour.
+        self.sword_missing = False
 
     def new_fight(self) -> None:
         self.known = None
         self.quick = {}
+        self.sword_missing = False
 
     def join(self, member: Member, hint: tuple[float, float] | None = None) -> bool:
         """True si le personnage est au placement du combat."""
         deadline = time.monotonic() + self.timeout
-        for _ in range(JOIN_TRIES):
+        for _ in range(1 if self.sword_missing else JOIN_TRIES):
             if self.ask(member, hint, quick=False) and self.wait_placement(member, deadline):
                 return True
             if time.monotonic() >= deadline:
@@ -96,7 +100,7 @@ class Joiner:
                     return True
             elif self._try(game, point, frame.layout.spread(3, 3)):
                 return True
-        end = time.monotonic() + SWORD_WAIT
+        end = time.monotonic() + (0 if self.sword_missing else SWORD_WAIT)
         while True:
             if read_scene(frame).phase is not Phase.OUT_OF_COMBAT:
                 return True
@@ -117,6 +121,7 @@ class Joiner:
                 if self._try(game, point, frame.layout.spread(*SWORD_SPREAD)):
                     self.known = hint
                     return True
+            self.sword_missing = True
             return False
         for sword in _ranked(swords, hint, frame.layout)[:SWORDS_TRIED]:
             for point, spread in sword.points or ((sword.click, frame.layout.spread(*SWORD_SPREAD)),):

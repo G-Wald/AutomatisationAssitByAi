@@ -1,4 +1,5 @@
 # Lecture des notifications de Windows (team.turn_signal: notifications, bot/team/signals.py), facultatif.
+# OCR de Windows (16/10) : position lue dans le chat après « /p %pos% » (bot/perception/chat.py), facultatif.
 # Projet PyWinRT (github.com/pywinrt/pywinrt, MIT), organisation PyPI « pywinrt » ; versions et empreintes épinglées
 # (pas d'attestation de provenance publiée : l'empreinte garantit que les fichiers sont ceux vérifiés le 03/10/2026).
 # Installation : .venv\Scripts\python -m pip install --require-hashes --only-binary=:all: -r requirements-winrt.txt
@@ -16,3 +17,11 @@ winrt-Windows.ApplicationModel==3.2.1 \
     --hash=sha256:3cc6a3a014942b25b5876f46a95fb16640c22290561081563cf1bb5810a0e263
 typing_extensions==4.16.0 \
     --hash=sha256:481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8
+winrt-Windows.Media.Ocr==3.2.1 \
+    --hash=sha256:9984824864b49eb65765f60ea9d910928888efe3cdf5f71f037d6fe9133134f6
+winrt-Windows.Graphics.Imaging==3.2.1 \
+    --hash=sha256:066038a96df12c23d6da6a591472436ada50103f575d8a1f802778a044f668c8
+winrt-Windows.Storage.Streams==3.2.1 \
+    --hash=sha256:e4508ee135af53e4fc142876abbf4bc7c2a95edfc7d19f52b291a8499cacd6dc
+winrt-Windows.Globalization==3.2.1 \
+    --hash=sha256:fa4dbf6b18586e435bdd5d40b8536fe1dfd95810a264a135d121b34e33d39aa5

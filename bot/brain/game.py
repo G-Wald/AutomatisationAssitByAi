@@ -157,6 +157,11 @@ class Game:
         if release is not None:
             release(names)
 
+    def type_text(self, text: str) -> bool:
+        """Texte tapé (chat) ; False si ce mode d'entrée ne sait pas le faire (premier plan)."""
+        type_text = getattr(self.input, "type_text", None)
+        return bool(type_text and type_text(text))
+
     def press(self, key: str) -> None:
         self.input.press(key)
         if key.lower() in ("escape", "esc"):

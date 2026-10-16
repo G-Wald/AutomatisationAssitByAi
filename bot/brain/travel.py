@@ -41,6 +41,7 @@ import numpy as np
 
 from bot.brain.atlas import Atlas, MapInfo
 from bot.brain.game import Game
+from bot.brain.position import PositionAsker
 from bot.debug.draw import annotate
 from bot.perception.exits import DELTA, OPPOSITE, SAME_SUN, SIDES, Exit, find_marked_exits, find_suns
 from bot.perception.grid import distance
@@ -315,6 +316,7 @@ class Traveler:
         self.world = world
         self.atlas = atlas or Atlas()
         self.coords: tuple[int, int] | None = settings.start  # lues, sinon déduites (départ donné, chemin parcouru)
+        self.asker = PositionAsker(game, _character(game))  # « /p %pos% » quand la position reste inconnue
         self.region = settings.region  # réglage : le nom de la région n'est pas lu à l'écran
         self.jumped = False  # coordonnées lues loin de celles attendues : mort, téléportation...
         # Mode équipe (team/loop.py) : appelée après chaque passage réussi avec (côté, case du soleil, carte de départ,
@@ -348,6 +350,12 @@ class Traveler:
         frame = self.game.look(park=False)
         label = read_map_label(frame) or unreadable_label()
         self._locate(frame, label, self.coords)
+        if self.coords is None:
+            # 16/10 : coordonnées illisibles au départ (Incarnam 0,3 et 6,1) : trajet arrêté, mode zone bloqué 11 min.
+            asked = self.asker.ask()
+            if asked is not None:
+                self._locate(frame, label, asked)  # comme une position donnée : chiffres inconnus appris
+                self._unread_steps = 0
         self._last_label = label
         return frame, label
 
@@ -823,6 +831,13 @@ def merge_reading(text: str, expected: tuple[int, int]) -> tuple[tuple[int, int]
             coords.append(value)
             consistent = consistent and len(part) == len(want) and all(c in ("?", w) for c, w in zip(part, want))
     return (coords[0], coords[1]), consistent
+
+
+def _character(game: Game) -> str | None:
+    """Nom du personnage de la fenêtre (« Koalaloupour - Dofus Retro v1.49.7 » -> « Koalaloupour »)."""
+    title = getattr(getattr(game, "window", None), "title", "") or ""
+    name = title.split(" - ")[0].strip()
+    return name if name and "Dofus" not in name else None
 
 
 def shortest_path(start: tuple[int, int], goals, links, allowed) -> list[tuple[str, tuple[int, int]]] | None:

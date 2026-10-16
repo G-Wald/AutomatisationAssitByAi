@@ -419,6 +419,21 @@ def test_sword_not_seen_follower_clicks_where_the_leader_attacked(monkeypatch):
     assert abs(x - 1011) <= 10 and abs(y - 84) <= 10
 
 
+def test_once_a_follower_cannot_see_the_sword_the_next_ones_do_not_wait_for_it(monkeypatch):
+    # 16/10 : 7 suiveurs x 2 recherches de 4 s, le principal 1 min 30 au placement avant son premier tour.
+    monkeypatch.setattr("bot.team.join.SWORD_WAIT", 0)
+    screen = Screen()
+    joiner = Joiner(timeout=0)
+    first = member("Second", screen, load_frame("hors_combat"))
+    assert not joiner.join(first)
+    monkeypatch.setattr("bot.team.join.SWORD_WAIT", 5.0)
+    second = member("Troisieme", screen, load_frame("hors_combat"))
+    start = time.monotonic()
+    assert not joiner.join(second)
+    assert time.monotonic() - start < 2.0  # une recherche, sans attendre l'épée 5 s ni refaire un essai
+    assert second.game.recorder.saved.count("epee_introuvable") == 1
+
+
 def test_join_given_up_without_a_sword(monkeypatch):
     monkeypatch.setattr("bot.team.join.SWORD_WAIT", 0)
     screen = Screen()

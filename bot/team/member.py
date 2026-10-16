@@ -117,6 +117,10 @@ class MemberGame(Game):
         self.focus.to(self.window, settle=False)
         super().press(key)
 
+    def type_text(self, text: str) -> bool:
+        self.focus.to(self.window, settle=False)
+        return super().type_text(text)
+
     @contextmanager
     def holding(self, key: str) -> Iterator[None]:
         self.focus.to(self.window, settle=False)

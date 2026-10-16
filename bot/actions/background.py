@@ -206,6 +206,18 @@ class BackgroundInput:
     def _key_up(self, key: keys.Key) -> None:
         self._post(win32con.WM_KEYUP, key.vk, 1 | (key.scan << 16) | (1 << 30) | (1 << 31))
 
+    def type_text(self, text: str) -> bool:
+        """Texte tapé dans le champ qui a le focus du jeu (zone de saisie du chat cliquée avant) : un message
+        « caractère » par lettre (16/10 : « /p %pos% » passe ainsi en arrière-plan)."""
+        if not self.enabled:
+            return False
+        self._react()
+        for char in text:
+            self.control.check()
+            self._post(win32con.WM_CHAR, ord(char), 1)
+            time.sleep(random.uniform(0.03, 0.08))
+        return True
+
     def press(self, name: str) -> None:
         with self.holding(name):
             time.sleep(random.uniform(*self.human.hold))
