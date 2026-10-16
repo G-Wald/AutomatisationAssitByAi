@@ -192,11 +192,14 @@ def park_point(layout: Layout) -> Point:
 
 
 def tactical_mode(frame: Frame) -> bool:
-    """Carte en mode tactique (cases grises unies) : couleurs de portée et de déplacement fiables."""
+    """Carte en mode tactique (cases grises unies) : couleurs de portée et de déplacement fiables. Part du gris parmi
+    les pixels qui ne sont pas noirs : 16/10, Incarnam 6,1, petite carte dans le vide noir, 28 % de gris sur toute la
+    zone (seuil 30 %) mais 71 % hors du vide ; mode normal : 3 % au plus sur les captures, tactique : 60 % au moins."""
     region = frame.crop(frame.layout.map_box)[::4, ::4].astype(np.int16)  # une proportion : un pixel sur 16 suffit
     value = region.max(axis=2)
     grey = (value - region.min(axis=2) <= 14) & (value >= 90) & (value <= 215)
-    return float(grey.mean()) >= 0.3
+    lit = int((value > 40).sum())
+    return lit > 0 and float(grey.sum()) / lit >= 0.3
 
 
 def region_changed(before: Frame, after: Frame, box_ref: tuple[float, float, float, float]) -> bool:

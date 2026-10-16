@@ -33,6 +33,7 @@ class PopupSpec:
     close: str = ""  # modèle du bouton qui la ferme...
     key: str = ""  # ... ou touche qui la ferme
     threshold: float = 0.85
+    title_above: float = 120  # px de référence au-dessus de la surface beige où chercher le titre (`detect`)
 
 
 @dataclass(frozen=True)
@@ -79,11 +80,14 @@ def find_known_popup(frame: Frame, specs: list[PopupSpec]) -> PopupMatch | None:
     surface (son bandeau est juste au-dessus du fond beige) : une étendue de sable ne coûte presque rien."""
     margin = round(frame.layout.length(120))
     for x0, y0, x1, y1 in _beige_windows(frame, min_fill=WINDOW_FILL):
-        title = (max(0, x0 - margin), max(0, y0 - margin), min(frame.layout.width, x1 + margin),
-                 min(frame.layout.height, y0 + margin))
         box = (max(0, x0 - margin), max(0, y0 - margin), min(frame.layout.width, x1 + margin),
                min(frame.layout.height, y1 + 2 * margin))  # le bouton « Fermer » est sous la fenêtre
         for spec in specs:
+            # 16/10, « Combats en cours » : seul le bas de la fenêtre est du beige des fenêtres, le titre est 340 px plus
+            # haut (title_above de la fenêtre dans popups.yaml).
+            above = round(frame.layout.length(spec.title_above))
+            title = (max(0, x0 - margin), max(0, y0 - above), min(frame.layout.width, x1 + margin),
+                     min(frame.layout.height, y0 + margin))
             if match_template(frame, spec.detect, box=title, threshold=spec.threshold) is None:
                 continue
             if spec.key:

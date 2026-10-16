@@ -194,9 +194,23 @@ def find_spell_window(frame: Frame) -> Point | None:
     return round(x - template_w / 2 - TITLE_AT[0] * layout.scale), round(y - template_h / 2 - TITLE_AT[1] * layout.scale)
 
 
+_last_window: tuple[Frame | None, np.ndarray | None] = (None, None)
+
+
 def _window(frame: Frame) -> np.ndarray | None:
     """La fenêtre « Tes sorts » (BGR), ramenée à l'échelle de la capture de référence pour garder une géométrie
-    fixe ; None si elle n'est pas ouverte ou sort de la capture."""
+    fixe ; None si elle n'est pas ouverte ou sort de la capture. Gardée pour la dernière capture : lecture, icônes
+    et barre de défilement d'une même page la cherchaient chacune sur tout l'écran (16/10 : 160 ms à chaque fois).
+    """
+    global _last_window
+    if _last_window[0] is frame:
+        return _last_window[1]
+    window = _find_window(frame)
+    _last_window = (frame, window)
+    return window
+
+
+def _find_window(frame: Frame) -> np.ndarray | None:
     corner = find_spell_window(frame)
     if corner is None:
         return None

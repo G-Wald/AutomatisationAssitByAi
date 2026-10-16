@@ -354,6 +354,35 @@ def test_follower_joins_through_the_sword_and_its_menu():
     assert abs(join_click[0] - 1112) <= 2 and abs(join_click[1] - 469) <= 2  # « Rejoindre »
 
 
+def test_next_followers_click_the_same_sword_at_once_and_are_checked_after():
+    # 15/10, équipe de 8 : 0,7 s par suiveur entre deux clics sur l'épée (clic, attente, regard). Le premier la trouve ;
+    # les suivants cliquent au même endroit sans attendre, leur entrée est vérifiée ensuite.
+    screen = Screen()
+    sword = with_sword("hors_combat", at=(900, 300))
+    first = member("Second", screen, sword, load_frame("preparation"))
+    second = member("Troisieme", screen, sword, load_frame("preparation"))
+    joiner = Joiner(timeout=5)
+    assert joiner.ask(first, None) and joiner.ask(second, None)
+    assert joiner.wait_placement(first, time.monotonic() + 5) and joiner.wait_placement(second, time.monotonic() + 5)
+    mine = [e for e in screen.events if e[0] == "Troisieme" and e[1] != "devant"]
+    assert [e[1] for e in mine] == ["look", "click_right", "look"]  # clic aussitôt, puis la vérification
+    a, b = (e[2] for e in events(screen, "click_right"))
+    assert abs(a[0] - b[0]) <= 4 and abs(a[1] - b[1]) <= 4  # même endroit de l'épée
+
+
+def test_follower_not_in_after_the_quick_click_joins_the_long_way(monkeypatch):
+    monkeypatch.setattr("bot.team.join.QUICK_JOIN_WAIT", 0.0)
+    screen = Screen()
+    sword = with_sword("hors_combat", at=(900, 300))
+    first = member("Second", screen, sword, load_frame("preparation"))
+    second = member("Troisieme", screen, sword, sword, sword, load_frame("preparation"))
+    joiner = Joiner(timeout=5)
+    assert joiner.ask(first, None) and joiner.ask(second, None)
+    assert not joiner.wait_placement(second, time.monotonic() + 5)  # pas entré dans le délai du clic rapide
+    assert joiner.join(second, None)  # refait tout : clic, attente et regard
+    assert len([e for e in events(screen, "click_right") if e[0] == "Troisieme"]) == 2
+
+
 def test_sword_nearest_to_the_leader_click_tried_first():
     screen = Screen()
     image = with_sword("hors_combat", at=(700, 200)).image
@@ -375,6 +404,19 @@ def test_sword_with_its_handle_hidden_by_a_monster():
     image[150:450, 1350:1750] = cv2.imread(str(FIXTURES / "epee_poignee_cachee.png"))
     (sword,) = find_fight_swords(Frame.of(image))
     assert abs(sword.center[0] - 1540) < 20 and 260 < sword.center[1] < 330
+
+
+def test_sword_not_seen_follower_clicks_where_the_leader_attacked(monkeypatch):
+    # 16/10, Incarnam 6,2 : groupe tout en haut, épée coupée par le bord et sous le nom de la carte ; aucun des 7 suiveurs
+    # ne la voyait. L'épée remplace le groupe : clic droit là où le principal a cliqué.
+    monkeypatch.setattr("bot.team.join.SWORD_WAIT", 0)
+    screen = Screen()
+    hors_combat = load_frame("hors_combat")
+    follower = member("Second", screen, hors_combat, hors_combat, load_frame("preparation"))
+    hint = to_reference(hors_combat.layout, (1011, 84))
+    assert Joiner(timeout=5).join(follower, hint)
+    ((x, y),) = [e[2] for e in events(screen, "click_right")]
+    assert abs(x - 1011) <= 10 and abs(y - 84) <= 10
 
 
 def test_join_given_up_without_a_sword(monkeypatch):

@@ -18,3 +18,8 @@ popups:
     detect: menu_principal_titre.png    # « Menu principal » : Échap sans rien à fermer l'ouvre (11/10, un suiveur)
     key: escape                         # Échap = « Annuler » ; jamais de clic : « Quitter Dofus » et « Déconnecter »
                                         # sont juste au-dessus
+  - name: combats en cours
+    detect: combats_en_cours_titre.png  # « Combats en cours » (liste pour regarder un combat) : ouverte par un clic sur
+                                        # l'épée du combat d'un autre joueur (16/10, Incarnam 6,1) ; bloquait le bot
+    title_above: 400                    # seul le bas de la fenêtre est du beige des fenêtres : titre 340 px plus haut
+    close: fin_de_combat_fermer.png     # bouton « Fermer », le même que sous le résultat du combat

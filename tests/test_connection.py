@@ -404,6 +404,14 @@ def test_launcher_play_button():
         assert find_play(frame(name).image) is None, name
 
 
+def test_launcher_play_button_with_a_dpi_from_another_screen():
+    # 16/10 : page Dofus Retro du 7e anniversaire (gâteau à la place du logo), launcher sur l'écran à 100 % mais DPI
+    # annoncé d'un écran à 175 % : modèles agrandis, « JOUER » introuvable. L'échelle 1 est essayée aussi.
+    image = frame("launcher_retro_anniversaire").image
+    assert find_play(image, scale=1.75) == (368, 576)
+    assert find_retro_icon(image, scale=1.75) == (44, 250)
+
+
 def test_launch_all_presses_ctrl_8_on_the_retro_page(monkeypatch):
     monkeypatch.setattr(launcher_module, "window_scale", lambda window: 1.0)
     saved = []

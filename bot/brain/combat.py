@@ -71,6 +71,7 @@ from bot.perception.placement import read_placement, standing_cells
 from bot.perception.sight import (RangeView, Terrain, in_line_only, line_of_sight, range_center, read_blocks,
                                   read_range, read_terrain, sight_agreement)
 from bot.perception.spellbook import slot_greyed
+from bot.perception.timeline import timeline_portraits
 from bot.perception.toolbar import ToolbarButton, find_creature_button, find_tactical_button
 from bot.perception.ui import (
     END_TURN_SPREAD,
@@ -1137,7 +1138,8 @@ class CombatAI:
             return self._cancel_spell()
         # Pas sur le corps d'un autre combattant debout devant la case : le clic le viserait lui (une zone visant une
         # case vide près d'un allié le toucherait).
-        point, spread = clear_point(before.grid, target.cell, fighters if me in fighters else fighters + [me])
+        point, spread = clear_point(before.grid, target.cell, fighters if me in fighters else fighters + [me],
+                                    timeline_portraits(before))  # ni sur un portrait (case presque cachée, 15/10)
         self._aim = (target.cell, point, spread)  # la rafale vise au même endroit
         for attempt in range(1, CAST_ATTEMPTS + 1):
             aim = self.game.move(point, spread)
@@ -1462,7 +1464,8 @@ class CombatAI:
                                 "deplacement")
         # Pas sur le corps d'un combattant debout devant la case, ni sur le mien (03/10 : case juste au-dessus de moi,
         # cachée par mon propre corps : le clic m'a sélectionné, « n'a pas bougé »).
-        point, spread = clear_point(frame.grid, best, fighters if me in fighters else fighters + [me])
+        point, spread = clear_point(frame.grid, best, fighters if me in fighters else fighters + [me],
+                                    timeline_portraits(frame))
         self.game.click(point, spread)
         tracking = self._me_cell is not None or self._find_me is not None  # mode équipe : ma case suivie
         arrived, frame = self._wait_arrival(me, best, steps)

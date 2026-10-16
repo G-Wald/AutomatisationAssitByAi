@@ -3,7 +3,7 @@ import numpy as np
 import pytest
 
 from bot.perception.colors import BLUE, RED, UI_BEIGE
-from bot.perception.fighters import Fighter, find_fighters
+from bot.perception.fighters import Fighter, clear_point, find_fighters
 from bot.perception.frame import Frame
 from bot.perception.grid import distance
 from bot.perception.groups import find_group_tooltips
@@ -13,7 +13,7 @@ from bot.perception.popups import (find_flash_menu, flash_close_point, find_know
 from bot.perception.placement import entry_banner, read_placement
 from bot.perception.spellbook import identify, locate_in_bar, read_spell_window, slot_greyed
 from bot.perception.spellsheet import read_sheet
-from bot.perception.sight import (in_line_only, line_of_sight, read_blocks, read_range, read_terrain, sight_agreement,
+from bot.perception.sight import (in_line_only, range_center, line_of_sight, read_blocks, read_range, read_terrain, sight_agreement,
                                   timeline_portraits)
 from bot.perception.templates import match_template
 from bot.perception.ui import (
@@ -67,6 +67,50 @@ def test_fighters_stand_on_cell_centers():
     for fighter in find_fighters(frame):
         x, y = frame.grid.center(fighter.cell)
         assert abs(x - fighter.x) < 4 and abs(y - fighter.y) < 4
+
+
+def under_long_timeline(*patches: str) -> Frame:
+    """15/10, équipe de 8 : le seul ennemi (Arakne Immature) caché sous la timeline de 9 portraits, personne ne le
+    voyait. Les captures (logs/20261015_204355, 0079 à 0113) ont été effacées par la rotation des journaux ; il en
+    reste le bas droit (exact, 1250-1920 x 600-850, puis 1580-1730 x 700-830 pour l'ennemi au-dessus), recollé sur la
+    capture du même combat combat_equipe_8_timeline_longue (dont l'Arakne visible en (12, 28))."""
+    image = load_frame("combat_equipe_8_timeline_longue").image.copy()
+    for name, (x, y) in zip(patches, [(1250, 600), (1580, 700)]):
+        patch = cv2.imread(str(FIXTURES / f"{name}.png"))
+        image[y : y + patch.shape[0], x : x + patch.shape[1]] = patch
+    return Frame.of(image)
+
+
+@pytest.mark.parametrize(
+    "patches, cell",
+    [
+        (["timeline_longue_ennemi_dessous"], (23, 31)),  # seul le bas du cercle dépasse, sous les portraits
+        (["timeline_longue_ennemi_dessous", "timeline_longue_ennemi_dessus"], (23, 29)),  # le haut, au-dessus
+    ],
+)
+def test_enemy_ring_hidden_under_the_timeline_portraits(patches, cell):
+    frame = under_long_timeline(*patches)
+    assert {f.cell for f in find_fighters(frame) if f.team == BLUE} == {(12, 28), cell}
+
+
+@pytest.mark.parametrize("cell", [(23, 31), (23, 29)])
+def test_click_on_a_cell_almost_hidden_by_the_timeline_misses_the_portraits(cell):
+    frame = under_long_timeline("timeline_longue_ennemi_dessous")
+    portraits = timeline_portraits(frame)
+    (x, y), (sx, sy) = clear_point(frame.grid, cell, [], portraits)
+    cx, cy = frame.grid.center(cell)
+    assert abs(x - cx) / frame.grid.half_w + abs(y - cy) / frame.grid.half_h <= 0.9  # dans le losange
+    assert not any(x0 - sx <= x <= x1 + sx and y0 - sy <= y <= y1 + sy for x0, y0, x1, y1 in portraits)
+    assert frame.layout.on_map((x, y + sy))
+
+
+def test_no_ring_guessed_under_the_timeline_without_its_arc():
+    frame = under_long_timeline("timeline_longue_ennemi_dessous")
+    x0, y0, x1, y1 = 1600, 760, 1720, 830  # l'arc bleu sous le 6e portrait, effacé (gris du sol)
+    image = frame.image.copy()
+    region = image[y0:y1, x0:x1]
+    region[(region[:, :, 0] > 200) & (region[:, :, 2] < 60)] = (77, 74, 72)
+    assert {f.cell for f in find_fighters(Frame.of(image)) if f.team == BLUE} == {(12, 28)}
 
 
 @pytest.mark.parametrize("name", SCREENS)
@@ -330,6 +374,8 @@ def test_tactical_mode_button_found_when_off():
 def test_tactical_mode():
     assert tactical_mode(load_frame("combat_mon_tour")) and tactical_mode(load_frame("preparation"))
     assert not tactical_mode(load_frame("hors_combat"))
+    # 16/10 : petite carte entourée de vide noir (Incarnam 6,1) : 28 % de gris sur toute la zone de la carte.
+    assert tactical_mode(load_frame("tactique_petite_carte_vide_noir"))
 
 
 def test_pa_bubble_change_detection():
@@ -371,7 +417,8 @@ def test_spell_slots():
 @pytest.mark.parametrize(
     "name, popup",
     [(name, None) for name in SCREENS + ["hors_combat_detection_enemi"]]
-    + [("fin_de_combat", "résultat du combat"), ("fin_de_combat_level_up", "informations (niveau supérieur)")],
+    + [("fin_de_combat", "résultat du combat"), ("fin_de_combat_level_up", "informations (niveau supérieur)"),
+       ("combats_en_cours", "combats en cours")],  # 16/10 : liste des combats à regarder, ouverte par erreur
 )
 def test_known_windows(name, popup):
     match = find_known_popup(load_frame(name), load_popup_specs())
@@ -528,3 +575,30 @@ def test_cells_under_a_long_timeline_are_not_obstacles():
     left, top = min(b[0] for b in portraits), min(b[1] for b in portraits)
     assert not any(frame.grid.center(c)[0] >= left and frame.grid.center(c)[1] >= top for c in view.obstacles)
     assert view.castable  # la portée reste lue
+
+
+def test_void_around_the_map_inside_a_range_is_not_an_obstacle():
+    # 16/10, Incarnam 6,1 : la portée déborde sur le vide autour de la plateforme, teinté bleu nuit ; ces cases étaient
+    # prises pour des blocs (plus de cent), qui coupaient toutes les lignes de vue. Le vide est un trou.
+    frame = load_frame("portee_sur_le_vide_incarnam_6_1")
+    fighters = find_fighters(frame)
+    me = Fighter(RED, *frame.grid.center((12, 14)), (12, 14))
+    view = read_range(frame, me, fighters)
+    assert view.castable
+    for cell in view.obstacles:
+        x, y = (round(v) for v in frame.grid.center(cell))
+        b, g, r = (int(v) for v in frame.image[y, x])
+        assert not (abs(b - 45) <= 14 and abs(g - 30) <= 14 and abs(r - 10) <= 14), cell  # pas le vide bleu nuit
+    assert len(view.obstacles) < 30
+
+
+def test_spectator_list_closed_with_its_fermer_button():
+    match = find_known_popup(load_frame("combats_en_cours"), load_popup_specs())
+    assert match.spec.name == "combats en cours"
+    assert abs(match.close_point[0] - 1406) <= 6 and abs(match.close_point[1] - 729) <= 6  # « Fermer », pas « Rejoindre »
+
+
+def test_caster_found_when_the_range_spills_over_the_void_and_under_the_timeline():
+    # 16/10, Incarnam 6,1 : portée de Lancer de Pièces (0 à 8) sur le vide (bleu nuit) et sous la timeline ; le losange
+    # coupé plaçait Pesopepe en (19, 21), au-dessus du vide : 7 tirs refusés, 43 s perdues sur deux tours.
+    assert range_center(load_frame("reperage_portee_sur_le_vide"), (0, 8)) == (19, 25)

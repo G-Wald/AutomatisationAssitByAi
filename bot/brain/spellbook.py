@@ -439,6 +439,10 @@ class SpellBook:
     `session` : mode de début de session, lecture des caractéristiques, dossier de la mémoire des personnages
     (brain/memory.py) ; par défaut (tests) : la fenêtre des sorts seule, rien n'est retenu."""
 
+    # Façon de défiler la liste qui a marché (molette, rail, flèche), pour toute la session : en arrière-plan, la
+    # molette n'y fait rien, essayée puis abandonnée pour chacun des 8 personnages de l'équipe (15/10 : 0,9 s chacun).
+    scroll_mode: str | None = None
+
     def __init__(self, game: Game, knowledge: dict[str, dict] | None = None, reference: dict | None = None,
                  classes: dict[str, str] | None = None, name: str | None = None,
                  session: SessionSettings | None = None) -> None:
@@ -561,7 +565,9 @@ class SpellBook:
         bar = scroll_bar(frame)
         if bar is None or not bar.scrolls:
             return entries
-        icons, offset, notches, mode, pages = row_icons(frame), 0, FIRST_NOTCHES, "molette", 1
+        mode = SpellBook.scroll_mode or "molette"
+        notches = {"molette": FIRST_NOTCHES, "rail": 1, "fleche": ARROW_CLICKS}[mode]
+        icons, offset, pages = row_icons(frame), 0, 1
         while pages < MAX_PAGES + 3:  # le rail avance moins vite (~5 lignes) : quelques pages de plus
             after = self._scroll(frame, notches, mode)
             if after is None:
@@ -592,6 +598,7 @@ class SpellBook:
                 continue
             pages += 1
             offset += shift
+            SpellBook.scroll_mode = mode
             page = read_spell_window(frame, first_row=offset)
             by_row = {e.row: e for e in entries}
             new = [e for e in page if e.row not in by_row]

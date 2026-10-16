@@ -78,3 +78,22 @@ def portrait_gap(a: Portrait, b: Portrait) -> float:
 
 def same_portrait(a: Portrait | None, b: Portrait | None) -> bool:
     return a is not None and b is not None and portrait_gap(a, b) <= SAME_PORTRAIT
+
+
+PORTRAIT_SIZE = ((15, 48), (48, 66))  # fond blanc d'un portrait de la timeline, en px de référence (largeur, hauteur) ;
+# 15 de large : le dernier, à moitié sous la flèche de défilement
+PORTRAIT_MARGIN = (6, 6, 16, 8)  # autour de ce fond : cadre, et barre de vie à droite (gauche, haut, droite, bas)
+
+
+def timeline_portraits(frame: Frame) -> list[Box]:
+    """Portraits des combattants dans la timeline (fond blanc, 38 x 56 de référence), avec leur cadre et leur barre
+    de vie : ce qu'ils cachent de la carte. 2 portraits en duel ; 9 en équipe de 8, sur 600 px de large (15/10)."""
+    layout = frame.layout
+    x0, y0, x1, y1 = layout.box(*TIMELINE_ZONE)
+    white = (frame.image[y0:y1, x0:x1].min(axis=2) >= 225).astype(np.uint8)
+    count, _, stats, _ = cv2.connectedComponentsWithStats(white, connectivity=8)
+    (w_min, w_max), (h_min, h_max) = PORTRAIT_SIZE
+    left, top, right, bottom = (layout.length(v) for v in PORTRAIT_MARGIN)
+    return [(round(x0 + x - left), round(y0 + y - top), round(x0 + x + w + right), round(y0 + y + h + bottom))
+            for x, y, w, h, _ in stats[1:count]
+            if layout.length(w_min) <= w <= layout.length(w_max) and layout.length(h_min) <= h <= layout.length(h_max)]

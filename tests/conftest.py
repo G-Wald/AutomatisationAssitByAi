@@ -2,6 +2,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+import pytest
 
 from bot.perception.frame import Frame
 
@@ -52,3 +53,13 @@ def without_flash_menu() -> Frame:
     x0, y0, x1, y1 = FLASH_MENU_BOX
     image[y0:y1, x0:x1] = (13, 191, 142)
     return Frame.of(image)
+
+
+@pytest.fixture(autouse=True)
+def _scroll_mode_forgotten():
+    """SpellBook.scroll_mode vaut pour toute une session de jeu : chaque test repart de la molette."""
+    from bot.brain.spellbook import SpellBook
+
+    SpellBook.scroll_mode = None
+    yield
+    SpellBook.scroll_mode = None

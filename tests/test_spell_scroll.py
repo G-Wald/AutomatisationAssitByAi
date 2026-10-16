@@ -130,6 +130,23 @@ def test_scroll_bar_click_when_the_wheel_does_nothing(caplog):
     assert [e.row for e in book.entries][-1] == 19
 
 
+def test_next_character_goes_straight_to_the_scroll_bar(caplog):
+    # 15/10, équipe de 8 en arrière-plan : la molette essayée puis abandonnée pour chacun (0,9 s x 8). Le 2e personnage
+    # clique tout de suite sur la barre de défilement.
+    closed = load_frame("hors_combat")
+    first = FakeGame(closed, list_page(0), list_page(0), list_page(5), list_page(10), list_page(10), closed)
+    assert SpellBook(first).read()
+    second = FakeGame(closed, list_page(0), list_page(5), list_page(10), list_page(10), closed)
+    book = SpellBook(second)
+    caplog.clear()
+    with caplog.at_level(logging.INFO):
+        assert book.read()
+    assert "La molette ne fait pas défiler" not in caplog.text
+    rail = clicks(second)[1]  # premier geste après le bouton baguette : le rail, pas un cran de molette
+    assert abs(rail[0] - (640 + 548)) <= 3 and 40 + 442 < rail[1] < 40 + 694
+    assert [e.row for e in book.entries][-1] == 19
+
+
 def test_down_arrow_when_neither_wheel_nor_scroll_bar_work(caplog):
     closed = load_frame("hors_combat")
     game = FakeGame(closed, list_page(0), list_page(0), list_page(0), list_page(3), list_page(10), list_page(10),

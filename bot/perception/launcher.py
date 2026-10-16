@@ -4,7 +4,9 @@ Page Dofus Retro : sélecteur de version « Retro » en haut du panneau du jeu, 
 gauche, l'icône de Dofus Retro (œuf jaune), en surbrillance quand sa page est affichée. Le bouton « JOUER » existe
 aussi sur la page des autres jeux : on ne lance rien si le sélecteur « Retro » n'est pas là.
 Le launcher n'est pas le jeu : sa page se met à l'échelle de Windows (DPI de sa fenêtre), pas de la hauteur de la
-fenêtre ; les modèles sont donc agrandis selon le DPI.
+fenêtre ; les modèles sont donc agrandis selon le DPI. Ce DPI peut être celui d'un autre écran que celui où le launcher
+est affiché (16/10 : modèles agrandis pour un écran à 175 %, launcher sur l'écran à 100 %, « JOUER » introuvable) :
+l'échelle 1 est toujours essayée aussi.
 """
 
 import cv2
@@ -34,15 +36,24 @@ def scaled_match(image: np.ndarray, name: str, scale: float = 1.0, threshold: fl
     return (x + tw // 2, y + th // 2), float(score)
 
 
+def _scales(scale: float) -> list[float]:
+    return list(dict.fromkeys((scale, 1.0)))
+
+
 def find_play(image: np.ndarray, scale: float = 1.0) -> Point | None:
     """Bouton « JOUER » de la page Dofus Retro ; None ailleurs (page d'un autre jeu, launcher pas encore prêt)."""
-    if scaled_match(image, RETRO_VERSION, scale) is None:
-        return None
-    found = scaled_match(image, PLAY, scale)
-    return found[0] if found else None
+    for factor in _scales(scale):
+        if scaled_match(image, RETRO_VERSION, factor) is not None:
+            found = scaled_match(image, PLAY, factor)
+            if found:
+                return found[0]
+    return None
 
 
 def find_retro_icon(image: np.ndarray, scale: float = 1.0) -> Point | None:
     """Icône de Dofus Retro dans la barre des jeux, à gauche."""
-    found = scaled_match(image, RETRO_ICON, scale, threshold=0.75)
-    return found[0] if found else None
+    for factor in _scales(scale):
+        found = scaled_match(image, RETRO_ICON, factor, threshold=0.75)
+        if found:
+            return found[0]
+    return None

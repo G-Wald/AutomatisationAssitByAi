@@ -13,7 +13,9 @@ chacun : la seule case de l'équipe qui vient de se remplir) :
 3. le personnage entre au placement (il peut d'abord marcher jusqu'à l'épée) ; sinon, un second essai.
 L'épée est au même endroit dans la fenêtre de chaque suiveur (même carte) : le point qui a marché pour le premier est
 essayé d'abord pour les suivants, sans la chercher (0,4 s par recherche sur toute la carte). Elle est cherchée d'abord
-près du groupe attaqué (dernier clic du principal), puis sur toute la carte.
+près du groupe attaqué (dernier clic du principal), puis sur toute la carte. Pour les suivants, le clic part aussitôt,
+sans attendre de voir le personnage entrer (15/10, équipe de 8 : 0,7 s par suiveur, 4,4 s pour 7) ; l'entrée est
+vérifiée ensuite pour tous (wait_placement), et celui qui n'est pas entré en QUICK_JOIN_WAIT refait tout (join).
 """
 
 import logging
@@ -31,6 +33,7 @@ log = logging.getLogger(__name__)
 SWORD_WAIT = 4.0  # l'épée apparaît un instant après le début du combat
 MENU_WAIT = 0.4  # clic sur l'épée -> menu affiché, ou placement
 JOIN_WAIT = 1.5  # clic droit sur l'épée -> placement : le temps pour le jeu de nous faire entrer
+QUICK_JOIN_WAIT = 3.0  # clic aussitôt sur l'épée déjà trouvée -> placement, avant de tout refaire (marche comprise)
 SWORDS_TRIED = 2
 JOIN_TRIES = 2
 HINT_MAX_AGE = 30.0  # dernier clic du personnage qui a lancé le combat : au-delà, il ne dit plus où est l'épée
@@ -56,23 +59,26 @@ class Joiner:
     def __init__(self, timeout: float = 20.0) -> None:
         self.timeout = timeout  # par personnage
         self.known: tuple[float, float] | None = None  # point de l'épée qui a marché (repère de référence), ce combat
+        self.quick: dict[str, float] = {}  # personnage -> heure du clic parti sans vérification (ask rapide)
 
     def new_fight(self) -> None:
         self.known = None
+        self.quick = {}
 
     def join(self, member: Member, hint: tuple[float, float] | None = None) -> bool:
         """True si le personnage est au placement du combat."""
         deadline = time.monotonic() + self.timeout
         for _ in range(JOIN_TRIES):
-            if self.ask(member, hint) and self.wait_placement(member, deadline):
+            if self.ask(member, hint, quick=False) and self.wait_placement(member, deadline):
                 return True
             if time.monotonic() >= deadline:
                 break
         log.warning("%s n'a pas rejoint le combat : il reste hors combat", member.name)
         return False
 
-    def ask(self, member: Member, hint: tuple[float, float] | None) -> bool:
-        """Clic sur l'épée puis sur « Rejoindre ». True si c'est fait (ou s'il est déjà dans le combat)."""
+    def ask(self, member: Member, hint: tuple[float, float] | None, quick: bool = True) -> bool:
+        """Clic sur l'épée puis sur « Rejoindre ». True si c'est fait (ou s'il est déjà dans le combat). `quick` : si
+        l'épée a déjà marché pour un autre, clic droit au même endroit sans attendre le résultat (vu par wait_placement)."""
         game = member.game
         frame = game.look(park=False)  # pas de geste inutile : la souris n'est écartée que si l'épée ne se voit pas
         if read_scene(frame).phase is not Phase.OUT_OF_COMBAT:
@@ -81,8 +87,15 @@ class Joiner:
             if member.popups.describe(frame) is None or not member.popups.handle(frame, 0):
                 break
             frame = game.look(park=False)
-        if self.known is not None and self._try(game, frame.layout.point(*self.known), frame.layout.spread(3, 3)):
-            return True  # même épée, même endroit que pour le suiveur précédent
+        if self.known is not None:  # même épée, même endroit que pour le suiveur précédent
+            point = frame.layout.point(*self.known)
+            if quick:
+                if game.click(point, frame.layout.spread(3, 3), button="right"):
+                    self.quick[member.name] = time.monotonic()
+                    log.info("Je rejoins le combat (clic droit sur l'épée en %s, comme le précédent)", point)
+                    return True
+            elif self._try(game, point, frame.layout.spread(3, 3)):
+                return True
         end = time.monotonic() + SWORD_WAIT
         while True:
             if read_scene(frame).phase is not Phase.OUT_OF_COMBAT:
@@ -95,6 +108,15 @@ class Joiner:
         if not swords:
             path = game.recorder.save(frame.image, "epee_introuvable", lossless=True)
             log.info("Je ne vois pas l'épée du combat sur la carte (capture : %s)", path)
+            # 16/10, groupe attaqué tout en haut (Incarnam 6,2) : épée coupée par le bord de l'écran et sous le nom de
+            # la carte, introuvable pour les 7 suiveurs, le principal seul en combat. L'épée remplace le groupe : clic
+            # droit là où le principal a cliqué pour attaquer.
+            if hint is not None:
+                point = frame.layout.point(*hint)
+                log.info("Je vise l'endroit où le principal a attaqué, en %s", point)
+                if self._try(game, point, frame.layout.spread(*SWORD_SPREAD)):
+                    self.known = hint
+                    return True
             return False
         for sword in _ranked(swords, hint, frame.layout)[:SWORDS_TRIED]:
             for point, spread in sword.points or ((sword.click, frame.layout.spread(*SWORD_SPREAD)),):
@@ -145,7 +167,11 @@ class Joiner:
                 return False
 
     def wait_placement(self, member: Member, deadline: float) -> bool:
-        """Le personnage (qui marche peut-être jusqu'à l'épée) entre au placement."""
+        """Le personnage (qui marche peut-être jusqu'à l'épée) entre au placement. Après un clic rapide (ask), au plus
+        QUICK_JOIN_WAIT après ce clic : sinon join refait tout (menu de quelqu'un debout sur l'épée...)."""
+        clicked = self.quick.pop(member.name, None)
+        if clicked is not None:
+            deadline = min(deadline, clicked + QUICK_JOIN_WAIT)
         while True:
             phase = read_scene(member.game.look(park=False)).phase
             if phase is not Phase.OUT_OF_COMBAT:

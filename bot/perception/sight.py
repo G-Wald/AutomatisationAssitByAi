@@ -11,7 +11,6 @@ Vérifié sur tests/fixtures/combat_portee_sort.png : 102 cases sur 103 prédite
 import math
 from dataclasses import dataclass
 
-import cv2
 import numpy as np
 
 from bot.perception.colors import RANGE_BLUE, near
@@ -19,9 +18,10 @@ from bot.perception.fighters import Fighter
 from bot.perception.frame import Frame
 from bot.perception.grid import Cell, distance, lattice_cell
 from bot.perception.layout import MAP_BOTTOM
-from bot.perception.ui import TIMELINE_ZONE
+from bot.perception.timeline import timeline_portraits
 
 NO_SIGHT_BLUE = (137, 117, 95)  # BGR, bleu clair : à portée mais ligne de vue bloquée
+VOID_IN_RANGE = (45, 30, 10)  # BGR, bleu nuit : le vide autour de la carte, teinté par la portée (16/10, Incarnam 6,1)
 
 
 @dataclass(frozen=True)
@@ -30,6 +30,8 @@ class RangeView:
     no_sight: set[Cell]
     obstacles: set[Cell]
     spell_range: tuple[int, int] | None  # distances min et max des cases à portée
+    void: frozenset[Cell] = frozenset()  # vide autour de la carte teinté bleu nuit : dans la portée, mais pas une case
+    hidden: frozenset[Cell] = frozenset()  # sous la timeline ou l'interface du bas : on ne sait pas
 
 
 def _hidden_by_sprites(frame: Frame, fighters: list[Fighter]) -> set[Cell]:
@@ -50,9 +52,13 @@ def range_center(frame: Frame, spell_range: tuple[int, int], min_match: float = 
     jamais colorées (trous, blocs, vide autour de la carte), retirées du losange attendu : sinon un losange coupé par
     un bord décale le centre. None si aucune ne colle à `min_match` près."""
     view = read_range(frame, Fighter("", -1e4, -1e4, (-10_000, -10_000)), [])
-    colored = view.castable | view.no_sight
-    if not colored:
+    if not (view.castable | view.no_sight):
         return None
+    # 16/10, Incarnam 6,1 : la portée de Lancer de Pièces débordait sur le vide (bleu nuit) et sous la timeline ; le
+    # losange coupé de deux côtés plaçait le lanceur une case trop haut, au-dessus du vide : 7 tirs refusés, 43 s. Le
+    # vide teinté fait partie du losange ; ce qui est caché en est retiré.
+    colored = view.castable | view.no_sight | view.void
+    exclude = set(exclude) | view.hidden
     cells = [c for c in frame.grid.cells() if c not in exclude or c in colored]
     grid = np.array(cells)
     is_colored = np.array([c in colored for c in cells])
@@ -68,31 +74,16 @@ def range_center(frame: Frame, spell_range: tuple[int, int], min_match: float = 
     return best if score >= min_match else None
 
 
-PORTRAIT_SIZE = ((15, 48), (48, 66))  # fond blanc d'un portrait de la timeline, en px de référence (largeur, hauteur) ;
-# 15 de large : le dernier, à moitié sous la flèche de défilement
-PORTRAIT_MARGIN = (6, 6, 16, 8)  # autour de ce fond : cadre, et barre de vie à droite (gauche, haut, droite, bas)
-
-
-def timeline_portraits(frame: Frame) -> list[tuple[int, int, int, int]]:
-    """Portraits des combattants dans la timeline (fond blanc, 38 x 56 de référence), avec leur cadre et leur barre
-    de vie : ce qu'ils cachent de la carte. 2 portraits en duel ; 9 en équipe de 8, sur 600 px de large (15/10)."""
-    layout = frame.layout
-    x0, y0, x1, y1 = layout.box(*TIMELINE_ZONE)
-    white = (frame.image[y0:y1, x0:x1].min(axis=2) >= 225).astype(np.uint8)
-    count, _, stats, _ = cv2.connectedComponentsWithStats(white, connectivity=8)
-    (w_min, w_max), (h_min, h_max) = PORTRAIT_SIZE
-    left, top, right, bottom = (layout.length(v) for v in PORTRAIT_MARGIN)
-    return [(round(x0 + x - left), round(y0 + y - top), round(x0 + x + w + right), round(y0 + y + h + bottom))
-            for x, y, w, h, _ in stats[1:count]
-            if layout.length(w_min) <= w <= layout.length(w_max) and layout.length(h_min) <= h <= layout.length(h_max)]
-
-
 def read_range(frame: Frame, me: Fighter, fighters: list[Fighter]) -> RangeView:
     grid = frame.grid
     dark = near(frame.image, RANGE_BLUE, 25)
     light = near(frame.image, NO_SIGHT_BLUE, 22)
+    # Vide autour de la carte (noir, ou bleu nuit dans la portée) : un trou, on tire par-dessus ; pas un obstacle.
+    # 16/10, Incarnam 6,1 : plus de cent cases du vide prises pour des blocs, lignes de vue justes sur 57 à 70 %.
+    void = near(frame.image, VOID_IN_RANGE, 14) | (frame.image.max(axis=2) <= 35)
     height, width = dark.shape
-    castable, no_sight, uncolored = set(), set(), set()
+    castable, no_sight, uncolored, void_cells, hidden_cells = set(), set(), set(), set(), set()
+    tinted = near(frame.image, VOID_IN_RANGE, 14)
     portraits = timeline_portraits(frame)
     # La rangée des portraits, jusqu'au bord droit (flèches de défilement), et le bas de la carte sous l'interface.
     row = (min(b[0] for b in portraits), min(b[1] for b in portraits), max(b[3] for b in portraits)) if portraits else None
@@ -111,7 +102,12 @@ def read_range(frame: Frame, me: Fighter, fighters: list[Fighter]) -> RangeView:
             castable.add(cell)
         elif sum(light[py, px] for px, py in points) >= 2:
             no_sight.add(cell)
-        elif sum(hidden(px, py) for px, py in points) < 2:
+        elif sum(hidden(px, py) for px, py in points) >= 2:
+            hidden_cells.add(cell)
+        elif sum(void[py, px] for px, py in points) >= 2:
+            if sum(tinted[py, px] for px, py in points) >= 2:
+                void_cells.add(cell)
+        else:
             uncolored.add(cell)
         # Sinon la case est cachée sous un portrait de la timeline ou sous l'interface du bas : ni colorée ni obstacle,
         # inconnue. 15/10, équipe de 8 :
@@ -119,14 +115,14 @@ def read_range(frame: Frame, me: Fighter, fighters: list[Fighter]) -> RangeView:
         # ligne de vue prédite juste sur 55 % des cases et toute la carte crue à relief.
     distances = [distance(c, me.cell) for c in castable | no_sight]
     if not distances:
-        return RangeView(castable, no_sight, set(), None)
+        return RangeView(castable, no_sight, set(), None, frozenset(void_cells), frozenset(hidden_cells))
     low, reach = min(distances), max(distances)
     ignored = {f.cell for f in fighters} | _hidden_by_sprites(frame, fighters)
     # Cases plus proches que la portée minimale : jamais colorées, ce ne sont pas des obstacles. 11/10, Tempête de
     # Puissance (3 à 4) : les 11 cases à 1 ou 2 de Brawli prises pour des blocs, ligne de vue prédite juste sur 8 % des
     # cases au lieu de 96 %, carte crue à relief (4 cases de marge) : tirs prévus à 6 cases, refusés par le jeu.
     obstacles = {c for c in uncolored if low <= distance(c, me.cell) <= reach} - ignored
-    return RangeView(castable, no_sight, obstacles, (low, reach))
+    return RangeView(castable, no_sight, obstacles, (low, reach), frozenset(void_cells), frozenset(hidden_cells))
 
 
 def in_line_only(view: RangeView, me: Cell) -> RangeView:
@@ -135,7 +131,8 @@ def in_line_only(view: RangeView, me: Cell) -> RangeView:
     def aligned(cell: Cell) -> bool:
         return abs(cell[0] - me[0]) == abs(cell[1] - me[1])
 
-    return RangeView(view.castable, view.no_sight, {c for c in view.obstacles if aligned(c)}, view.spell_range)
+    return RangeView(view.castable, view.no_sight, {c for c in view.obstacles if aligned(c)}, view.spell_range,
+                     view.void, view.hidden)
 
 
 def _is_floor(bgr: np.ndarray) -> bool:
