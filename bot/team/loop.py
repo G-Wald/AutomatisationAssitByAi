@@ -49,6 +49,7 @@ from bot.perception.templates import match_template
 from bot.perception.timeline import Portrait, current_portrait, same_portrait
 from bot.perception.ui import READY_SPREAD, hp_ratio, pods_fill, tactical_mode
 from bot.state.scene import Phase, Scene, read_scene
+from bot.perception.chat import combat_lines, died
 from bot.team.join import Joiner, recent_click
 from bot.team.member import Member, to_reference
 from bot.team.placement import Seat, by_elimination, next_moves, plan_seats
@@ -137,6 +138,12 @@ def _standing(frame: Frame, placement: Placement) -> list[Fighter]:
 
 def _same_turn(a: Portrait | None, b: Portrait | None) -> bool:
     return (a is None and b is None) or same_portrait(a, b)
+
+
+def _died(member: Member) -> bool:
+    """Fin de combat : ce personnage est mort (perte d'énergie annoncée dans SON chat de combat)."""
+    lines = combat_lines(member.game.look(park=False))
+    return bool(lines) and died(lines)
 
 
 class TeamBot:
@@ -698,6 +705,12 @@ class TeamBot:
                                  and read_scene(m.game.look(park=False)).phase is not Phase.OUT_OF_COMBAT]
             log.info("Combat déjà commencé : %s", ", ".join(m.name for m in fighters))
         end = self._turns(fighters) if fighters else None
+        dead = [m.name for m in fighters if _died(m)]
+        if dead:
+            # 17/10 : Koalaloupour mort seul à Incarnam, réapparu à Astrub, le bot a continué comme si de rien n'était.
+            log.warning("%s mort(s) pendant ce combat (« Tu as perdu ... points d'énergie » dans le chat) : je "
+                        "m'arrête après ce combat", ", ".join(dead))
+            self._stop_reason = f"{', '.join(dead)} mort(s) au combat"
         self._fight_over()
         self.fights += 1
         write_fight_report(getattr(self.leader.game.recorder, "dir", None), self.fights,

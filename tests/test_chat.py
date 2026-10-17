@@ -42,3 +42,18 @@ def test_combat_chat_read_on_a_real_capture():
 
     lines = combat_lines(load_frame("chat_combat_annonces"))
     assert cast_count(lines, "Dinarpepe", "Lancer de Pièces") == 2 and cast_count(lines, "Pesopepe", "Lancer de Pièces") == 1
+
+
+def test_death_seen_in_the_combat_chat():
+    from bot.perception.chat import died
+
+    assert died(["Koalaloupour est mort !", "Tu as perdu 50 points d'énergie.", "Combat terminé"])
+    assert not died(["Petit Tofu est mort !", "Combat terminé (ouvrir l'écran de [fin de combat])."])
+
+
+@pytest.mark.skipif(not ocr_available(), reason="OCR de Windows absent (requirements-winrt.txt)")
+def test_death_read_on_the_real_capture():
+    # 17/10 : Koalaloupour mort seul à Incarnam 6,2 (puis réapparu à Astrub, le bot ne l'avait pas vu).
+    from bot.perception.chat import combat_lines, died
+
+    assert died(combat_lines(load_frame("mort_perte_energie")))

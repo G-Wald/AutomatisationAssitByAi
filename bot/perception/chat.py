@@ -134,3 +134,9 @@ def cast_announced(before: list[str], after: list[str], name: str, spell: str) -
     """Le sort vient d'être annoncé : une ligne « Nom lance Sort. » de plus qu'avant le clic. Zone pleine et même sort
     relancé, la plus ancienne annonce peut défiler en même temps : rien n'est conclu (les PA tranchent, comme avant)."""
     return cast_count(after, name, spell) > cast_count(before, name, spell)
+
+
+def died(lines: list[str]) -> bool:
+    """Le personnage de cette fenêtre vient de mourir : « Tu as perdu N points d'énergie. » (17/10 : écrit seulement chez
+    lui, avec « Nom est mort ! ») dans les dernières lignes du chat de combat."""
+    return any("perdu" in _plain(line) and "energie" in _plain(line) for line in lines)
