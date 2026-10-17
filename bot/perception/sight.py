@@ -5,7 +5,9 @@
 - rien dans le losange de portée : obstacle (bloc, trou, bord de carte), sauf si un sprite cache la case.
 
 Les obstacles vus servent à prédire la ligne de vue depuis d'autres cases, pour choisir où se déplacer.
-Vérifié sur tests/fixtures/combat_portee_sort.png : 102 cases sur 103 prédites comme le jeu les affiche.
+Vérifié sur tests/fixtures/combat_portee_sort.png : 102 cases sur 103 prédites comme le jeu les affiche ; le 17/10, sur
+les 50 captures « ligne_de_vue_a_revoir » d'Incarnam (plateaux et fosses) : 3421 cases sur 3421 (3030 avant de ne plus
+lire les parois teintées comme des blocs ni compter les coins de case).
 """
 
 import functools
@@ -17,7 +19,7 @@ import numpy as np
 from bot.perception.colors import RANGE_BLUE, near
 from bot.perception.fighters import Fighter
 from bot.perception.frame import Frame
-from bot.perception.grid import Cell, distance, lattice_cell
+from bot.perception.grid import CORNER_TOLERANCE, Cell, distance
 from bot.perception.layout import MAP_BOTTOM
 from bot.perception.timeline import timeline_portraits
 
@@ -33,6 +35,7 @@ class RangeView:
     spell_range: tuple[int, int] | None  # distances min et max des cases à portée
     void: frozenset[Cell] = frozenset()  # vide autour de la carte teinté bleu nuit : dans la portée, mais pas une case
     hidden: frozenset[Cell] = frozenset()  # sous la timeline ou l'interface du bas : on ne sait pas
+    walls: frozenset[Cell] = frozenset()  # paroi d'un plateau ou d'une fosse, teintée par la portée : pas un obstacle
 
 
 def _hidden_by_sprites(frame: Frame, fighters: list[Fighter]) -> set[Cell]:
@@ -59,7 +62,7 @@ def range_center(frame: Frame, spell_range: tuple[int, int], min_match: float = 
     # losange coupé de deux côtés plaçait le lanceur une case trop haut, au-dessus du vide : 7 tirs refusés, 43 s. Le
     # vide teinté fait partie du losange ; ce qui est caché en est retiré.
     colored = view.castable | view.no_sight | view.void
-    exclude = set(exclude) | view.hidden
+    exclude = set(exclude) | view.hidden | view.walls
     cells = [c for c in frame.grid.cells() if c not in exclude or c in colored]
     grid = np.array(cells)
     is_colored = np.array([c in colored for c in cells])
@@ -75,6 +78,21 @@ def range_center(frame: Frame, spell_range: tuple[int, int], min_match: float = 
     return best if score >= min_match else None
 
 
+def _tinted_wall(bgr: np.ndarray) -> bool:
+    """Paroi (côté gris sombre d'un plateau ou d'une fosse) teintée par la portée : bleu sombre, le bleu 22 à 50 au-dessus
+    du rouge, le vert 8 à 30. 17/10, Incarnam : (59, 44, 24) et (82, 66, 50) sur les deux faces d'un plateau, (92, 75,
+    60) et (103, 88, 66) dans une fosse. Ni le bleu nuit du vide (45, 30, 10), ni le bleu clair « sans ligne de vue »
+    (137, 117, 95), ni le sol gris."""
+    b, g, r = (int(v) for v in bgr)
+    return 22 <= b - r <= 50 and 8 <= g - r <= 30 and 55 < b <= 125
+
+
+def _foreign(bgr: np.ndarray) -> bool:
+    """Ni terrain nu (sol, dessus ou côté gris d'un bloc) ni paroi teintée : texte, icône, interface posés sur la case
+    (le rouge pur du curseur « interdit » compris, que _shade prend pour une case de placement)."""
+    return not _tinted_wall(bgr) and (_shade(bgr) == OTHER or int(bgr.max()) - int(bgr.min()) > 30)
+
+
 def read_range(frame: Frame, me: Fighter, fighters: list[Fighter]) -> RangeView:
     grid = frame.grid
     dark = near(frame.image, RANGE_BLUE, 25)
@@ -83,7 +101,8 @@ def read_range(frame: Frame, me: Fighter, fighters: list[Fighter]) -> RangeView:
     # 16/10, Incarnam 6,1 : plus de cent cases du vide prises pour des blocs, lignes de vue justes sur 57 à 70 %.
     void = near(frame.image, VOID_IN_RANGE, 14) | (frame.image.max(axis=2) <= 35)
     height, width = dark.shape
-    castable, no_sight, uncolored, void_cells, hidden_cells = set(), set(), set(), set(), set()
+    image = frame.image
+    castable, no_sight, uncolored, void_cells, hidden_cells, wall_cells = set(), set(), set(), set(), set(), set()
     tinted = near(frame.image, VOID_IN_RANGE, 14)
     portraits = timeline_portraits(frame)
     # La rangée des portraits, jusqu'au bord droit (flèches de défilement), et le bas de la carte sous l'interface.
@@ -108,22 +127,33 @@ def read_range(frame: Frame, me: Fighter, fighters: list[Fighter]) -> RangeView:
         elif sum(void[py, px] for px, py in points) >= 2:
             if sum(tinted[py, px] for px, py in points) >= 2:
                 void_cells.add(cell)
-        else:
+        elif sum(_tinted_wall(image[py, px]) for px, py in points) >= 3:
+            wall_cells.add(cell)
+        elif sum(not dark[py, px] and not light[py, px] and _foreign(image[py, px]) for px, py in points) < 2:
             uncolored.add(cell)
-        # Sinon la case est cachée sous un portrait de la timeline ou sous l'interface du bas : ni colorée ni obstacle,
-        # inconnue. 15/10, équipe de 8 :
-        # la timeline de 9 portraits couvrait le bas de la portée de Lancer de Pièces, ses cases prises pour des blocs,
-        # ligne de vue prédite juste sur 55 % des cases et toute la carte crue à relief.
+        # Cachée sous un portrait de la timeline ou sous l'interface du bas : ni colorée ni obstacle, inconnue. 15/10,
+        # équipe de 8 : la timeline de 9 portraits couvrait le bas de la portée de Lancer de Pièces, ses cases prises
+        # pour des blocs, ligne de vue prédite juste sur 55 % des cases et toute la carte crue à relief.
+        # 17/10, Incarnam (cartes à plateaux et fosses, 50 captures « ligne_de_vue_a_revoir ») : 416 des 431 obstacles
+        # lus étaient des parois, côtés d'une case plus haute dessinés sur la case de devant et teintés comme elle par
+        # la portée (bleu sombre) ; ils coupaient les lignes de vue vers les plateaux et le fond des fosses, que le jeu
+        # montrait à portée. Un obstacle, lui, n'est jamais teinté : un bloc montre son dessus clair et ses côtés
+        # sombres (parfois deux points bleus de la case voisine, au bord de la portée). Deux points ou plus d'une
+        # autre couleur (texte vert des dégâts, curseur « interdit », flèche orange de la timeline, sur 6 captures) :
+        # case couverte, ni colorée ni obstacle (laissée dans le losange attendu par range_center, comme avant : l'en
+        # retirer décalait le lanceur trouvé).
     distances = [distance(c, me.cell) for c in castable | no_sight]
     if not distances:
-        return RangeView(castable, no_sight, set(), None, frozenset(void_cells), frozenset(hidden_cells))
+        return RangeView(castable, no_sight, set(), None, frozenset(void_cells), frozenset(hidden_cells),
+                         frozenset(wall_cells))
     low, reach = min(distances), max(distances)
     ignored = {f.cell for f in fighters} | _hidden_by_sprites(frame, fighters)
     # Cases plus proches que la portée minimale : jamais colorées, ce ne sont pas des obstacles. 11/10, Tempête de
     # Puissance (3 à 4) : les 11 cases à 1 ou 2 de Brawli prises pour des blocs, ligne de vue prédite juste sur 8 % des
     # cases au lieu de 96 %, carte crue à relief (4 cases de marge) : tirs prévus à 6 cases, refusés par le jeu.
     obstacles = {c for c in uncolored if low <= distance(c, me.cell) <= reach} - ignored
-    return RangeView(castable, no_sight, obstacles, (low, reach), frozenset(void_cells), frozenset(hidden_cells))
+    return RangeView(castable, no_sight, obstacles, (low, reach), frozenset(void_cells), frozenset(hidden_cells),
+                     frozenset(wall_cells))
 
 
 def in_line_only(view: RangeView, me: Cell) -> RangeView:
@@ -133,7 +163,7 @@ def in_line_only(view: RangeView, me: Cell) -> RangeView:
         return abs(cell[0] - me[0]) == abs(cell[1] - me[1])
 
     return RangeView(view.castable, view.no_sight, {c for c in view.obstacles if aligned(c)}, view.spell_range,
-                     view.void, view.hidden)
+                     view.void, view.hidden, view.walls)
 
 
 def _is_floor(bgr: np.ndarray) -> bool:
@@ -244,8 +274,9 @@ def read_terrain(frame: Frame, fighters: list[Fighter]) -> Terrain:
 def line_of_sight(a: Cell, b: Cell, blockers: set[Cell]) -> bool:
     """Aucune case bloquante sur le segment entre les centres de `a` et `b` (extrémités exclues).
 
-    Points du segment pris depuis `a` (puis décalés de `a`) : un point à égale distance de deux cases tombe toujours
-    du même côté, où que soit la ligne sur la carte (même tracé que brain/engine.crossed, calculé une fois par écart)."""
+    Tracé pris depuis `a` (puis décalé de `a`), le même où que soit la ligne sur la carte (même tracé que
+    brain/engine.crossed, calculé une fois par écart). Une case que le segment ne fait que toucher par un coin ne
+    bloque pas (voir _crossed)."""
     (i0, j0), (i1, j1) = a, b
     return not any((i0 + di, j0 + dj) in blockers for di, dj in _crossed(i1 - i0, j1 - j0))
 
@@ -253,11 +284,23 @@ def line_of_sight(a: Cell, b: Cell, blockers: set[Cell]) -> bool:
 @functools.lru_cache(maxsize=4096)
 def _crossed(di: int, dj: int) -> tuple[Cell, ...]:
     """Cases traversées par le segment de (0, 0) à (di, dj), extrémités exclues, dans l'ordre (placement de toute
-    l'équipe, 17/10 : des centaines de lignes par plan, chacune calculée une fois par écart)."""
+    l'équipe, 17/10 : des centaines de lignes par plan, chacune calculée une fois par écart).
+
+    Un point du segment à égale distance de deux cases est sur leur bord : il ne compte pour aucune. Une case
+    traversée a toujours d'autres points à elle ; une case touchée par un seul coin n'en a pas et ne bloque pas.
+    17/10, Incarnam : une ligne horizontale à l'écran passe par les coins des cases au-dessus et au-dessous d'elle ;
+    la case du dessous était comptée (égalité tranchée d'un seul côté), et un combattant posé là coupait 70 lignes de
+    vue sur 50 captures que le jeu montrait dégagées (aucune ligne bloquée par un coin dans ces captures)."""
     samples = max(abs(di), abs(dj)) * 24
     cells: list[Cell] = []
     for t in np.linspace(0, 1, samples + 1)[1:-1]:
-        cell = lattice_cell(di * t, dj * t)
+        a, b = di * t, dj * t
+        i, j = math.floor(a), math.floor(b)
+        near_cells = sorted((abs(a - ci) + abs(b - cj), (ci, cj)) for ci in (i, i + 1) for cj in (j, j + 1)
+                            if (ci + cj) % 2 == 0)
+        if near_cells[1][0] - near_cells[0][0] <= CORNER_TOLERANCE:
+            continue
+        cell = near_cells[0][1]
         if cell != (0, 0) and cell != (di, dj) and cell not in cells:
             cells.append(cell)
     return tuple(cells)

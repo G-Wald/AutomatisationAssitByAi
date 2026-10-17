@@ -124,9 +124,16 @@ def test_a_later_player_never_stands_in_the_line_of_an_earlier_one():
 
 def test_blocks_count_for_the_line_of_sight():
     enemies = {(10, 0)}
-    cells = {(4, 0), (2, 0)}
-    assert plan_seats([Seat("a", (1, 8))], cells, enemies)["a"] == (2, 0)  # à 8 cases, la plus loin à portée
-    assert plan_seats([Seat("a", (1, 8))], cells, enemies, blockers={(3, 1), (3, -1), (3, 0)})["a"] == (4, 0)
+    cells = {(4, 0), (2, 2)}
+    assert plan_seats([Seat("a", (1, 8))], cells, enemies)["a"] == (2, 2)  # à 8 cases, la plus loin à portée
+    assert plan_seats([Seat("a", (1, 8))], cells, enemies, blockers={(5, 1)})["a"] == (4, 0)
+
+
+def test_two_blocks_touching_by_a_corner_leave_the_line_open():
+    # 17/10, Incarnam : 20 lignes passant juste entre deux combattants qui se touchent par un coin, toutes montrées
+    # dégagées par le jeu (sight._crossed).
+    seats = plan_seats([Seat("a", (1, 8))], {(4, 0), (2, 0)}, {(10, 0)}, blockers={(3, 1), (3, -1)})
+    assert seats["a"] == (2, 0)
 
 
 def test_free_cell_preferred_to_an_equally_good_one_taken_by_someone_unknown():

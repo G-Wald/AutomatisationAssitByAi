@@ -112,8 +112,18 @@ def clear_point(grid: Grid, cell: Cell, fighters: list[Fighter],
 
 def _is_arc(blob: Blob, layout: Layout) -> bool:
     """Morceau de cercle : le reste est caché par le corps d'un personnage debout devant (03/10 : un Bouftou juste
-    derrière l'Enutrof, cercle coupé en deux arcs de 23 x 29 et 20 x 15 px ; aucun ennemi vu, tour passé en boucle)."""
-    return blob.fill <= 0.45 and blob.area >= layout.area(40) and max(blob.w, blob.h) <= layout.length(85)
+    derrière l'Enutrof, cercle coupé en deux arcs de 23 x 29 et 20 x 15 px ; aucun ennemi vu, tour passé en boucle).
+    Pas le curseur « interdit » (_is_forbidden_cursor)."""
+    return blob.fill <= 0.45 and blob.area >= layout.area(40) and max(blob.w, blob.h) <= layout.length(85) \
+        and not _is_forbidden_cursor(blob, layout)
+
+
+def _is_forbidden_cursor(blob: Blob, layout: Layout) -> bool:
+    """Curseur « interdit » (rond rouge barré, 43 x 43 px en 1057 de haut) laissé sur la carte par le survol d'une
+    cible : rond, plus haut qu'un cercle au sol (34 à 36 px de haut, même coupé). 17/10, Incarnam : pris pour un
+    morceau de cercle, il plaçait un combattant sur une case vide (2 captures sur 50), qui coupait des lignes de vue
+    que le jeu montrait dégagées (11 cases sur 69 dans l'une d'elles)."""
+    return layout.length(38) <= blob.h <= layout.length(50) and 0.75 <= blob.w / blob.h <= 1.33
 
 
 def find_fighters(frame: Frame) -> list[Fighter]:

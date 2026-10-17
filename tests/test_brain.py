@@ -945,6 +945,24 @@ def test_impossible_range_read_on_a_relief_map_is_ignored(monkeypatch):
     assert ai._use.measured["fleche_magique"] == (1, 8)
 
 
+def test_impossible_range_teaches_no_obstacle_and_no_relief(monkeypatch):
+    from bot.perception.sight import RangeView
+
+    # 17/10 : Pelle Fantomatique (0 à 6) lue 1 à 8, losange pas centré sur ma case ; ses cases non colorées apprises
+    # comme blocs, ligne de vue prédite juste sur 22 % des cases, carte crue à relief.
+    frame = load_frame("combat_portee_sort")
+    pelle = CombatSpell(2, "pelle_fantomatique", "Pelle Fantomatique", 3, (0, 6), range_modifiable=False, damage=8)
+    me = Fighter(RED, *frame.grid.center((10, 20)), (10, 20))
+    ai = CombatAI(FakeGame(frame), CombatSettings())
+    ai.map.obstacles.add((12, 22))
+    shifted = RangeView({(12, 22), (13, 23)}, {(9, 27)}, {(14, 20), (10, 24)}, (1, 8))
+    monkeypatch.setattr("bot.brain.combat.read_range", lambda *a: shifted)
+    monkeypatch.setattr("bot.brain.combat.sight_agreement", lambda *a: 0.22)
+    ai._learn_range(frame, me, [me], pelle)
+    assert ai.map.obstacles == set()  # (12, 22) colorée : pas un bloc ; rien d'appris d'autre
+    assert ai._map_reliable and "pelle_fantomatique" not in ai._use.measured
+
+
 def test_range_still_fading_in_is_not_read(monkeypatch):
     from bot.perception.sight import RangeView
 
