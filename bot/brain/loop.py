@@ -230,6 +230,7 @@ class Bot:
                 if self.roamer is not None and self._empty_searches >= self.travel_settings.empty_searches:
                     self._empty_searches = 0
                     self.roamer.step()
+                    self.engager.new_map()
                     self._next_engage_at = time.monotonic()
                     return
                 delay = 1.0 if self.engager.missed else self.engager.settings.retry_delay

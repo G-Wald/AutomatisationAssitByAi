@@ -19,7 +19,8 @@ import cv2
 import pytest
 
 from bot.brain.engage import (BELOW_OFFSETS, DIRECT_ATTACK_WAIT, EDGE_SHIFTS, HOVER_WAIT, NEIGHBOURS, NO_MENU_LIMIT,
-                              PROBES, RETRY_SKIPPED, SHOWN_ON_ARRIVAL, Z_LINGER, Engager, EngageSettings, hover_points)
+                              PROBES, RETRY_SKIPPED, SHOWN_ON_ARRIVAL, SKIP_FOR, UNREACHABLE_HITS, Z_LINGER, Engager,
+                              EngageSettings, hover_points)
 from bot.brain.game import Game
 from bot.config import load_settings
 from bot.perception.frame import Frame
@@ -568,10 +569,32 @@ def test_background_click_beside_the_group_then_the_next_point(caplog):
 
 def test_background_right_click_probe():
     # engage.clic_sonde: droit (défaut, 08/10 : vérifié par l'utilisateur) : sur le groupe, le personnage y marche et le
-    # combat se lance, sans menu. Le premier clic tombe à côté : rien, le second lance le combat.
-    game = beside_background_game(opens=(), direct=("right",))
+    # combat se lance, sans menu. (Clic droit à côté : menu de Flash, voir FlashMenuGame.)
+    game = sand_background_game(opens=(), direct=("right",))
     assert Engager(game, EngageSettings()).engage()
-    assert game.buttons == ["right", "right"]
+    assert game.buttons == ["right"]
+
+
+def test_background_groups_out_of_reach_left_until_the_next_map(caplog):
+    # 17/10 (Incarnam 3,0) : clic droit sur le groupe, ni menu de Flash ni combat (le personnage marche, le groupe est de
+    # l'autre côté d'un obstacle). Pas de 2e clic dessus ; touché UNREACHABLE_HITS fois au même endroit, il est laissé
+    # bien après SKIP_FOR, la carte compte comme vide (mode zone : carte suivante), jusqu'au changement de carte.
+    caplog.set_level("INFO")
+    game = sand_background_game(opens=(), direct=())
+    engager = Engager(game, EngageSettings())
+    assert not engager.engage()
+    assert game.buttons == ["right"] and "hors d'atteinte ?" in caplog.text
+    for _ in range(2 * UNREACHABLE_HITS - 1):
+        assert not engager.engage()
+    assert len(clicks(game)) == 2 * UNREACHABLE_HITS
+    game.clock += SKIP_FOR + RETRY_SKIPPED
+    game.actions.clear()
+    assert not engager.engage()
+    assert clicks(game) == [] and engager.none_found and not engager.missed
+    assert "Plus que des groupes hors d'atteinte sur la carte" in caplog.text
+    engager.new_map()
+    assert not engager.engage()
+    assert len(clicks(game)) == 1
 
 
 def test_background_clicks_limited_then_the_group_is_skipped(caplog):

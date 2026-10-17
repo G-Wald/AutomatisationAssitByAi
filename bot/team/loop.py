@@ -350,6 +350,7 @@ class TeamBot:
                 return
             self._empty_searches = 0
             self.roamer.step()
+            self.engager.new_map()
             self._follow()
             self._next_engage_at = time.monotonic()
             return

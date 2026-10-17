@@ -26,6 +26,7 @@ Flash s'ouvre ; Échap ne le ferme pas (il ouvre le Menu principal derrière), u
 """
 
 import logging
+import math
 import random
 from dataclasses import dataclass
 from enum import Enum
@@ -90,6 +91,16 @@ RETRY_SKIPPED = 10.0
 # à côté fait marcher le personnage jusque-là : on ne balaie pas les 7 à 16 points de hover_points.
 PROBES = 2
 PROBE_BUTTONS = {"gauche": "left", "droit": "right"}  # engage.clic_sonde -> bouton de la souris
+# Groupe hors d'atteinte (17/10, Incarnam 3,0, journal 125352) : le clic droit le touche (pas de menu de Flash), le
+# personnage marche, mais le combat ne se lance jamais (groupe de l'autre côté d'un obstacle). 68 clics ainsi en 20 min
+# sur les groupes du côté droit de la carte, 7 min 21 s perdues : seul le groupe d'en bas à gauche était attaquable.
+# UNREACHABLE_HITS clics de ce genre à moins de UNREACHABLE_RADIUS px de référence : les groupes de cet endroit sont
+# laissés jusqu'au changement de carte (au plus UNREACHABLE_FOR s) ; s'il ne reste qu'eux, la carte compte comme vide
+# (mode zone : carte suivante). Pas de 2e clic sur un groupe touché : dans les journaux du 17/10, les 3 clics 2/2 suivis
+# d'un combat venaient tous après un 1er clic dans le vide (menu de Flash).
+UNREACHABLE_RADIUS = 150  # deux groupes à 196 px l'un de l'autre (Calanques, 03/10) restent distincts
+UNREACHABLE_HITS = 2
+UNREACHABLE_FOR = 600.0
 
 
 class Outcome(Enum):
@@ -235,6 +246,19 @@ class Engager:
         self._skipped: list[_Skip] = []
         self._no_menu: list[tuple[GroupTooltip, float]] = []  # (infobulle, quand) : clics sans menu « Attaquer »
         self._z_until = float("-inf")  # jusqu'à quand les infobulles de Z peuvent rester affichées (game.now)
+        self._unreachable: list[tuple[Point, float]] = []  # (clic, quand) : groupe touché, combat jamais lancé
+        self._hit = False  # dernier clic sans menu « Attaquer » : quelque chose a été touché (ni menu de Flash, ni autre)
+
+    def new_map(self) -> None:
+        """Changement de carte : les groupes ratés et les endroits hors d'atteinte de l'ancienne sont oubliés."""
+        self._skipped, self._no_menu, self._unreachable = [], [], []
+
+    def _out_of_reach(self, tooltip: GroupTooltip, frame: Frame) -> bool:
+        points = hover_points(tooltip, frame)
+        if not points:
+            return False
+        (x, y), radius = points[0], frame.layout.length(UNREACHABLE_RADIUS)
+        return sum(math.hypot(x - px, y - py) <= radius for (px, py), _ in self._unreachable) >= UNREACHABLE_HITS
 
     def engage(self) -> bool:
         """True si un combat a commencé."""
@@ -259,6 +283,17 @@ class Engager:
             self.none_found = True
             return False
         log.info("%d groupe(s) de monstres sur la carte", len(tooltips))
+        now = self.game.now()
+        self._unreachable = [(p, when) for p, when in self._unreachable if now - when < UNREACHABLE_FOR]
+        reachable = [t for t in tooltips if not self._out_of_reach(t, frame)]
+        if len(reachable) < len(tooltips):
+            log.info("Je laisse %d groupe(s) hors d'atteinte (touchés sans que le combat se lance, au même endroit)",
+                     len(tooltips) - len(reachable))
+        if not reachable:
+            log.info("Plus que des groupes hors d'atteinte sur la carte")
+            self.none_found = True
+            return False
+        tooltips = reachable
         candidates = self._candidates(tooltips, frame)
         if not candidates:
             self.none_found = True  # la boucle attend (engage.retry_delay), ou change de carte en mode zone
@@ -405,6 +440,10 @@ class Engager:
                     self._no_menu_after_click(aim, tooltip, frame)
             else:
                 outcome = self._after_click(aim, tooltip, frame)
+            if outcome is Outcome.NO_MENU and button == "right" and self._hit:
+                self._unreachable.append((aim, self.game.now()))
+                log.info("Groupe touché mais pas de combat : hors d'atteinte ? (endroit noté, pas d'autre clic dessus)")
+                return outcome
             if outcome is not Outcome.NO_MENU or probe == PROBES:
                 return outcome
             log.info("Clic à côté du groupe%s : je réaffiche les groupes (Z) avant le clic suivant",
@@ -452,6 +491,7 @@ class Engager:
         un autre menu (personnage ou PNJ devant le groupe) est fermé par Échap, puis combat lancé directement ? Sinon
         le clic est tombé à côté du groupe (le personnage y marche)."""
         frame = self.game.look(park=False)
+        self._hit = False
         if find_flash_menu(frame, around=group) is not None:  # avant les menus beiges : il en a l'air
             log.info("Le clic à côté du groupe a ouvert le menu de Flash : je le ferme (pas d'Échap)")
             close_flash_menu(self.game, frame, around=group)
@@ -459,6 +499,8 @@ class Engager:
             if find_context_menu(frame) is not None or find_small_menu(frame, around=group) is not None:
                 log.info("Un autre menu s'est ouvert au clic (personnage ou PNJ sur le groupe ?) : je le ferme")
                 self.game.press("escape")
+            else:
+                self._hit = True
             if self._wait_for_combat(DIRECT_ATTACK_WAIT):
                 return Outcome.COMBAT
         path = self.game.recorder.save(

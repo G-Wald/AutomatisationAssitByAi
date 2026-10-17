@@ -18,6 +18,7 @@ from bot.config import ROOT
 
 LOGS_DIR = ROOT / "logs"
 SESSION_NAME = re.compile(r"\d{8}_\d{6}")  # seuls les dossiers de session du bot sont supprimés
+PROBLEM_SHARE = 3  # captures d'échec (PNG, ~2,5 Mo) : au plus max_images // PROBLEM_SHARE, en plus des autres
 
 
 def _size_mb(folder: Path) -> float:
@@ -43,8 +44,11 @@ class Recorder:
         """`images` : « toutes » (tests), « problemes » (seulement les captures des échecs) ou « aucune »."""
         self.dir = root / f"{datetime.now():%Y%m%d_%H%M%S}"
         self.dir.mkdir(parents=True, exist_ok=True)
-        self._count = 0
-        self._max_images = max_images
+        self._count = 0  # numéro de la dernière capture (toutes sortes)
+        # 17/10 (journal 125352) : les 300 captures prises avant 13:03 (tours, déplacements), plus aucune des 68 attaques
+        # ratées ensuite. Les captures d'échec (PNG) ont leur propre limite, en plus.
+        self._kept = {False: 0, True: 0}  # par sorte : JPEG, PNG (échecs)
+        self._max = {False: max_images, True: max_images // PROBLEM_SHARE}
         self.images = images
 
     def keeps(self, lossless: bool = False) -> bool:
@@ -69,11 +73,13 @@ class Recorder:
         """`lossless` (PNG) pour les échecs que je réanalyserai, JPEG sinon (plus léger)."""
         if not self.keeps(lossless):
             return None
-        if self._count >= self._max_images:
-            if self._count == self._max_images:
-                self._count += 1
-                logging.getLogger(__name__).info("Limite de %d captures atteinte : je n'en enregistre plus", self._max_images)
+        if self._kept[lossless] >= self._max[lossless]:
+            if self._kept[lossless] == self._max[lossless]:
+                self._kept[lossless] += 1
+                logging.getLogger(__name__).info("Limite de %d captures %s atteinte : je n'en enregistre plus",
+                                                 self._max[lossless], "d'échec" if lossless else "courantes")
             return None
+        self._kept[lossless] += 1
         self._count += 1
         extension = ".png" if lossless else ".jpg"
         path = self.dir / f"{self._count:04d}_{re.sub(r'[^A-Za-z0-9_-]+', '_', label)}{extension}"

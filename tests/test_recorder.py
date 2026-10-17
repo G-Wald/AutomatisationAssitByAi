@@ -1,4 +1,6 @@
-from bot.debug.recorder import prune_sessions
+import numpy as np
+
+from bot.debug.recorder import Recorder, prune_sessions
 
 
 def make_session(root, name, size_kb):
@@ -28,3 +30,14 @@ def test_other_folders_are_never_removed(tmp_path):
     make_session(tmp_path, "20260101_100000", 1)
     prune_sessions(tmp_path, keep=0, max_total_mb=0)
     assert [p.name for p in tmp_path.iterdir()] == ["mes_captures"]
+
+
+def test_failure_captures_kept_once_the_routine_ones_are_used_up(tmp_path):
+    # 17/10 : 300 captures courantes avant 13:03, puis plus aucune capture des attaques ratées.
+    recorder = Recorder(tmp_path, max_images=6)
+    image = np.zeros((4, 4, 3), np.uint8)
+    assert all(recorder.save(image, "tour") is not None for _ in range(6))
+    assert recorder.save(image, "tour") is None
+    assert recorder.save(image, "menu_attaquer_absent", lossless=True).name == "0007_menu_attaquer_absent.png"
+    assert recorder.save(image, "echec", lossless=True) is not None
+    assert recorder.save(image, "echec", lossless=True) is None  # 6 // 3 captures d'échec au plus
