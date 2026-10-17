@@ -8,6 +8,19 @@ Chiffres produits par `tools/bilan_sessions.py` sur tous les dossiers de `logs/`
 .venv\Scripts\python -m tools.bilan_sessions --json bilan.json       et les chiffres bruts en JSON
 ```
 
+**Résumé court d'une session, à faire analyser (16/10).** Après une longue session (1 h de farm à 8), lire le journal
+entier est trop lourd. `tools/resume_session.py` écrit `resume.md` (moins de ~150 lignes) et `resume.json` dans le
+dossier de la session : durée, combats (placement, combat, tours, refus, suiveurs restés dehors), temps morts (avant le
+1er combat, entre deux combats, repos, changements de carte, attaques ratées), par personnage (tours, sorts, refus et
+leur coût, « Carte à relief », cercle caché, déplacements ratés, combats sans tour), trajets (cartes, sorties bloquées,
+noms illisibles, « /p %pos% »), anomalies INFO et WARNING / ERROR dédoublonnés avec 1 ou 2 captures chacun. L'issue des
+combats (gagné / perdu) n'est pas écrite par le bot : le résumé le dit.
+
+```
+.venv\Scripts\python -m tools.resume_session                         la dernière session de logs/
+.venv\Scripts\python -m tools.bilan_sessions --resume logs\20261016_193753
+```
+
 L'outil reconnaît les messages écrits par le code (travel.py, team/loop.py, combat.py, turns.py, popups.py,
 connection/, debug/report.py), anciens formats compris, et lit `combats.jsonl` et les `rapport.txt` des outils.
 

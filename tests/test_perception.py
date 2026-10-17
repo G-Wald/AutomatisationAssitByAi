@@ -418,7 +418,8 @@ def test_spell_slots():
     "name, popup",
     [(name, None) for name in SCREENS + ["hors_combat_detection_enemi"]]
     + [("fin_de_combat", "résultat du combat"), ("fin_de_combat_level_up", "informations (niveau supérieur)"),
-       ("combats_en_cours", "combats en cours")],  # 16/10 : liste des combats à regarder, ouverte par erreur
+       ("combats_en_cours", "combats en cours"),  # 16/10 : liste des combats à regarder, ouverte par erreur
+       ("challenge_en_cours", "challenge en cours")],  # 16/10 : en combat, cachait la carte
 )
 def test_known_windows(name, popup):
     match = find_known_popup(load_frame(name), load_popup_specs())

@@ -1227,3 +1227,22 @@ def test_team_colour_learned_from_a_known_portrait():
     bot.router.learn("A", current_portrait(frame))
     assert bot._player(b, frame, read_scene(frame), [a, b]) is a
     assert bot.my_team == read_scene(frame).current_team  # sans placement choisi : appris ici
+
+
+def test_fight_running_past_the_session_time_stops_the_bot():
+    # 16/10 : farm de 30 min, combat bloqué à partir de la 28e minute ; le bot tournait encore à la 43e.
+    screen = Screen()
+    one = member("Premier", screen, load_frame("combat_mon_tour"))
+    bot = team_bot(one)
+    bot.deadline = time.monotonic() - 301
+    assert bot._turns([one]) is None
+    assert bot.finished and "dépassée" in bot._stop_reason
+
+
+def test_member_whose_turn_never_passes_is_left_alone_for_a_while():
+    screen = Screen()
+    one = member("Premier", screen, load_frame("combat_mon_tour"))
+    bot = team_bot(one)
+    assert bot._unless_stuck(one) is one
+    bot._stuck["Premier"] = time.monotonic() + 30
+    assert bot._unless_stuck(one) is None

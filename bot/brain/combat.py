@@ -423,6 +423,7 @@ class CombatAI:
         self._warned_not_tactical = False
         self._warned_who = False
         self._stats: TurnStats | None = None  # mesure du tour en cours (voir _turn_stats)
+        self.turns_not_passed = 0  # tours d'affilée finis sans que la main passe (team/loop.py : boucle évitée)
         self._fight_turns: list[tuple[float, TurnStats]] = []  # (durée, mesure) de chaque tour fini (bilan du combat)
         self._life: TargetLife | None = None  # vie de la dernière cible survolée (rafale)
         self._life_saved.discard("vie_lue")  # capture de la fiche lue : une par combat (illisible : une par session)
@@ -1618,10 +1619,12 @@ class CombatAI:
             self.game.press(self._end_turn_key)
             log.info("Fin de tour (%s)", self._end_turn_key.upper())
             if self._turn_passed(my_team, checks=10):
+                self.turns_not_passed = 0
                 return
             # Pressée pendant l'animation du dernier sort (fast_end), elle a pu être ignorée : une seconde fois.
             self.game.press(self._end_turn_key)
             if self._turn_passed(my_team, checks=6):
+                self.turns_not_passed = 0
                 return
             log.warning("%s n'a pas passé le tour : je clique sur le bouton désormais", self._end_turn_key.upper())
             self._end_turn_key = ""
@@ -1634,7 +1637,10 @@ class CombatAI:
             return  # sinon le combat vient de se terminer : plus de tour à finir
         self.game.click(button, frame.layout.spread(*END_TURN_SPREAD))
         log.info("Fin de tour")
-        if not self._turn_passed(my_team, checks=16):
+        if self._turn_passed(my_team, checks=16):
+            self.turns_not_passed = 0
+        else:
+            self.turns_not_passed += 1
             log.warning("La main ne semble pas être passée")
 
     def _turn_passed(self, my_team: str, checks: int) -> bool:

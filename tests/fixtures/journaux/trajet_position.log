@@ -1,0 +1,25 @@
+19:58:43.448 INFO    Équipe : Koalaloupour, Dinarpepe, Leproduitlatte, Lestunes, Pesopepe, Pombro, Vertdepomme, Vieenjaune ; principal : Koalaloupour
+19:58:43.448 INFO    Mode : trajet jusqu'à une carte, toute l'équipe suit le principal, sans lancer de combat
+19:58:43.497 INFO    Session limitée : 3 minute(s)
+19:58:45.103 INFO    [Koalaloupour] État : hors combat
+19:58:45.442 INFO    [Koalaloupour] Nom de la carte illisible (décor clair derrière le texte ?) (capture : C:\Users\gauth\Documents\Workspace\AutomatisationAssistByAi\AutomatisationAssitByAi\logs\20261016_195843\0002_Koalaloupour_nom_de_carte_illisible.png)
+19:58:49.914 INFO    [Koalaloupour] « /p %pos% » envoyé, mais pas de position lue dans le chat (capture : C:\Users\gauth\Documents\Workspace\AutomatisationAssistByAi\AutomatisationAssitByAi\logs\20261016_195843\0003_Koalaloupour_position_chat_illisible.png)
+19:58:49.914 WARNING [Koalaloupour] Trajet vers 6,2 arrêté : position de départ inconnue (coordonnées illisibles, chiffre pas encore appris) : relance avec --position x,y (les coordonnées affichées en haut à gauche du jeu)
+19:59:41.070 INFO    [Koalaloupour] État : hors combat
+19:59:41.430 INFO    [Koalaloupour] Nom de la carte illisible (décor clair derrière le texte ?) (capture : C:\Users\gauth\Documents\Workspace\AutomatisationAssistByAi\AutomatisationAssitByAi\logs\20261016_195939\0002_Koalaloupour_nom_de_carte_illisible.png)
+19:59:47.147 INFO    [Koalaloupour] Position donnée par le jeu (« /p %pos% » dans le chat) : 6,1
+19:59:47.434 INFO    [Koalaloupour] Nom de la carte illisible (décor clair derrière le texte ?) : carte 6,1 d'après le chemin (capture : C:\Users\gauth\Documents\Workspace\AutomatisationAssistByAi\AutomatisationAssitByAi\logs\20261016_195939\0003_Koalaloupour_nom_de_carte_illisible.png)
+19:59:47.434 INFO    [Koalaloupour] Trajet vers 6,2 (Incarnam), sans combat ; départ : 6,1 (carte au nom illisible)
+19:59:47.437 INFO    [Koalaloupour] Itinéraire de 6,1 à 6,2 : 1 carte(s) : 6,2
+19:59:47.438 INFO    [Koalaloupour] Trajet : côté bas, vers 6,2 (encore 1 carte(s) jusqu'à 6,2)
+19:59:47.444 INFO    [Koalaloupour] Vers la carte du bas : clic sur le soleil en (11, 31)
+19:59:50.198 INFO    [Vieenjaune] Toute l'équipe vers le bas : Dinarpepe, Leproduitlatte, Lestunes, Pesopepe, Pombro, Vertdepomme, Vieenjaune cliquent aussi sur le soleil en (11, 31)
+19:59:51.622 INFO    [Koalaloupour] Nouvelle carte : Incarnam (Champs) 6,2
+19:59:51.717 INFO    [Dinarpepe] Dinarpepe a suivi le principal (Incarnam (Champs) 6,2)
+19:59:51.786 INFO    [Leproduitlatte] Leproduitlatte a suivi le principal (Incarnam (Champs) 6,2)
+19:59:51.855 INFO    [Lestunes] Lestunes a suivi le principal (Incarnam (Champs) 6,2)
+19:59:51.920 INFO    [Pesopepe] Pesopepe a suivi le principal (Incarnam (Champs) 6,2)
+19:59:51.994 INFO    [Pombro] Pombro a suivi le principal (Incarnam (Champs) 6,2)
+19:59:52.067 INFO    [Vertdepomme] Vertdepomme a suivi le principal (Incarnam (Champs) 6,2)
+19:59:52.139 INFO    [Vieenjaune] Vieenjaune a suivi le principal (Incarnam (Champs) 6,2)
+19:59:52.374 INFO    [Koalaloupour] Arrivé en 6,2 (1 changement(s) de carte)

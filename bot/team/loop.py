@@ -82,6 +82,9 @@ START_CONFIRM = 2 * SETTLE_AFTER_READY
 # Juste après la fin du tour d'un personnage, la timeline encadre encore son portrait un instant : pas de nouveau tour
 # pour lui avant ce délai (03/10 : Walitcoin a rejoué 0,2 s après son F1, sorts refusés, déplacement pendant un autre tour).
 REPLAY_GUARD = 1.5
+STUCK_TURNS = 3  # tours d'affilée où la main ne passe pas : ce personnage n'est plus cru en train de jouer...
+STUCK_PAUSE = 30.0  # ... pendant ce temps (16/10 : 79 « La main ne semble pas être passée » de Dinarpepe, 14 min)
+OVERTIME = 300.0  # s au-delà de la durée de la session : arrêt même en plein combat (16/10 : 30 min prévues, 43 min)
 # Pendant le tour d'un personnage, ni son timer ni son portrait encadré : revu sur une 2e capture avant de conclure
 # que son tour est fini (11/10, idée validée par l'utilisateur).
 TURN_MARKS_RECHECK = 0.2
@@ -214,6 +217,7 @@ class TeamBot:
         self._hinted: tuple[str, float] | None = None  # personnage signalé par notification, heure du signal
         self._early: tuple[str, float] | None = None  # joue sur notification, sans son timer : (nom, jusqu'à quand)
         self._just_played: tuple[str, float] | None = None  # dernier personnage à avoir joué, heure de fin de son tour
+        self._stuck: dict[str, float] = {}  # personnage -> fin de sa mise à l'écart (_unless_stuck)
 
     def run(self) -> None:
         while not self.finished:
@@ -851,6 +855,12 @@ class TeamBot:
         if signals is not None:
             signals.new_fight()  # notifications d'avant les tours (hors combat : invitations, échanges) ignorées
         while True:
+            if self.deadline is not None and time.monotonic() >= self.deadline + OVERTIME:
+                log.warning("Durée de la session dépassée de %.0f min en plein combat : j'arrête le bot, le combat "
+                            "continue sans lui", OVERTIME / 60)
+                self._stop_reason = "durée de la session dépassée en plein combat"
+                self.finished = True
+                return None
             frame = watcher.game.look(park=False)
             scene = read_scene(frame)
             self._report(watcher, frame, scene)
@@ -896,14 +906,14 @@ class TeamBot:
                 # rien d'autre ne la donne en début de combat).
                 self.my_team = scene.current_team
                 log.info("Mon équipe pour ce combat : %s (portrait de %s dans la timeline)", self.my_team, owner)
-            return self.by_name[owner]  # portrait reconnu : directement sa fenêtre
+            return self._unless_stuck(self.by_name[owner])  # portrait reconnu : directement sa fenêtre
         if scene.timer_visible and just is not None and watcher.name == just[0]:
             # Son timer encore affiché juste après son F1 (fin de tour sans attendre l'animation) : ce n'est pas un
             # nouveau tour. 04/10 : pris pour le tour de Fourbocinq pendant celui d'un monstre, portrait du monstre
             # retenu comme le sien et équipe bleue au lieu de rouge : 25 minutes de tours perdus.
             return None
         if scene.timer_visible:
-            return self._found(watcher, scene, portrait)  # le timer de son tour, dans la fenêtre regardée
+            return self._unless_stuck(self._found(watcher, scene, portrait))  # le timer de son tour, fenêtre regardée
         if self.router.is_other(portrait):
             return None
         now = time.monotonic()
@@ -961,6 +971,14 @@ class TeamBot:
         self._early = (member.name, time.monotonic() + EARLY_START)
         return True
 
+    def _unless_stuck(self, member: Member) -> Member | None:
+        """None si ce personnage vient de finir STUCK_TURNS tours d'affilée sans que la main passe : ce n'était sans
+        doute pas son tour (16/10 : timer d'une invocation dans sa fenêtre, carte cachée par « Challenge en cours »)."""
+        until = self._stuck.get(member.name)
+        if until is not None and time.monotonic() < until:
+            return None
+        return member
+
     def _found(self, member: Member, scene: Scene, portrait: Portrait | None) -> Member:
         self.router.learn(member.name, portrait)
         self._search = None
@@ -997,6 +1015,11 @@ class TeamBot:
         focus = getattr(member.game, "focus", None)
         if focus is not None:
             focus.to(member.window)  # sa fenêtre devant dès maintenant : le journal porte son nom
+        # Fenêtre connue par-dessus la carte (16/10 : « Challenge en cours » chez Dinarpepe, ni ennemi ni personnage
+        # vus) : fermée avant de jouer. Pas de touche de secours pour une fenêtre inconnue en plein combat.
+        frame = member.game.look(park=False)
+        if find_known_popup(frame, member.popups.specs) is not None:
+            member.popups.handle(frame, None)
         options = {}
         if _accepts(member.ai.play_turn, "is_mine"):
             options["is_mine"] = lambda frame: self._shows_turn(member, frame)
@@ -1015,6 +1038,12 @@ class TeamBot:
         member.ai.play_turn(self.my_team or scene.current_team, **options)
         self._early = None
         self._just_played = (member.name, time.monotonic())
+        if getattr(member.ai, "turns_not_passed", 0) >= STUCK_TURNS:
+            member.ai.turns_not_passed = 0
+            self._stuck[member.name] = time.monotonic() + STUCK_PAUSE
+            path = member.game.recorder.save(member.game.look(park=False).image, "tour_qui_ne_passe_pas", lossless=True)
+            log.warning("%s : %d tours d'affilée sans que la main passe, ce n'est sans doute pas son tour : je ne le fais "
+                        "plus jouer pendant %.0f s (capture : %s)", member.name, STUCK_TURNS, STUCK_PAUSE, path)
         tracked = getattr(member.ai, "_me_cell", None)  # case où l'IA m'a vu en dernier (fin du tour)
         if tracked is not None:
             self._cells[member.name] = tracked

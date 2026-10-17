@@ -20,6 +20,7 @@ Depuis la racine du projet :
     .venv\\Scripts\\python -m tools.bilan_sessions                        tous les dossiers de logs/
     .venv\\Scripts\\python -m tools.bilan_sessions logs\\20261011_215114   un ou plusieurs dossiers
     .venv\\Scripts\\python -m tools.bilan_sessions --json bilan.json       et les chiffres bruts en JSON
+    .venv\\Scripts\\python -m tools.bilan_sessions --resume logs\\20261016_193753   résumé court à analyser (resume_session)
 
 Ne touche ni au jeu ni aux fichiers lus.
 """
@@ -1119,7 +1120,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("dossiers", nargs="*", type=Path, help="dossiers de logs/ (par défaut : tous)")
     parser.add_argument("--json", type=Path, help="écrit aussi les chiffres bruts dans ce fichier JSON")
     parser.add_argument("--sans-carte", action="store_true", help="sans le résumé de data/carte.json")
+    parser.add_argument("--resume", action="store_true",
+                        help="résumé court de chaque dossier donné, à analyser (tools/resume_session.py)")
     args = parser.parse_args(argv)
+    if args.resume:
+        from tools.resume_session import main as resumer  # import local : resume_session importe ce module
+        return resumer([str(d) for d in args.dossiers])
     dossiers = args.dossiers or (sorted(p for p in LOGS_DIR.iterdir() if p.is_dir()) if LOGS_DIR.is_dir() else [])
     sessions, outils, ignores = lire_dossiers(dossiers)
     carte = None if args.sans_carte else resume_carte()

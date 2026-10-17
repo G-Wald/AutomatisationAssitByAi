@@ -1,0 +1,140 @@
+19:37:54.154 INFO    Équipe : Koalaloupour, Dinarpepe, Leproduitlatte, Lestunes, Pesopepe, Pombro, Vertdepomme, Vieenjaune ; principal : Koalaloupour
+19:37:54.167 INFO    Mode : le principal attaque les groupes, les autres le rejoignent ; changement de carte dans la zone quand elle est vide
+19:37:54.221 INFO    Session limitée : 3 combat(s) ou 15 minute(s)
+19:37:54.250 WARNING [Dinarpepe] Fenêtre de 1920x1057 : proportions différentes des captures de référence (1918x1008), la disposition de l'interface peut ne pas correspondre.
+19:37:54.464 WARNING [Leproduitlatte] Fenêtre de 1920x1057 : proportions différentes des captures de référence (1918x1008), la disposition de l'interface peut ne pas correspondre.
+19:37:54.666 WARNING [Lestunes] Fenêtre de 1920x1057 : proportions différentes des captures de référence (1918x1008), la disposition de l'interface peut ne pas correspondre.
+19:37:54.867 WARNING [Pesopepe] Fenêtre de 1920x1057 : proportions différentes des captures de référence (1918x1008), la disposition de l'interface peut ne pas correspondre.
+19:37:55.063 WARNING [Pombro] Fenêtre de 1920x1057 : proportions différentes des captures de référence (1918x1008), la disposition de l'interface peut ne pas correspondre.
+19:37:55.263 WARNING [Vertdepomme] Fenêtre de 1920x1057 : proportions différentes des captures de référence (1918x1008), la disposition de l'interface peut ne pas correspondre.
+19:37:55.449 WARNING [Vieenjaune] Fenêtre de 1920x1057 : proportions différentes des captures de référence (1918x1008), la disposition de l'interface peut ne pas correspondre.
+19:37:55.629 WARNING [Koalaloupour] Fenêtre de 1920x1057 : proportions différentes des captures de référence (1918x1008), la disposition de l'interface peut ne pas correspondre.
+19:37:55.822 INFO    [Koalaloupour] État : hors combat
+19:37:56.450 INFO    [Koalaloupour] 5 groupe(s) de monstres sur la carte
+19:37:56.523 INFO    [Koalaloupour] Groupe visé sans survol (arrière-plan), clic droit 1/2 en (858, 324)
+19:37:57.005 INFO    [Koalaloupour] Le clic à côté du groupe a ouvert le menu de Flash : je le ferme (pas d'Échap)
+19:37:57.005 INFO    [Koalaloupour] Menu de Flash ouvert : je clique sous la barre de sorts en (1445, 1039) pour le fermer, sans Échap (essai 1/2)
+19:37:57.428 INFO    [Koalaloupour] Menu de Flash fermé
+19:37:57.476 INFO    [Koalaloupour] Pas de menu « Attaquer » après le clic sur le groupe en (858, 324) (capture : C:\Users\gauth\Documents\Workspace\AutomatisationAssistByAi\AutomatisationAssitByAi\logs\20261016_193753\0004_Koalaloupour_menu_attaquer_absent.png)
+19:37:57.476 INFO    [Koalaloupour] Clic à côté du groupe : je réaffiche les groupes (Z) avant le clic suivant
+19:37:58.243 INFO    [Koalaloupour] Groupe visé sans survol (arrière-plan), clic droit 2/2 en (858, 128)
+19:37:58.780 INFO    [Koalaloupour] Le clic à côté du groupe a ouvert le menu de Flash : je le ferme (pas d'Échap)
+19:37:58.780 INFO    [Koalaloupour] Menu de Flash ouvert : je clique sous la barre de sorts en (1445, 1039) pour le fermer, sans Échap (essai 1/2)
+19:37:59.243 INFO    [Koalaloupour] Menu de Flash fermé
+19:37:59.290 INFO    [Koalaloupour] Pas de menu « Attaquer » après le clic sur le groupe en (858, 128) (capture : C:\Users\gauth\Documents\Workspace\AutomatisationAssistByAi\AutomatisationAssitByAi\logs\20261016_193753\0005_Koalaloupour_menu_attaquer_absent.png)
+19:37:59.291 INFO    [Koalaloupour] Je le retenterai à la prochaine recherche, après les autres groupes
+19:38:01.124 INFO    [Koalaloupour] 5 groupe(s) de monstres sur la carte
+19:38:01.275 INFO    [Koalaloupour] Groupe visé sans survol (arrière-plan), clic droit 1/2 en (1160, 164)
+19:38:08.198 INFO    [Koalaloupour] Un autre menu s'est ouvert au clic (personnage ou PNJ sur le groupe ?) : je le ferme
+19:38:08.683 WARNING [Koalaloupour] Échap a ouvert le Menu principal (rien d'autre à fermer) : je le referme
+19:38:12.604 INFO    [Koalaloupour] Pas de menu « Attaquer » après le clic sur le groupe en (1160, 164) (capture : C:\Users\gauth\Documents\Workspace\AutomatisationAssistByAi\AutomatisationAssitByAi\logs\20261016_193753\0008_Koalaloupour_menu_attaquer_absent.png)
+19:38:12.605 INFO    [Koalaloupour] Clic à côté du groupe : je réaffiche les groupes (Z) avant le clic suivant
+19:38:13.168 INFO    [Koalaloupour] Son infobulle n'est plus près de (1162, 224) : le groupe est parti
+19:38:13.168 INFO    [Koalaloupour] Je le retenterai à la prochaine recherche, après les autres groupes
+19:38:15.242 INFO    [Koalaloupour] 4 groupe(s) de monstres sur la carte
+19:38:15.307 INFO    [Koalaloupour] Groupe visé sans survol (arrière-plan), clic droit 1/2 en (1313, 449)
+19:38:15.859 INFO    [Koalaloupour] Le clic à côté du groupe a ouvert le menu de Flash : je le ferme (pas d'Échap)
+19:38:15.859 INFO    [Koalaloupour] Menu de Flash ouvert : je clique sous la barre de sorts en (1445, 1039) pour le fermer, sans Échap (essai 1/2)
+19:38:16.271 INFO    [Koalaloupour] Menu de Flash fermé
+19:38:16.322 INFO    [Koalaloupour] Pas de menu « Attaquer » après le clic sur le groupe en (1313, 449) (capture : C:\Users\gauth\Documents\Workspace\AutomatisationAssistByAi\AutomatisationAssitByAi\logs\20261016_193753\0011_Koalaloupour_menu_attaquer_absent.png)
+19:38:16.323 INFO    [Koalaloupour] Clic à côté du groupe : je réaffiche les groupes (Z) avant le clic suivant
+19:38:17.039 INFO    [Koalaloupour] Groupe visé sans survol (arrière-plan), clic droit 2/2 en (1365, 422)
+19:38:20.083 INFO    [Koalaloupour] État : placement
+19:38:20.117 INFO    [Koalaloupour] Placement : combat de Koalaloupour
+19:38:21.557 INFO    [Dinarpepe] Je rejoins le combat (clic droit sur l'épée en (1364, 304))
+19:38:22.258 INFO    [Leproduitlatte] Je rejoins le combat (clic droit sur l'épée en (1364, 304), comme le précédent)
+19:38:22.501 INFO    [Lestunes] Je rejoins le combat (clic droit sur l'épée en (1364, 304), comme le précédent)
+19:38:23.509 INFO    [Pesopepe] Je rejoins le combat (clic droit sur l'épée en (1364, 304), comme le précédent)
+19:38:23.680 INFO    [Pombro] Je rejoins le combat (clic droit sur l'épée en (1364, 304), comme le précédent)
+19:38:23.841 INFO    [Vertdepomme] Je rejoins le combat (clic droit sur l'épée en (1364, 304), comme le précédent)
+19:38:24.027 INFO    [Vieenjaune] Je rejoins le combat (clic droit sur l'épée en (1364, 304), comme le précédent)
+19:38:24.061 INFO    [Dinarpepe] Dinarpepe a rejoint le combat
+19:38:24.092 INFO    [Leproduitlatte] Leproduitlatte a rejoint le combat
+19:38:24.119 INFO    [Lestunes] Lestunes a rejoint le combat
+19:38:24.143 INFO    [Pesopepe] Pesopepe a rejoint le combat
+19:38:24.166 INFO    [Pombro] Pombro a rejoint le combat
+19:38:24.194 INFO    [Vertdepomme] Vertdepomme a rejoint le combat
+19:38:24.616 INFO    [Vieenjaune] Vieenjaune a rejoint le combat
+19:38:24.643 INFO    [Dinarpepe] Placement : Prêt (F1)
+19:38:24.951 INFO    [Leproduitlatte] Placement : Prêt (F1)
+19:38:25.277 INFO    [Lestunes] Placement : Prêt (F1)
+19:38:25.578 INFO    [Pesopepe] Placement : Prêt (F1)
+19:38:25.911 INFO    [Pombro] Placement : Prêt (F1)
+19:38:26.256 INFO    [Vertdepomme] Placement : Prêt (F1)
+19:38:26.510 INFO    [Vieenjaune] Placement : Prêt (F1)
+19:38:26.771 INFO    [Koalaloupour] Placement : Prêt (F1)
+19:38:29.220 INFO    [Koalaloupour] État : combat, tour de l'équipe red
+19:38:29.432 INFO    [Koalaloupour] État : combat, tour de l'équipe blue
+19:38:31.164 INFO    [Vieenjaune] État : combat, tour de l'équipe blue
+19:38:33.895 INFO    [Vieenjaune] État : combat, tour de l'équipe red
+19:38:35.636 INFO    [Vertdepomme] État : combat, tour de l'équipe red
+19:38:35.832 INFO    [Vertdepomme] État : combat, tour de l'équipe red, timer visible
+19:38:35.839 INFO    [Vertdepomme] Portrait de Vertdepomme retenu (timeline)
+19:38:35.839 INFO    [Vertdepomme] Mon équipe pour ce combat : red (timer du tour de Vertdepomme)
+19:38:35.839 INFO    [Vertdepomme] Mon tour
+19:38:37.347 INFO    [Vertdepomme] Moi : le cercle en (4, 10) (au centre de la portée de Flèche Empoisonnée)
+19:38:37.400 INFO    [Vertdepomme] Plan : me placer en (3, 13) pour le prochain tour (3 PM)
+19:38:37.407 INFO    [Vertdepomme] Placement pour le prochain tour de (4, 10) vers (3, 13) (3 PM) : aucun sort ne touche ce tour, je ne reste pas collé à l'allié en (3, 9), l'allié en (3, 11), l'allié en (5, 9), une case d'où taper à 2 pas d'ici, je ne me mets pas en (5, 11), tout droit : collé à l'allié en (6, 12), à 4 pas d'une case d'où taper
+19:38:38.752 INFO    [Vertdepomme] Fin de tour (F1)
+19:38:39.322 INFO    [Vertdepomme] Tour : 1,9 s ; 0 sort, 1 déplacement, 0 refus ; attentes : fixe
+19:38:39.353 INFO    [Vertdepomme] État : combat, tour de l'équipe red
+19:38:41.728 INFO    [Dinarpepe] Portrait de Dinarpepe retenu (timeline)
+19:38:41.728 INFO    [Dinarpepe] Mon tour
+19:38:43.166 INFO    [Dinarpepe] Moi : le cercle en (2, 8) (au centre de la portée de Lancer de Pièces)
+19:38:43.213 INFO    [Dinarpepe] Plan : me placer en (1, 9) pour le prochain tour (1 PM)
+19:38:43.218 INFO    [Dinarpepe] Placement pour le prochain tour de (2, 8) vers (1, 9) (1 PM) : aucun sort ne touche ce tour, je ne reste pas collé à l'allié en (3, 9), je me rapproche, je ne me mets pas en (2, 10), tout droit : collé à l'allié en (3, 9), l'allié en (3, 11)
+19:38:44.307 INFO    [Dinarpepe] Fin de tour (F1)
+19:38:45.087 INFO    [Dinarpepe] Tour : 1,9 s ; 0 sort, 1 déplacement, 0 refus ; attentes : fixe
+19:38:45.116 INFO    [Dinarpepe] État : combat, tour de l'équipe red
+19:38:47.484 INFO    [Leproduitlatte] Portrait de Leproduitlatte retenu (timeline)
+19:38:47.484 INFO    [Leproduitlatte] Mon tour
+19:38:48.935 INFO    [Leproduitlatte] Moi : le cercle en (5, 9) (au centre de la portée de Flèche Empoisonnée)
+19:38:48.983 INFO    [Leproduitlatte] Plan : me placer en (7, 7) pour le prochain tour (2 PM)
+19:38:48.989 INFO    [Leproduitlatte] Placement pour le prochain tour de (5, 9) vers (7, 7) (2 PM) : aucun sort ne touche ce tour, je me décale pour dégager ma ligne de vue (l'allié en (7, 13) devant moi), une case d'où taper à 2 pas d'ici, je ne me mets pas en (5, 11), tout droit : derrière l'allié en (6, 12), collé à l'allié en (6, 12), à 4 pas d'une case d'où taper
+19:38:50.975 INFO    [Leproduitlatte] Fin de tour (F1)
+19:38:51.473 INFO    [Leproduitlatte] Tour : 2,5 s ; 0 sort, 1 déplacement, 0 refus ; attentes : fixe
+19:38:51.501 INFO    [Leproduitlatte] État : combat, tour de l'équipe red
+19:38:53.966 INFO    [Pesopepe] Portrait de Pesopepe retenu (timeline)
+19:38:53.966 INFO    [Pesopepe] Mon tour
+19:38:55.359 INFO    [Pesopepe] Moi : le cercle en (8, 14) (au centre de la portée de Lancer de Pièces)
+19:38:55.405 INFO    [Pesopepe] Plan : Pelle Fantomatique sur (9, 15), repli en (6, 16) (2 PM) ; dégâts prévus 8
+19:38:55.411 INFO    [Pesopepe] Pelle Fantomatique sur l'ennemi en (9, 15) : le plus de dégâts
+19:38:56.086 INFO    [Pesopepe] Portée de Pelle Fantomatique : 1 à 4 cases
+19:38:56.117 INFO    [Pesopepe] Ligne de vue prédite juste sur 95 % des cases seulement (capture : C:\Users\gauth\Documents\Workspace\AutomatisationAssistByAi\AutomatisationAssitByAi\logs\20261016_193753\0036_Pesopepe_ligne_de_vue_a_revoir.png)
+19:38:56.186 INFO    [Pesopepe] Pelle Fantomatique lancé sur l'ennemi en (9, 15)
+19:38:57.975 INFO    [Pesopepe] Plan : me placer en (6, 16) pour le prochain tour (2 PM)
+19:38:57.983 INFO    [Pesopepe] Placement pour le prochain tour de (8, 14) vers (6, 16) (2 PM) : aucun sort ne touche ce tour, hors du contact, je ne coupe plus la ligne de vue de Vertdepomme, Leproduitlatte, l'allié en (7, 13), je ne reste pas collé à l'allié en (7, 13), un ennemi à portée et en vue d'ici au prochain tour
+19:38:59.444 INFO    [Pesopepe] Fin de tour (F1)
+19:38:59.936 INFO    [Pesopepe] Tour : 4,5 s ; 1 sort, 1 déplacement, 0 refus ; attentes : fixe
+19:38:59.967 INFO    [Pesopepe] État : combat, tour de l'équipe red
+19:39:02.444 INFO    [Pombro] Portrait de Pombro retenu (timeline)
+19:39:02.444 INFO    [Pombro] Mon tour
+19:39:03.918 INFO    [Pombro] Moi : le cercle en (3, 11) (au centre de la portée de Flèche Empoisonnée)
+19:39:03.968 INFO    [Pombro] Plan : aller en (6, 8) (3 PM), Flèche Magique sur (9, 15) ; dégâts prévus 10
+19:39:03.974 INFO    [Pombro] Déplacement de (3, 11) vers (6, 8) (3 PM) : pour lancer d'ici, je me décale pour dégager ma ligne de vue (l'allié en (7, 13) la coupait)
+19:39:05.217 INFO    [Pombro] Flèche Magique sur l'ennemi en (9, 15) : le plus de dégâts
+19:39:05.907 INFO    [Pombro] Portée de Flèche Magique : 1 à 7 cases
+19:39:05.950 INFO    [Pombro] Flèche Magique lancé sur l'ennemi en (9, 15)
+19:39:06.402 INFO    [Pombro] Fin de tour (F1)
+19:39:07.729 INFO    [Pombro] Tour : 3,8 s ; 1 sort, 1 déplacement, 0 refus ; attentes : fixe
+19:39:07.762 INFO    [Pombro] État : combat, tour de l'équipe red
+19:39:10.246 INFO    [Vieenjaune] Portrait de Vieenjaune retenu (timeline)
+19:39:10.246 INFO    [Vieenjaune] Mon tour
+19:39:11.646 INFO    [Vieenjaune] Moi : le cercle en (6, 12) (au centre de la portée de Flèche Empoisonnée)
+19:39:11.698 INFO    [Vieenjaune] Plan : aller en (7, 11) (1 PM), Flèche Magique sur (9, 15), repli en (9, 9) (2 PM) ; dégâts prévus 10
+19:39:11.704 INFO    [Vieenjaune] Déplacement de (6, 12) vers (7, 11) (1 PM) : pour lancer d'ici, je me décale pour dégager ma ligne de vue (l'allié en (7, 13) la coupait), je ne reste pas collé à l'allié en (7, 13)
+19:39:12.587 INFO    [Vieenjaune] Flèche Magique sur l'ennemi en (9, 15) : le plus de dégâts
+19:39:13.252 INFO    [Vieenjaune] Portée de Flèche Magique : 1 à 7 cases
+19:39:13.344 INFO    [Vieenjaune] Flèche Magique lancé sur l'ennemi en (9, 15)
+19:39:17.336 INFO    [Vieenjaune] État : hors combat
+19:39:17.489 INFO    [Vieenjaune] Combat terminé
+19:39:17.489 INFO    [Vieenjaune] Bilan du combat 1, Koalaloupour : 0 tour(s) (0,0 s) ; 0 sort(s) ; 0 refus ; 0 déplacement(s)
+19:39:17.489 INFO    [Vieenjaune] Bilan du combat 1, Dinarpepe : 1 tour(s) (1,9 s) ; 0 sort(s) ; 0 refus ; 1 déplacement(s)
+19:39:17.489 INFO    [Vieenjaune] Bilan du combat 1, Leproduitlatte : 1 tour(s) (2,5 s) ; 0 sort(s) ; 0 refus ; 1 déplacement(s)
+19:39:17.489 INFO    [Vieenjaune] Bilan du combat 1, Lestunes : 0 tour(s) (0,0 s) ; 0 sort(s) ; 0 refus ; 0 déplacement(s)
+19:39:17.489 INFO    [Vieenjaune] Bilan du combat 1, Pesopepe : 1 tour(s) (4,5 s) ; 1 sort(s) (Pelle Fantomatique x1) ; 0 refus ; 1 déplacement(s)
+19:39:17.489 INFO    [Vieenjaune] Bilan du combat 1, Pombro : 1 tour(s) (3,8 s) ; 1 sort(s) (Flèche Magique x1) ; 0 refus ; 1 déplacement(s)
+19:39:17.489 INFO    [Vieenjaune] Bilan du combat 1, Vertdepomme : 1 tour(s) (1,9 s) ; 0 sort(s) ; 0 refus ; 1 déplacement(s)
+19:39:17.489 INFO    [Vieenjaune] Bilan du combat 1, Vieenjaune : 1 tour(s) (5,6 s) ; 1 sort(s) (Flèche Magique x1) ; 0 refus ; 1 déplacement(s)
+19:39:17.837 INFO    [Vieenjaune] Fenêtre « résultat du combat » : je la ferme dans les 8 fenêtres du combat
+19:39:20.898 INFO    [Koalaloupour] Fenêtre « résultat du combat » : je la ferme

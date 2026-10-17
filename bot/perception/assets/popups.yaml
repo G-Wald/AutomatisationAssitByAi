@@ -23,3 +23,7 @@ popups:
                                         # l'épée du combat d'un autre joueur (16/10, Incarnam 6,1) ; bloquait le bot
     title_above: 400                    # seul le bas de la fenêtre est du beige des fenêtres : titre 340 px plus haut
     close: fin_de_combat_fermer.png     # bouton « Fermer », le même que sous le résultat du combat
+  - name: challenge en cours
+    detect: challenge_en_cours_titre.png  # « Challenge en cours » (16/10, en combat, Incarnam 6,2) : cachait la carte de
+                                          # Dinarpepe, ni ennemi ni personnage vus, l'équipe bloquée 14 min
+    close: challenge_fermer_x.png         # croix orange en haut à droite de la fenêtre

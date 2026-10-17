@@ -1,0 +1,160 @@
+19:33:59.337 INFO    Équipe : Koalaloupour, Dinarpepe, Leproduitlatte, Lestunes, Pesopepe, Pombro, Vertdepomme, Vieenjaune ; principal : Koalaloupour
+19:33:59.338 INFO    Mode : le principal attaque les groupes, les autres le rejoignent ; changement de carte dans la zone quand elle est vide
+19:33:59.382 INFO    Session limitée : 3 combat(s) ou 15 minute(s)
+19:33:59.402 WARNING [Dinarpepe] Fenêtre de 1920x1057 : proportions différentes des captures de référence (1918x1008), la disposition de l'interface peut ne pas correspondre.
+19:33:59.596 WARNING [Leproduitlatte] Fenêtre de 1920x1057 : proportions différentes des captures de référence (1918x1008), la disposition de l'interface peut ne pas correspondre.
+19:33:59.784 WARNING [Lestunes] Fenêtre de 1920x1057 : proportions différentes des captures de référence (1918x1008), la disposition de l'interface peut ne pas correspondre.
+19:33:59.963 WARNING [Pesopepe] Fenêtre de 1920x1057 : proportions différentes des captures de référence (1918x1008), la disposition de l'interface peut ne pas correspondre.
+19:34:00.146 WARNING [Pombro] Fenêtre de 1920x1057 : proportions différentes des captures de référence (1918x1008), la disposition de l'interface peut ne pas correspondre.
+19:34:00.338 WARNING [Vertdepomme] Fenêtre de 1920x1057 : proportions différentes des captures de référence (1918x1008), la disposition de l'interface peut ne pas correspondre.
+19:34:00.518 WARNING [Vieenjaune] Fenêtre de 1920x1057 : proportions différentes des captures de référence (1918x1008), la disposition de l'interface peut ne pas correspondre.
+19:34:00.702 WARNING [Koalaloupour] Fenêtre de 1920x1057 : proportions différentes des captures de référence (1918x1008), la disposition de l'interface peut ne pas correspondre.
+19:34:00.887 INFO    [Koalaloupour] État : hors combat
+19:34:01.478 INFO    [Koalaloupour] Aucun groupe de monstres attaquable sur la carte
+19:34:07.218 INFO    [Koalaloupour] Aucun groupe de monstres attaquable sur la carte
+19:34:07.495 INFO    [Koalaloupour] Nom de la carte illisible (décor clair derrière le texte ?) : carte 6,1 d'après le chemin (capture : C:\Users\gauth\Documents\Workspace\AutomatisationAssistByAi\AutomatisationAssitByAi\logs\20261016_193359\0006_Koalaloupour_nom_de_carte_illisible.png)
+19:34:07.499 INFO    [Koalaloupour] Plus de groupe ici : carte du bas (6,2, zone Champs)
+19:34:07.505 INFO    [Koalaloupour] Vers la carte du bas : clic sur le soleil en (11, 31)
+19:34:10.069 INFO    [Vieenjaune] Toute l'équipe vers le bas : Dinarpepe, Leproduitlatte, Lestunes, Pesopepe, Pombro, Vertdepomme, Vieenjaune cliquent aussi sur le soleil en (11, 31)
+19:34:11.515 INFO    [Koalaloupour] Nouvelle carte : Incarnam (Champs) 6,2
+19:34:11.610 INFO    [Dinarpepe] Dinarpepe a suivi le principal (Incarnam (Champs) 6,2)
+19:34:11.682 INFO    [Leproduitlatte] Leproduitlatte a suivi le principal (Incarnam (Champs) 6,2)
+19:34:11.758 INFO    [Lestunes] Lestunes a suivi le principal (Incarnam (Champs) 6,2)
+19:34:11.831 INFO    [Pesopepe] Pesopepe a suivi le principal (Incarnam (Champs) 6,2)
+19:34:11.904 INFO    [Pombro] Pombro a suivi le principal (Incarnam (Champs) 6,2)
+19:34:11.975 INFO    [Vertdepomme] Vertdepomme a suivi le principal (Incarnam (Champs) 6,2)
+19:34:12.039 INFO    [Vieenjaune] Vieenjaune a suivi le principal (Incarnam (Champs) 6,2)
+19:34:12.826 INFO    [Koalaloupour] 5 groupe(s) de monstres sur la carte
+19:34:12.917 INFO    [Koalaloupour] Groupe visé sans survol (arrière-plan), clic droit 1/2 en (1011, 84)
+19:34:13.623 INFO    [Koalaloupour] État : placement
+19:34:13.658 INFO    [Koalaloupour] Placement : combat de Koalaloupour
+19:34:18.195 INFO    [Dinarpepe] Je ne vois pas l'épée du combat sur la carte (capture : C:\Users\gauth\Documents\Workspace\AutomatisationAssistByAi\AutomatisationAssitByAi\logs\20261016_193359\0011_Dinarpepe_epee_introuvable.png)
+19:34:22.333 INFO    [Leproduitlatte] Je ne vois pas l'épée du combat sur la carte (capture : C:\Users\gauth\Documents\Workspace\AutomatisationAssistByAi\AutomatisationAssitByAi\logs\20261016_193359\0012_Leproduitlatte_epee_introuvable.png)
+19:34:27.538 INFO    [Lestunes] Je ne vois pas l'épée du combat sur la carte (capture : C:\Users\gauth\Documents\Workspace\AutomatisationAssistByAi\AutomatisationAssitByAi\logs\20261016_193359\0013_Lestunes_epee_introuvable.png)
+19:34:31.791 INFO    [Pesopepe] Je ne vois pas l'épée du combat sur la carte (capture : C:\Users\gauth\Documents\Workspace\AutomatisationAssistByAi\AutomatisationAssitByAi\logs\20261016_193359\0014_Pesopepe_epee_introuvable.png)
+19:34:36.030 INFO    [Pombro] Je ne vois pas l'épée du combat sur la carte (capture : C:\Users\gauth\Documents\Workspace\AutomatisationAssistByAi\AutomatisationAssitByAi\logs\20261016_193359\0015_Pombro_epee_introuvable.png)
+19:34:40.379 INFO    [Vertdepomme] Je ne vois pas l'épée du combat sur la carte (capture : C:\Users\gauth\Documents\Workspace\AutomatisationAssistByAi\AutomatisationAssitByAi\logs\20261016_193359\0016_Vertdepomme_epee_introuvable.png)
+19:34:44.604 INFO    [Vieenjaune] Je ne vois pas l'épée du combat sur la carte (capture : C:\Users\gauth\Documents\Workspace\AutomatisationAssistByAi\AutomatisationAssitByAi\logs\20261016_193359\0017_Vieenjaune_epee_introuvable.png)
+19:34:49.100 INFO    [Dinarpepe] Je ne vois pas l'épée du combat sur la carte (capture : C:\Users\gauth\Documents\Workspace\AutomatisationAssistByAi\AutomatisationAssitByAi\logs\20261016_193359\0018_Dinarpepe_epee_introuvable.png)
+19:34:53.434 INFO    [Dinarpepe] Je ne vois pas l'épée du combat sur la carte (capture : C:\Users\gauth\Documents\Workspace\AutomatisationAssistByAi\AutomatisationAssitByAi\logs\20261016_193359\0019_Dinarpepe_epee_introuvable.png)
+19:34:53.435 WARNING [Dinarpepe] Dinarpepe n'a pas rejoint le combat : il reste hors combat
+19:34:57.783 INFO    [Leproduitlatte] Je ne vois pas l'épée du combat sur la carte (capture : C:\Users\gauth\Documents\Workspace\AutomatisationAssistByAi\AutomatisationAssitByAi\logs\20261016_193359\0020_Leproduitlatte_epee_introuvable.png)
+19:35:02.072 INFO    [Leproduitlatte] Je ne vois pas l'épée du combat sur la carte (capture : C:\Users\gauth\Documents\Workspace\AutomatisationAssistByAi\AutomatisationAssitByAi\logs\20261016_193359\0021_Leproduitlatte_epee_introuvable.png)
+19:35:02.072 WARNING [Leproduitlatte] Leproduitlatte n'a pas rejoint le combat : il reste hors combat
+19:35:07.119 INFO    [Lestunes] Je ne vois pas l'épée du combat sur la carte (capture : C:\Users\gauth\Documents\Workspace\AutomatisationAssistByAi\AutomatisationAssitByAi\logs\20261016_193359\0022_Lestunes_epee_introuvable.png)
+19:35:11.270 INFO    [Lestunes] Je ne vois pas l'épée du combat sur la carte (capture : C:\Users\gauth\Documents\Workspace\AutomatisationAssistByAi\AutomatisationAssitByAi\logs\20261016_193359\0023_Lestunes_epee_introuvable.png)
+19:35:11.271 WARNING [Lestunes] Lestunes n'a pas rejoint le combat : il reste hors combat
+19:35:15.451 INFO    [Pesopepe] Je ne vois pas l'épée du combat sur la carte (capture : C:\Users\gauth\Documents\Workspace\AutomatisationAssistByAi\AutomatisationAssitByAi\logs\20261016_193359\0024_Pesopepe_epee_introuvable.png)
+19:35:19.785 INFO    [Pesopepe] Je ne vois pas l'épée du combat sur la carte (capture : C:\Users\gauth\Documents\Workspace\AutomatisationAssistByAi\AutomatisationAssitByAi\logs\20261016_193359\0025_Pesopepe_epee_introuvable.png)
+19:35:19.785 WARNING [Pesopepe] Pesopepe n'a pas rejoint le combat : il reste hors combat
+19:35:23.906 INFO    [Pombro] Je ne vois pas l'épée du combat sur la carte (capture : C:\Users\gauth\Documents\Workspace\AutomatisationAssistByAi\AutomatisationAssitByAi\logs\20261016_193359\0026_Pombro_epee_introuvable.png)
+19:35:28.051 INFO    [Pombro] Je ne vois pas l'épée du combat sur la carte (capture : C:\Users\gauth\Documents\Workspace\AutomatisationAssistByAi\AutomatisationAssitByAi\logs\20261016_193359\0027_Pombro_epee_introuvable.png)
+19:35:28.051 WARNING [Pombro] Pombro n'a pas rejoint le combat : il reste hors combat
+19:35:33.087 INFO    [Vertdepomme] Je ne vois pas l'épée du combat sur la carte (capture : C:\Users\gauth\Documents\Workspace\AutomatisationAssistByAi\AutomatisationAssitByAi\logs\20261016_193359\0028_Vertdepomme_epee_introuvable.png)
+19:35:37.218 INFO    [Vertdepomme] Je ne vois pas l'épée du combat sur la carte (capture : C:\Users\gauth\Documents\Workspace\AutomatisationAssistByAi\AutomatisationAssitByAi\logs\20261016_193359\0029_Vertdepomme_epee_introuvable.png)
+19:35:37.219 WARNING [Vertdepomme] Vertdepomme n'a pas rejoint le combat : il reste hors combat
+19:35:41.422 INFO    [Vieenjaune] Je ne vois pas l'épée du combat sur la carte (capture : C:\Users\gauth\Documents\Workspace\AutomatisationAssistByAi\AutomatisationAssitByAi\logs\20261016_193359\0030_Vieenjaune_epee_introuvable.png)
+19:35:45.636 INFO    [Vieenjaune] Je ne vois pas l'épée du combat sur la carte (capture : C:\Users\gauth\Documents\Workspace\AutomatisationAssistByAi\AutomatisationAssitByAi\logs\20261016_193359\0031_Vieenjaune_epee_introuvable.png)
+19:35:45.636 WARNING [Vieenjaune] Vieenjaune n'a pas rejoint le combat : il reste hors combat
+19:35:45.725 INFO    [Koalaloupour] État : combat, tour de l'équipe red, timer visible
+19:35:45.733 INFO    [Koalaloupour] Portrait de Koalaloupour retenu (timeline)
+19:35:45.733 INFO    [Koalaloupour] Mon équipe pour ce combat : red (timer du tour de Koalaloupour)
+19:35:45.733 INFO    [Koalaloupour] Mon tour
+19:35:45.888 INFO    [Koalaloupour] Plan : Ronce sur (8, 14) ; dégâts prévus 5
+19:35:45.894 INFO    [Koalaloupour] Ronce sur l'ennemi en (8, 14) : le plus de dégâts
+19:35:46.488 INFO    [Koalaloupour] Portée de Ronce : 1 à 6 cases
+19:35:46.532 INFO    [Koalaloupour] Ronce lancé sur l'ennemi en (8, 14)
+19:35:46.908 INFO    [Koalaloupour] Fin de tour (F1)
+19:35:48.561 INFO    [Koalaloupour] Tour : 2,7 s ; 1 sort, 0 déplacement, 0 refus ; attentes : fixe
+19:35:48.589 INFO    [Koalaloupour] État : combat, tour de l'équipe blue
+19:35:58.215 INFO    [Koalaloupour] État : combat, tour de l'équipe red
+19:35:58.223 INFO    [Koalaloupour] Mon tour
+19:35:58.248 INFO    [Koalaloupour] 5 PA ce tour (au lieu de 6)
+19:35:59.358 INFO    [Koalaloupour] État : combat, tour de l'équipe blue
+19:36:01.098 INFO    [Koalaloupour] État : combat, tour de l'équipe red
+19:36:01.291 INFO    [Koalaloupour] Mon tour
+19:36:01.318 INFO    [Koalaloupour] 5 PA ce tour (au lieu de 6)
+19:36:01.318 INFO    [Koalaloupour] Suite de mon tour (5 PA, 2.0 s après) : la main n'était pas passée, je garde ce que j'ai lancé
+19:36:01.412 INFO    [Koalaloupour] Plan : Ronce sur (12, 14), repli en (10, 18) (1 PM) ; dégâts prévus 5
+19:36:01.418 INFO    [Koalaloupour] Ronce sur l'ennemi en (12, 14) : le plus de dégâts
+19:36:02.090 INFO    [Koalaloupour] Portée de Ronce : 1 à 6 cases
+19:36:02.280 INFO    [Koalaloupour] Ronce lancé sur l'ennemi en (12, 14)
+19:36:03.224 INFO    [Koalaloupour] Plan : me placer en (10, 18) pour le prochain tour (1 PM)
+19:36:03.239 INFO    [Koalaloupour] Placement pour le prochain tour de (11, 17) vers (10, 18) (1 PM) : aucun sort ne touche ce tour, hors du contact, un ennemi à portée et en vue d'ici au prochain tour
+19:36:06.028 WARNING [Koalaloupour] Mon personnage n'a pas bougé (capture : C:\Users\gauth\Documents\Workspace\AutomatisationAssistByAi\AutomatisationAssitByAi\logs\20261016_193359\0041_Koalaloupour_deplacement_rate.png)
+19:36:06.029 INFO    [Koalaloupour] Je ne peux pas bouger (taclé par un ennemi au contact) : plus de déplacement ce tour
+19:36:07.173 INFO    [Koalaloupour] État : combat, tour de l'équipe blue
+19:36:19.360 INFO    [Koalaloupour] État : combat, tour de l'équipe red
+19:36:19.561 INFO    [Koalaloupour] Mon tour
+19:36:19.592 INFO    [Koalaloupour] 5 PA ce tour (au lieu de 6)
+19:36:19.691 INFO    [Koalaloupour] Plan : Ronce sur (10, 16), repli en (10, 18) (1 PM) ; dégâts prévus 5
+19:36:19.697 INFO    [Koalaloupour] Ronce sur l'ennemi en (10, 16) : le plus de dégâts
+19:36:20.339 INFO    [Koalaloupour] Portée de Ronce : 1 à 6 cases
+19:36:20.399 INFO    [Koalaloupour] Ronce lancé sur l'ennemi en (10, 16)
+19:36:21.365 INFO    [Koalaloupour] Plan : me placer en (10, 18) pour le prochain tour (1 PM)
+19:36:21.370 INFO    [Koalaloupour] Placement pour le prochain tour de (11, 17) vers (10, 18) (1 PM) : aucun sort ne touche ce tour, hors du contact, un ennemi à portée et en vue d'ici au prochain tour
+19:36:23.862 INFO    [Koalaloupour] Mon personnage n'a pas bougé : je reclique sur (10, 18)
+19:36:24.951 INFO    [Koalaloupour] Fin de tour (F1)
+19:36:25.444 INFO    [Koalaloupour] Tour : 5,7 s ; 1 sort, 2 déplacements, 0 refus ; attentes : fixe
+19:36:25.473 INFO    [Koalaloupour] État : combat, tour de l'équipe blue
+19:36:34.768 INFO    [Koalaloupour] État : combat, tour de l'équipe red
+19:36:34.976 INFO    [Koalaloupour] État : combat, tour de l'équipe blue
+19:36:40.253 INFO    [Koalaloupour] État : combat, tour de l'équipe red
+19:36:40.261 INFO    [Koalaloupour] Mon tour
+19:36:40.388 INFO    [Koalaloupour] Plan : Ronce sur (9, 17), repli en (9, 19) (1 PM) ; dégâts prévus 5
+19:36:40.394 INFO    [Koalaloupour] Ronce sur l'ennemi en (9, 17) : le plus de dégâts
+19:36:41.031 INFO    [Koalaloupour] Portée de Ronce : 1 à 6 cases
+19:36:41.102 INFO    [Koalaloupour] Ronce lancé sur l'ennemi en (9, 17)
+19:36:46.041 INFO    [Koalaloupour] Ronce refusé sur l'ennemi en (9, 17) (PA inchangés, capture : C:\Users\gauth\Documents\Workspace\AutomatisationAssistByAi\AutomatisationAssitByAi\logs\20261016_193359\0054_Koalaloupour_sort_pas_parti.png) : sans doute hors de portée ou sans ligne de vue d'ici
+19:36:46.165 INFO    [Koalaloupour] Plan : Ronce sur (14, 16), repli en (9, 19) (1 PM) ; dégâts prévus 5
+19:36:46.171 INFO    [Koalaloupour] Ronce sur l'ennemi en (14, 16) : le plus de dégâts
+19:36:46.962 INFO    [Koalaloupour] Ronce lancé sur l'ennemi en (14, 16)
+19:36:49.361 INFO    [Koalaloupour] Plan : me placer en (9, 19) pour le prochain tour (1 PM)
+19:36:49.367 INFO    [Koalaloupour] Placement pour le prochain tour de (10, 18) vers (9, 19) (1 PM) : aucun sort ne touche ce tour, hors du contact, un ennemi à portée et en vue d'ici au prochain tour
+19:36:50.369 INFO    [Koalaloupour] Fin de tour (F1)
+19:36:50.874 INFO    [Koalaloupour] Tour : 10,5 s ; 1 sort, 1 déplacement, 1 refus, 1 clic sans effet ; attentes : fixe
+19:36:50.897 INFO    [Koalaloupour] État : combat, tour de l'équipe blue
+19:37:00.798 INFO    [Koalaloupour] État : combat, tour de l'équipe red
+19:37:01.010 INFO    [Koalaloupour] Mon tour
+19:37:01.117 INFO    [Koalaloupour] Plan : Ronce sur (8, 18), repli en (10, 18) (1 PM) ; dégâts prévus 5
+19:37:01.124 INFO    [Koalaloupour] Ronce sur l'ennemi en (8, 18) : le plus de dégâts
+19:37:01.697 INFO    [Koalaloupour] Portée de Ronce : 1 à 6 cases
+19:37:01.705 INFO    [Koalaloupour] Carte à relief (ligne de vue prédite juste sur 83 % des cases) : je ne me fie plus à mes prévisions de portée et de ligne de vue, je vérifie avec le sort
+19:37:01.738 INFO    [Koalaloupour] Ligne de vue prédite juste sur 83 % des cases seulement (capture : C:\Users\gauth\Documents\Workspace\AutomatisationAssistByAi\AutomatisationAssitByAi\logs\20261016_193359\0062_Koalaloupour_ligne_de_vue_a_revoir.png)
+19:37:01.782 INFO    [Koalaloupour] Ronce lancé sur l'ennemi en (8, 18)
+19:37:02.681 INFO    [Koalaloupour] Plan : me placer en (10, 18) pour le prochain tour (1 PM)
+19:37:02.687 INFO    [Koalaloupour] Placement pour le prochain tour de (9, 19) vers (10, 18) (1 PM) : aucun sort ne touche ce tour, hors du contact, un ennemi à portée et en vue d'ici au prochain tour
+19:37:04.999 INFO    [Koalaloupour] Mon personnage n'a pas bougé : je reclique sur (10, 18)
+19:37:07.287 WARNING [Koalaloupour] Mon personnage n'a pas bougé (capture : C:\Users\gauth\Documents\Workspace\AutomatisationAssistByAi\AutomatisationAssitByAi\logs\20261016_193359\0066_Koalaloupour_deplacement_rate.png)
+19:37:07.287 INFO    [Koalaloupour] Je ne peux pas bouger (taclé par un ennemi au contact) : plus de déplacement ce tour
+19:37:07.593 INFO    [Koalaloupour] Fin de tour (F1)
+19:37:08.117 INFO    [Koalaloupour] Tour : 7,0 s ; 1 sort, 2 déplacements, 0 refus, 1 déplacement sans bouger ; attentes : fixe
+19:37:08.139 INFO    [Koalaloupour] État : combat, tour de l'équipe blue
+19:37:15.659 INFO    [Koalaloupour] État : combat, tour de l'équipe red
+19:37:15.853 INFO    [Koalaloupour] Mon tour
+19:37:15.884 INFO    [Koalaloupour] 5 PA ce tour (au lieu de 6)
+19:37:15.979 INFO    [Koalaloupour] Plan : Ronce sur (4, 16), repli en (10, 18) (1 PM) ; dégâts prévus 5
+19:37:15.985 INFO    [Koalaloupour] Ronce sur l'ennemi en (4, 16) : le plus de dégâts
+19:37:16.574 INFO    [Koalaloupour] Portée de Ronce : 1 à 6 cases
+19:37:16.652 INFO    [Koalaloupour] Ronce lancé sur l'ennemi en (4, 16)
+19:37:21.582 INFO    [Koalaloupour] Ronce refusé sur l'ennemi en (4, 16) (PA inchangés, capture : C:\Users\gauth\Documents\Workspace\AutomatisationAssistByAi\AutomatisationAssitByAi\logs\20261016_193359\0071_Koalaloupour_sort_pas_parti.png) : sans doute hors de portée ou sans ligne de vue d'ici
+19:37:21.710 INFO    [Koalaloupour] Plan : Ronce sur (8, 18), repli en (10, 18) (1 PM) ; dégâts prévus 5
+19:37:21.715 INFO    [Koalaloupour] Ronce sur l'ennemi en (8, 18) : le plus de dégâts
+19:37:22.447 INFO    [Koalaloupour] Ronce lancé sur l'ennemi en (8, 18)
+19:37:24.719 INFO    [Koalaloupour] Plan : rien d'utile à faire d'ici
+19:37:24.840 INFO    [Koalaloupour] Fin de tour (F1)
+19:37:25.342 INFO    [Koalaloupour] Tour : 9,4 s ; 1 sort, 0 déplacement, 1 refus, 1 clic sans effet ; attentes : fixe
+19:37:25.367 INFO    [Koalaloupour] État : combat, tour de l'équipe blue
+19:37:30.726 INFO    [Koalaloupour] État : combat, tour de l'équipe red
+19:37:30.911 INFO    [Koalaloupour] Mon tour
+19:37:31.085 INFO    [Koalaloupour] Plan : Ronce sur (4, 22) ; dégâts prévus 5
+19:37:31.092 INFO    [Koalaloupour] Ronce sur l'ennemi en (4, 22) : le plus de dégâts
+19:37:31.736 INFO    [Koalaloupour] Portée de Ronce : 1 à 6 cases
+19:37:31.794 INFO    [Koalaloupour] Ronce lancé sur l'ennemi en (4, 22)
+19:37:32.186 INFO    [Koalaloupour] Fin de tour (F1)
+19:37:34.408 INFO    [Koalaloupour] Tour : 3,3 s ; 1 sort, 0 déplacement, 0 refus ; attentes : fixe
+19:37:34.432 INFO    [Koalaloupour] État : hors combat
+19:37:34.602 INFO    [Koalaloupour] Combat terminé
+19:37:34.602 INFO    [Koalaloupour] Bilan du combat 1, Koalaloupour : 7 tour(s) (44,3 s) ; 7 sort(s) (Ronce x7) ; 2 refus ; 2 clic(s) sans effet ; 6 déplacement(s) ; dont 2 sans bouger
+19:37:35.116 INFO    [Koalaloupour] Fenêtre « résultat du combat » : je la ferme dans les 1 fenêtres du combat
+19:37:36.472 INFO    [Koalaloupour] Vie à 39 % : je m'assois jusqu'à 90 %
