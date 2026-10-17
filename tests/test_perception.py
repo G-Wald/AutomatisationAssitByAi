@@ -8,7 +8,7 @@ from bot.perception.frame import Frame
 from bot.perception.grid import distance
 from bot.perception.groups import find_group_tooltips
 from bot.perception.layout import Layout
-from bot.perception.popups import (find_flash_menu, flash_close_point, find_known_popup, find_unknown_window,
+from bot.perception.popups import (find_flash_menu, find_npc_dialog, flash_close_point, find_known_popup, find_unknown_window,
                                    load_popup_specs)
 from bot.perception.placement import entry_banner, read_placement
 from bot.perception.spellbook import identify, locate_in_bar, read_spell_window, slot_greyed
@@ -676,3 +676,15 @@ def test_caster_found_when_the_range_spills_over_the_void_and_under_the_timeline
     # 16/10, Incarnam 6,1 : portée de Lancer de Pièces (0 à 8) sur le vide (bleu nuit) et sous la timeline ; le losange
     # coupé plaçait Pesopepe en (19, 21), au-dessus du vide : 7 tirs refusés, 43 s perdues sur deux tours.
     assert range_center(load_frame("reperage_portee_sur_le_vide"), (0, 8)) == (19, 25)
+
+
+def test_npc_dialog_found_by_its_cross():
+    # 17/10 : clic de sonde sur Matu Vuh ; sa bulle cachait le décor et bloquait la marche (session arrêtée).
+    x, y = find_npc_dialog(load_frame("dialogue_pnj_matu_vuh"))
+    assert abs(x - 1149) <= 3 and abs(y - 276) <= 3
+
+
+@pytest.mark.parametrize("name", ["hors_combat", "hors_combat_prairie", "fin_de_combat", "hors_combat_menu_personnage",
+                                  "epee_pnj_menu_parler", "menu_flash_clic_droit", "combat_mon_tour", "preparation"])
+def test_no_npc_dialog_elsewhere(name):
+    assert find_npc_dialog(load_frame(name)) is None

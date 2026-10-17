@@ -682,6 +682,16 @@ def test_combat_result_is_closed_with_its_button():
     assert presses(game) == []
 
 
+def test_npc_dialog_closed_by_its_cross():
+    frame = load_frame("dialogue_pnj_matu_vuh")
+    game = FakeGame(frame, load_frame("hors_combat"))
+    closer = PopupCloser(game, load_popup_specs(), "escape", 20)
+    assert closer.describe(frame) == "bulle de dialogue d'un PNJ"
+    assert closer.handle(frame, seconds_since_combat=None)
+    ((x, y),) = clicks(game)
+    assert abs(x - 1149) <= 4 and abs(y - 276) <= 4 and presses(game) == []
+
+
 def test_no_engage_while_a_window_covers_the_map():
     frame = load_frame("fin_de_combat")
     game = FakeGame(frame)

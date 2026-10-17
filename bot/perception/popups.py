@@ -187,6 +187,34 @@ def flash_close_point(frame: Frame) -> Point | None:
     return None
 
 
+NPC_BUBBLE = (206, 255, 255)  # fond jaune pâle uni (BGR) de la bulle de dialogue d'un PNJ
+NPC_BUBBLE_MIN = (300, 120)  # px de référence : bulle de Matu Vuh 610 x 210 en 1057 de haut
+NPC_CROSS_ZONE = 50  # px de référence : coin haut droit de la bulle où chercher la croix noire
+
+
+def find_npc_dialog(frame: Frame) -> Point | None:
+    """Bulle de dialogue d'un PNJ (nom, texte, croix « × » en haut à droite), ouverte par un clic droit sur lui. 17/10
+    (journal 175051) : clic de sonde sur Matu Vuh, debout près d'un groupe ; la bulle cachait le décor (les 7 suiveurs
+    crus sur une autre carte) et le personnage ne marchait plus (sortie crue bloquée), session arrêtée. Ni beige de
+    l'interface ni menu : jaune pâle uni. Centre de sa croix, None sans bulle."""
+    layout = frame.layout
+    box = layout.map_box
+    small = cv2.resize(frame.crop(box), None, fx=0.25, fy=0.25, interpolation=cv2.INTER_AREA)
+    min_w, min_h = (layout.length(v) / 4 for v in NPC_BUBBLE_MIN)
+    for blob in find_blobs(near(small, NPC_BUBBLE, 8), close=2):
+        if blob.w < min_w or blob.h < min_h or blob.fill < 0.7:
+            continue
+        right, top = box[0] + 4 * (blob.x + blob.w), box[1] + 4 * blob.y
+        zone = round(layout.length(NPC_CROSS_ZONE))
+        x0, y0 = max(0, right - zone), max(0, top - zone // 5)
+        corner = frame.image[y0 : top + zone, x0 : right + zone // 5]
+        # La croix : tache noire de 10 à 30 px, à part du trait noir qui borde la bulle (long, fin).
+        for mark in find_blobs(corner.max(axis=2) < 60, offset=(x0, y0)):
+            if layout.length(8) <= mark.w <= layout.length(30) and layout.length(8) <= mark.h <= layout.length(30):
+                return round(mark.center[0]), round(mark.center[1])
+    return None
+
+
 def find_unknown_window(frame: Frame) -> Box | None:
     """Grande surface beige rectangulaire sur la carte (les chemins de pierre et les menus sont plus petits)."""
     return _beige_window(frame, min_fill=0.5)

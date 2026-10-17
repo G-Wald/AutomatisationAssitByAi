@@ -34,7 +34,7 @@ from datetime import datetime
 from enum import Enum
 
 from bot.brain.game import WATCH_SLACK, Game
-from bot.brain.popups import close_flash_menu, close_small_menu
+from bot.brain.popups import close_flash_menu, close_npc_dialog, close_small_menu
 from bot.debug.draw import annotate
 from bot.perception.frame import Frame
 from bot.perception.groups import (OFF_COLUMN, TITLE_SHIFT, GroupTooltip, can_be_under_its_group, column_offset,
@@ -608,14 +608,16 @@ class Engager:
         return Outcome.LEFT
 
     def _no_menu_after_click(self, group: Point, tooltip: GroupTooltip, z_frame: Frame) -> Outcome:
-        """Clic sans menu « Attaquer » : le menu de Flash (clic droit dans le vide) est fermé d'un clic sous la barre de sorts ;
-        un autre menu (personnage ou PNJ devant le groupe) est fermé par Échap, puis combat lancé directement ? Sinon
-        le clic est tombé à côté du groupe (le personnage y marche)."""
+        """Clic sans menu « Attaquer » : le menu de Flash (clic droit dans le vide) ou un autre menu (ressource,
+        personnage devant le groupe) est fermé d'un clic sous la barre de sorts, la bulle d'un PNJ par sa croix ; puis
+        combat lancé directement ? Sinon le clic est tombé à côté du groupe (le personnage y marche)."""
         frame = self.game.look(park=False)
         self._hit = False
         if find_flash_menu(frame, around=group) is not None:  # avant les menus beiges : il en a l'air
             log.info("Le clic à côté du groupe a ouvert le menu de Flash : je le ferme (pas d'Échap)")
             close_flash_menu(self.game, frame, around=group)
+        elif close_npc_dialog(self.game, frame):
+            pass  # PNJ cliqué à la place du groupe (17/10, Matu Vuh) : pas un groupe hors d'atteinte
         else:
             if find_context_menu(frame) is not None or find_small_menu(frame, around=group) is not None:
                 log.info("Un autre menu s'est ouvert au clic (ressource, personnage ou PNJ sur le groupe ?) : je le "

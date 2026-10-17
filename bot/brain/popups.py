@@ -14,8 +14,8 @@ from collections.abc import Callable
 from bot.brain.game import Game
 from bot.perception.frame import Frame
 from bot.perception.layout import Point
-from bot.perception.popups import (FLASH_CLOSE_CLEARANCE, PopupSpec, find_flash_menu, flash_close_point, find_known_popup, find_quit_dialog_no,
-                                   find_unknown_window)
+from bot.perception.popups import (FLASH_CLOSE_CLEARANCE, PopupSpec, find_flash_menu, flash_close_point, find_known_popup, find_npc_dialog,
+                                   find_quit_dialog_no, find_unknown_window)
 
 log = logging.getLogger(__name__)
 
@@ -49,6 +49,18 @@ def close_flash_menu(game: Game, frame: Frame, around: Point | None = None) -> b
         frame = game.look(park=False)
     log.warning("Le menu de Flash reste ouvert : ferme-le toi-même (clic à côté du menu)")
     return False
+
+
+def close_npc_dialog(game: Game, frame: Frame) -> bool:
+    """Bulle de dialogue d'un PNJ (perception.popups.find_npc_dialog) : fermée par sa croix. True si elle était là."""
+    cross = find_npc_dialog(frame)
+    if cross is None:
+        return False
+    log.info("Bulle de dialogue d'un PNJ ouverte (clic sur lui ?) : je la ferme par sa croix en (%d, %d)", *cross)
+    game.click(cross, (2, 2))
+    if game.wait_until(lambda f: find_npc_dialog(f) is None, FLASH_CLOSE_WAIT, park=False) is None:
+        log.warning("La bulle du PNJ est encore là après le clic sur sa croix")
+    return True
 
 
 def close_small_menu(game: Game, frame: Frame, still_open: Callable[[Frame], bool]) -> None:
@@ -85,6 +97,8 @@ class PopupCloser:
         known = find_known_popup(frame, self.specs)
         if known:
             return f"fenêtre « {known.spec.name} »"
+        if find_npc_dialog(frame) is not None:
+            return "bulle de dialogue d'un PNJ"
         if find_unknown_window(frame) is None:
             return None
         return "menu de Flash" if find_flash_menu(frame) is not None else "fenêtre inconnue"
@@ -103,6 +117,8 @@ class PopupCloser:
             self._flash_failures = 0 if close_flash_menu(self.game, frame) else self._flash_failures + 1
             return True
         self._flash_failures = 0
+        if close_npc_dialog(self.game, frame):
+            return True
         known = find_known_popup(frame, self.specs)
         if known:
             if self._closed is not None and self._closed[0] == known.spec.name \
