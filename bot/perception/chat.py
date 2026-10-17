@@ -94,3 +94,43 @@ def read_position(frame: Frame, name: str | None = None) -> tuple[int, int] | No
         lines = ocr_lines(last_lines_image(frame, zoom))
         found.add(parse_position(lines, name) if lines else None)
     return found.pop() if len(found) == 1 else None
+
+
+# --- Chat de combat (zone du haut) : « Nom lance Sort. » ---------------------------------------------------------
+# 16/10 : chaque sort parti écrit aussitôt « Dinarpepe lance Lancer de Pièces. » en vert en bas de la zone du haut du
+# chat (canal de combat activé) ; un sort refusé (hors de portée, pas de ligne de vue) n'écrit rien. Lu par l'OCR de
+# Windows : les noms et sorts sont bien lus, les chiffres verts des dégâts non (inutiles ici).
+COMBAT_PANE = (36, 388)  # px de référence : haut et bas de la zone du haut du chat (au-dessus du séparateur)
+COMBAT_LINES_HEIGHT = 120  # px de référence : ses dernières lignes, les seules lues
+
+
+def _plain(text: str) -> str:
+    import unicodedata
+
+    text = unicodedata.normalize("NFKD", text)
+    return " ".join("".join(c for c in text if not unicodedata.combining(c)).lower().split())
+
+
+def combat_lines_image(frame: Frame, zoom: float = 3) -> np.ndarray:
+    layout = frame.layout
+    bottom = round(layout.length(COMBAT_PANE[1]))
+    top = max(round(layout.length(COMBAT_PANE[0])), round(bottom - layout.length(COMBAT_LINES_HEIGHT)))
+    crop = frame.image[top:bottom, 0 : layout.map_box[0]]
+    return cv2.resize(crop, None, fx=zoom, fy=zoom, interpolation=cv2.INTER_CUBIC)
+
+
+def combat_lines(frame: Frame) -> list[str] | None:
+    """Dernières lignes du chat de combat ; None sans OCR."""
+    return ocr_lines(combat_lines_image(frame))
+
+
+def cast_count(lines: list[str], name: str, spell: str) -> int:
+    """Lignes « Nom lance Sort. » parmi `lines` (accents, majuscules et espaces indifférents)."""
+    wanted = _plain(f"{name} lance {spell}")
+    return sum(1 for line in lines if _plain(line).startswith(wanted))
+
+
+def cast_announced(before: list[str], after: list[str], name: str, spell: str) -> bool:
+    """Le sort vient d'être annoncé : une ligne « Nom lance Sort. » de plus qu'avant le clic. Zone pleine et même sort
+    relancé, la plus ancienne annonce peut défiler en même temps : rien n'est conclu (les PA tranchent, comme avant)."""
+    return cast_count(after, name, spell) > cast_count(before, name, spell)

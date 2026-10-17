@@ -23,3 +23,22 @@ def test_chat_input_is_under_the_chat_not_on_the_map():
 def test_position_read_in_the_real_chat():
     # 16/10 : « /p %pos% » tapé en arrière-plan chez Koalaloupour, en Incarnam 6,2.
     assert read_position(load_frame("chat_position_6_2"), "Koalaloupour") == (6, 2)
+
+
+def test_cast_announcements_counted_without_accents_or_case():
+    from bot.perception.chat import cast_announced, cast_count
+
+    before = ["Dinarpepe lance Lancer de Pièces.", "Rose Démoniaque Fragile perd PDV."]
+    after = before + ["Pesopepe lance Lancer de Pieces.", "Rose Démoniaque Fragile perd PDV."]
+    assert cast_count(after, "Pesopepe", "Lancer de Pièces") == 1
+    assert cast_announced(before, after, "Pesopepe", "Lancer de Pièces")
+    assert not cast_announced(before, after, "Dinarpepe", "Lancer de Pièces")  # rien de neuf pour lui
+    assert not cast_announced(before, before, "Pesopepe", "Lancer de Pièces")  # refus : aucune ligne
+
+
+@pytest.mark.skipif(not ocr_available(), reason="OCR de Windows absent (requirements-winrt.txt)")
+def test_combat_chat_read_on_a_real_capture():
+    from bot.perception.chat import cast_count, combat_lines
+
+    lines = combat_lines(load_frame("chat_combat_annonces"))
+    assert cast_count(lines, "Dinarpepe", "Lancer de Pièces") == 2 and cast_count(lines, "Pesopepe", "Lancer de Pièces") == 1

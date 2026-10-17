@@ -63,6 +63,7 @@ from bot.brain.spellbook import SpellBook
 from bot.brain.tactics import (DANGER_DISTANCE, CombatSpell, HitLog, SpellUse, reach_range, refusals, refused_beyond,
                                spell_range)
 from bot.debug.draw import annotate
+from bot.perception.chat import cast_announced, combat_lines
 from bot.perception.fighters import Fighter, clear_point, find_fighters
 from bot.perception.frame import Frame
 from bot.perception.grid import Cell, distance
@@ -110,6 +111,11 @@ RELIEF_MIN_WRONG = 2  # cases à portée mal prédites, au moins, pour croire la
 ROW2_BACKGROUND_KEY = "num{}"
 NUMPAD_MISSES = 2
 CONFIRM_EVERY = 0.15  # secondes entre deux vérifications qu'un sort est parti (PA mis à jour en fin d'animation)
+# Chat de combat (perception/chat.py) : « Nom lance Sort. » écrit dès que le sort part ; rien pour un refus. 17/10 : un
+# refus coûtait after_cast + cast_confirm (4,6 s) ; sans annonce ni PA dépensés en CHAT_REFUSED_AFTER s, refusé.
+CHAT_EVERY = 0.3  # s entre deux lectures du chat (OCR : ~40 ms)
+CHAT_REFUSED_AFTER = 2.0  # s après le clic sans annonce ni PA dépensés : sort refusé (temps d'annonce mesuré au journal)
+CHAT_PA_GRACE = 1.2  # s après l'annonce pour voir les PA changer (capture de départ d'une rafale), puis parti quand même
 MOVES_PER_TURN = 3  # déplacements au plus par tour : aller lancer, encore un pas, repli (01/10)
 TURN_RECHECK = 0.6  # secondes avant de revérifier que mon tour est vraiment fini
 # « Mon tour » moins de SAME_TURN_WINDOW secondes après la fin du précédent, sans mes PA pleins : c'est la suite du même
@@ -1054,6 +1060,22 @@ class CombatAI:
             return Cast.STUCK
         return Cast.OUT_OF_REACH
 
+    @property
+    def _name(self) -> str:
+        """Nom du personnage (titre de sa fenêtre), tel que le chat de combat l'écrit."""
+        title = getattr(getattr(self.game, "window", None), "title", "") or ""
+        return title.split(" - ")[0].strip()
+
+    def _chat_before(self, before: Frame) -> list[str] | None:
+        """Lignes du chat de combat avant le clic ; None (le chat ne sert pas) sans OCR, sans nom de personnage, ou si
+        aucune annonce « ... lance ... » ne s'y lit (canal de combat désactivé dans cette fenêtre)."""
+        if not self._name or self._watching:
+            return None
+        lines = combat_lines(before)
+        if not lines or not any(" lance " in line for line in lines):
+            return None
+        return lines
+
     def _confirm_cast(self, before: Frame, my_team: str, spell: CombatSpell) -> Frame | None:
         """Juste après le clic qui lance le sort : None s'il est parti (ou si le tour / le combat est fini), la capture
         qui l'a montré gardée dans `_sent` (point de départ d'une rafale) ; sinon la dernière capture.
@@ -1072,11 +1094,25 @@ class CombatAI:
             sent = shown is not None
             after = shown or after
         else:
+            chat = self._chat_before(before)
+            announced_at, read_at = None, float("-inf")
             self.game.sleep(self.settings.after_cast)
             checks = 1 + round(max(0.0, window - self.settings.after_cast) / CONFIRM_EVERY)
             for check in range(checks):
                 after = self.game.look()  # écarte la souris si elle cache la barre de sorts
                 if sent := gone(after):
+                    break
+                elapsed = time.monotonic() - clicked
+                if chat is not None and announced_at is None and time.monotonic() - read_at >= CHAT_EVERY:
+                    read_at = time.monotonic()
+                    if cast_announced(chat, combat_lines(after) or [], self._name, spell.name):
+                        announced_at = elapsed
+                        log.debug("%s annoncé dans le chat de combat en %.1f s", spell.name, elapsed)
+                    elif elapsed >= CHAT_REFUSED_AFTER:
+                        log.debug("%s : ni annoncé dans le chat ni PA dépensés en %.1f s : refusé", spell.name, elapsed)
+                        break
+                if announced_at is not None and elapsed >= announced_at + CHAT_PA_GRACE:
+                    sent = True  # parti (chat) ; PA pas encore à jour : la capture d'après les montrera
                     break
                 if check < checks - 1:
                     self.game.sleep(CONFIRM_EVERY)
@@ -1524,6 +1560,11 @@ class CombatAI:
     def wanted_range(self) -> tuple[int, int]:
         """Portée à viser au placement : celle du sort de dégâts qui porte le plus loin."""
         return reach_range(self.spells, self._use) or self.settings.spell_range
+
+    @property
+    def move_points(self) -> int:
+        """PM au début d'un tour (placement de l'équipe : où le sort portera après avoir marché)."""
+        return self._max_pm
 
     def place(self, frame: Frame, my_team: str, last_try: bool = True) -> str | None:
         """Placement : aller sur la case libre de ma couleur la plus intéressante (voir choose_placement).
