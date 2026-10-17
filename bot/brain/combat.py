@@ -1683,7 +1683,16 @@ class CombatAI:
             return  # sinon le combat vient de se terminer : plus de tour à finir
         self.game.click(button, frame.layout.spread(*END_TURN_SPREAD))
         log.info("Fin de tour")
-        if self._turn_passed(my_team, checks=16):
+        if self._turn_passed(my_team, checks=6):
+            self.turns_not_passed = 0
+            return
+        # 17/10 (journal 161256, Vieenjaune ×3) : clic 1 s après un déplacement, le personnage marchait encore : ignoré,
+        # vu 4 s plus tard, et le tour suivant (« rien d'utile ») recliquait. Comme pour F1 : un second clic.
+        frame = self.game.look()
+        button = find_end_turn_button(frame)
+        if button is not None:
+            self.game.click(button, frame.layout.spread(*END_TURN_SPREAD))
+        if self._turn_passed(my_team, checks=10):
             self.turns_not_passed = 0
         else:
             self.turns_not_passed += 1

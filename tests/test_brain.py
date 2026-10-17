@@ -1188,6 +1188,17 @@ def test_tactical_button_clicked_even_under_the_turn_arrow():
     assert not button.active and abs(click[0] - button.point[0]) <= button.room and abs(click[1] - button.point[1]) <= button.room
 
 
+def test_end_turn_button_ignored_while_walking_is_clicked_again():
+    # 17/10 (journal 161256, Vieenjaune ×3) : clic 1 s après un déplacement, ignoré ; la main passée au second clic, pas
+    # au tour suivant (4 s plus tard).
+    mine, theirs = load_frame("combat_mon_tour"), load_frame("combat_tour_adversaire")
+    game = FakeGame(*[mine] * 8, theirs)
+    ai = CombatAI(game, CombatSettings())
+    ai._end_turn_key = ""
+    ai._pass_turn(RED)
+    assert len(clicks(game)) == 2 and ai.turns_not_passed == 0
+
+
 def test_no_more_moves_once_the_character_cannot_move(caplog):
     # 04/10 : Fourbocinq taclé au contact d'un Prespic (« Le jet d'esquive a échoué ») : 4 déplacements ratés d'affilée
     # dans le tour, ~5 s chacun. Au 2e déplacement sans bouger (ou au 1er au contact d'un ennemi) : plus de déplacement.
