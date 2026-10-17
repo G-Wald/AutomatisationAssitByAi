@@ -31,7 +31,7 @@ import numpy as np
 
 from bot.perception.frame import Frame
 from bot.perception.layout import Point
-from bot.perception.templates import ASSETS_DIR, match_template
+from bot.perception.templates import ASSETS_DIR, load_template, match_template
 
 BUTTON = "stats/bouton.png"  # icône ADN orange de la barre d'icônes
 TITLE = "stats/titre.png"  # « Tes caractéristiques »
@@ -48,6 +48,12 @@ SIMPLE_SIZE = (432, 735)
 SIMPLE_TITLE_AT = (8, 18)  # coin haut-gauche du modèle du titre
 SWORD_ZONE = (330, 450, 432, 520)  # l'épée (48 x 36) en (374, 466), à droite de la barre « Caractéristiques »
 SWORD_THRESHOLD = 0.8  # la découpe de l'épée faite à part par l'utilisateur (survolée ?) : 0,93
+# Le clic vise le milieu de l'épée dessinée (x 22 à 42, y 8 à 29 dans le modèle), pas le milieu du modèle (24, 18) :
+# l'épée n'en occupe que la droite, et le jeu ne réagit que sur l'épée elle-même. 17/10, deux sessions en fenêtres de
+# 1920 x 1057, visé au milieu du modèle : chaque clic à gauche de x 1862 (fond, ou bord du pommeau) n'ouvrait rien
+# (10 sur 10), chaque clic à partir de 1862 ouvrait la fenêtre avancée (14 sur 14) ; le milieu de l'épée est vers 1870.
+SWORD_CENTER = (32, 19)  # dans le modèle
+SWORD_SPREAD = (3, 3)  # l'épée est en diagonale : un carré de ±3 autour de son milieu reste dessus
 # Lignes : (haut du texte des chiffres, colonnes où lire la valeur), mesurées sur la capture.
 SIMPLE_ROWS = {
     "pa": (280, (320, 396)), "pm": (313, (320, 396)), "portee": (411, (320, 396)), "invocations": (444, (320, 396)),
@@ -138,7 +144,7 @@ def find_advanced_window(frame: Frame) -> Point | None:
 
 
 def find_sword_button(frame: Frame, corner: Point | None = None) -> Point | None:
-    """Bouton épée de « Tes caractéristiques » (fenêtre cherchée si `corner` n'est pas donné)."""
+    """Milieu de l'épée de « Tes caractéristiques », où cliquer (fenêtre cherchée si `corner` n'est pas donné)."""
     corner = corner or find_stats_window(frame)
     if corner is None:
         return None
@@ -147,7 +153,11 @@ def find_sword_button(frame: Frame, corner: Point | None = None) -> Point | None
     box = (max(0, corner[0] + round(x0 * s)), max(0, corner[1] + round(y0 * s)),
            min(frame.layout.width, corner[0] + round(x1 * s)), min(frame.layout.height, corner[1] + round(y1 * s)))
     found = match_template(frame, SWORD, box=box, threshold=SWORD_THRESHOLD)
-    return found[0] if found else None
+    if found is None:
+        return None
+    (x, y), _ = found  # milieu du modèle
+    height, width = load_template(SWORD).shape[:2]
+    return round(x + (SWORD_CENTER[0] - width / 2) * s), round(y + (SWORD_CENTER[1] - height / 2) * s)
 
 
 def _window(frame: Frame, corner: Point, size: tuple[int, int]) -> np.ndarray | None:
