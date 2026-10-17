@@ -24,7 +24,8 @@ import time
 
 from bot.perception.join import JOIN_SPREAD, SWORD_SPREAD, Sword, find_fight_swords, find_join_entry
 from bot.perception.layout import Layout
-from bot.perception.popups import find_context_menu, find_small_menu
+from bot.brain.popups import close_flash_menu
+from bot.perception.popups import find_context_menu, find_flash_menu, find_small_menu
 from bot.state.scene import Phase, read_scene
 from bot.team.member import Member, to_reference
 
@@ -163,6 +164,14 @@ class Joiner:
                 log.info("Menu « Rejoindre » ouvert : je clique dessus")
                 game.click(entry, menu.layout.spread(*JOIN_SPREAD))
                 return True
+            # 17/10 (journaux 125352, 133806) : clic droit juste après l'attaque du principal, l'épée pas encore
+            # dessinée : menu de Flash, pris pour le menu de quelqu'un (find_context_menu le trouve aussi) ; Échap ne
+            # le ferme pas et ouvre le Menu principal derrière. Cherché d'abord, fermé sous la barre de sorts.
+            if find_flash_menu(menu, around=point) is not None:
+                log.info("Le clic sur l'épée en %s a ouvert le menu de Flash (rien dessous) : je le ferme (pas d'Échap) "
+                         "et je vise un autre endroit de l'épée", point)
+                close_flash_menu(game, menu, around=point)
+                return False
             if find_small_menu(menu, around=point) is not None or find_context_menu(menu) is not None:
                 log.info("Le clic sur l'épée en %s a ouvert le menu de quelqu'un qui est dessus : je le ferme et je vise "
                          "un autre endroit de l'épée", point)

@@ -30,7 +30,7 @@ from bot.actions.input import Human
 from bot.team.member import Focus, Member, MemberTag, TaggedRecorder, make_member, to_reference
 from bot.team.roster import TeamSettings, pick_team
 from bot.team.turns import TurnRouter
-from conftest import FIXTURES, load_frame
+from conftest import FIXTURES, load_frame, with_flash_menu
 
 SWORD_CROP = cv2.imread(str(FIXTURES / "rejoindre_epee.png"))
 MENU_CROP = cv2.imread(str(FIXTURES / "rejoindre_menu.png"))
@@ -97,6 +97,13 @@ class FakeMemberGame:
 
     def sleep(self, seconds):
         pass
+
+    def wait_until(self, predicate, timeout, poll=0.1, park=None):
+        for _ in range(3):  # quelques regards, comme Game.wait_until le temps de `timeout`
+            frame = self.look(park)
+            if predicate(frame):
+                return frame
+        return None
 
     def move(self, point, spread=(0, 0)):
         self._front()
@@ -1161,6 +1168,20 @@ def test_right_click_on_the_sword_joins_without_any_menu():
     follower = member("Second", screen, sword, load_frame("preparation"))
     assert Joiner(timeout=5).join(follower, hint=None)
     assert len(events(screen, "click_right")) == 1 and events(screen, "click") == []  # un seul geste
+
+
+def test_flash_menu_opened_by_a_sword_click_is_closed_without_escape():
+    # 17/10 : clic droit au point connu de l'épée, pas encore dessinée : menu de Flash, pris pour le menu de quelqu'un ;
+    # Échap ouvrait le Menu principal. Il est fermé sous la barre de sorts, puis l'épée recliquée.
+    screen = Screen()
+    sword = with_sword("hors_combat", at=(900, 300))
+    flash = with_flash_menu(sword, at=(982, 346))
+    follower = member("Second", screen, sword, flash, sword, sword, sword, load_frame("preparation"))
+    assert Joiner(timeout=5).join(follower, hint=None)
+    assert not [e for e in events(screen, "press") if e[2] == "escape"]
+    close = [e[2] for e in events(screen, "click")]
+    assert close and not sword.layout.on_map(close[0])
+    assert len(events(screen, "click_right")) >= 2
 
 
 def test_out_of_combat_screen_right_after_ready_is_not_the_fight_end(monkeypatch):
