@@ -24,6 +24,7 @@ from bot.perception.layout import Point
 from bot.perception.stats import (
     REQUIRED,
     SIMPLE_REQUIRED,
+    SWORD_SPREAD,
     StatsReading,
     find_advanced_window,
     find_stats_button,
@@ -167,7 +168,7 @@ class StatsReader:
             sword = find_sword_button(frame, simple_at)
             if sword is None:
                 return None, simple, self._failed(frame, "bouton épée introuvable", "epee_caracteristiques_introuvable")
-            self.game.click(sword, frame.layout.spread(5, 5))
+            self.game.click(sword, frame.layout.spread(*SWORD_SPREAD))
             frame, (_, advanced_at) = self._wait(lambda shown: shown[1] is not None)
             if advanced_at is None:
                 return None, simple, self._failed(frame, "fenêtre « Caracteristiques avancées » pas ouverte",

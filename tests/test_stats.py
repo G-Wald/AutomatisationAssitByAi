@@ -84,11 +84,29 @@ def test_simple_window_sums_base_and_equipment():
     frame = screen(simple=True)
     assert perception.find_stats_window(frame) == SIMPLE_AT
     sword = perception.find_sword_button(frame)
-    assert abs(sword[0] - (SIMPLE_AT[0] + 398)) <= 3 and abs(sword[1] - (SIMPLE_AT[1] + 484)) <= 3
+    assert abs(sword[0] - (SIMPLE_AT[0] + 406)) <= 2 and abs(sword[1] - (SIMPLE_AT[1] + 485)) <= 2
     values = perception.read_stats_window(frame).values
     # « Force 0 (+80) » : 80 ; « Sagesse 0 » : 0 ; PA et PM en gras.
     assert values == {"pa": 6, "pm": 3, "portee": 0, "invocations": 2, "vitalite": 52, "sagesse": 0, "force": 80,
                       "intelligence": 50, "chance": 0, "agilite": 7}
+
+
+def test_sword_clicked_on_the_sword_itself_in_a_1057_window():
+    # 17/10, fenêtre de 1920 x 1057 : clic visé au milieu du modèle (vers x 1861), donc souvent sur le fond à gauche de
+    # l'épée, et la fenêtre avancée ne s'ouvrait pas (capture de l'un de ces échecs). Tout le carré du clic doit être
+    # sur l'épée, à droite de x 1862 (en deçà : 10 clics sur 10 sans effet ; au-delà : 14 sur 14 ouverts).
+    frame = load_frame("caracteristiques_1057")
+    assert perception.find_advanced_window(frame) is None
+    corner = perception.find_stats_window(frame)
+    assert corner is not None
+    x, y = perception.find_sword_button(frame, corner)
+    assert abs(x - 1871) <= 2 and abs(y - 560) <= 2
+    rx, ry = (round(v) for v in frame.layout.spread(*perception.SWORD_SPREAD))
+    assert x - rx >= 1862
+    background = frame.image[560, 1845].astype(int)  # fond de la barre « Caractéristiques », à gauche de l'épée
+    for dx in (-rx, 0, rx):
+        for dy in (-ry, 0, ry):
+            assert np.abs(frame.image[y + dy, x + dx].astype(int) - background).sum() > 60, (dx, dy)
 
 
 def test_rows_found_by_their_label_when_the_list_is_scrolled():
@@ -267,7 +285,7 @@ def test_button_then_sword_then_escape():
     stats = StatsReader(game).read()
     button, sword = clicks(game)
     assert abs(button[0] - 1457) <= 8 and abs(button[1] - 820) <= 8
-    assert abs(sword[0] - (SIMPLE_AT[0] + 398)) <= 5 and abs(sword[1] - (SIMPLE_AT[1] + 484)) <= 5
+    assert abs(sword[0] - (SIMPLE_AT[0] + 406)) <= 3 and abs(sword[1] - (SIMPLE_AT[1] + 485)) <= 3
     assert presses(game) == ["escape"]
     assert stats == CharacterStats(force=80, intelligence=50, chance=0, agilite=7, dommages=4, dommages_pourcent=8,
                                    pa=6, pm=3, portee=0, vitalite=52, sagesse=0, invocations=2)
