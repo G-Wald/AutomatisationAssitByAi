@@ -786,6 +786,16 @@ def test_roamer_of_the_leader_reports_its_crossings(tmp_path):
     assert bot.engager is None and bot.roamer.traveler.on_crossed == bot._crossed
 
 
+def test_leader_keeps_unreachable_groups_in_the_map_memory_in_zone_mode(tmp_path):
+    # Mode zone : zones hors d'atteinte du principal notées dans la mémoire des cartes, selon son côté d'arrivée.
+    settings = load_settings()
+    settings["travel"] = {**(settings.get("travel") or {}), "memory": str(tmp_path / "carte.json")}
+    screen = Screen()
+    a, b = member("A", screen, load_frame("hors_combat")), member("B", screen, load_frame("hors_combat"))
+    bot = TeamBot([a, b], settings, TeamSettings(enabled=True), travel="zone")
+    assert bot.engager._memory is bot.roamer.traveler.world and bot.engager._where == bot.roamer.traveler.place
+
+
 def test_lost_follower_rejoins_the_leader_before_it_moves_on(tmp_path, monkeypatch):
     # 11/10, cité d'Astrub : le principal continuait sans ses suiveurs, l'équipe s'est dispersée sur quatre cartes.
     trips = []

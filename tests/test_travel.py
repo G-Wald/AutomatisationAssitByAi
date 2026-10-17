@@ -14,6 +14,7 @@ from bot.brain.loop import Bot
 from bot.brain.travel import (
     BLOCKED,
     Explorer,
+    START,
     SURE_UNREAD,
     RoundTrip,
     Traveler,
@@ -655,6 +656,29 @@ def test_travel_test_mode_launches_no_fight():
     bot = Bot(FakeGame(load_frame("hors_combat")), load_settings(), travel="test")
     assert bot.engager is None and isinstance(bot.roamer, RoundTrip)
     assert Bot(FakeGame(load_frame("hors_combat")), load_settings()).roamer is None  # par défaut : on reste
+
+
+def test_zone_mode_keeps_unreachable_groups_in_the_map_memory(tmp_path):
+    # Mode zone (seul à changer de carte en combattant) : l'attaque des groupes note ses zones hors d'atteinte dans
+    # la mémoire des cartes, pour la carte sûre et le côté d'arrivée du trajet. Sans déplacement : rien de gardé.
+    settings = load_settings()
+    settings["travel"] = {**(settings.get("travel") or {}), "memory": str(tmp_path / "carte.json")}
+    bot = Bot(FakeGame(load_frame("hors_combat")), settings, travel="zone")
+    assert bot.engager._memory is bot.roamer.traveler.world
+    assert bot.engager._where == bot.roamer.traveler.place
+    assert Bot(FakeGame(load_frame("hors_combat")), settings).engager._memory is None
+
+
+def test_place_is_the_sure_map_and_the_arrival_side():
+    foret, champs = load_frame("hors_combat_foret"), load_frame("hors_combat")
+    t = traveler(foret, foret, foret, champs, champs)
+    assert t.place() is None  # position pas encore lue
+    frame, label = t.look()
+    assert t.place() == ("Incarnam 2,4", START)
+    t.go(frame, label, "droite")
+    assert t.place() == ("Incarnam 4,3", "gauche")
+    t.learns = False  # trajet d'un suiveur qui rejoint : rien n'est noté
+    assert t.place() is None
 
 
 def test_sun_clicked_again_while_still_on_the_departure_map(monkeypatch):

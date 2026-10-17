@@ -74,6 +74,8 @@ class Bot:
             engage = False  # déplacements (test, exploration, trajet) : pas de combat lancé par le bot
         self.engager = Engager(game, engage_settings) if (engage_settings.enabled if engage is None else engage) else None
         self.roamer = make_roamer(game, self.travel_settings)
+        if self.engager is not None and self.roamer is not None:  # zones hors d'atteinte gardées (brain/engage.py)
+            self.engager.remember_in(self.roamer.traveler.world, self.roamer.traveler.place)
         self.finished = False  # test de déplacement ou exploration terminés
         self._empty_searches = 0
         rest_settings = RestSettings.from_settings(settings)

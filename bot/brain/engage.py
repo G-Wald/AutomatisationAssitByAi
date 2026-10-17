@@ -28,7 +28,9 @@ Flash s'ouvre ; Échap ne le ferme pas (il ouvre le Menu principal derrière), u
 import logging
 import math
 import random
+from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
 from enum import Enum
 
 from bot.brain.game import WATCH_SLACK, Game
@@ -37,7 +39,7 @@ from bot.debug.draw import annotate
 from bot.perception.frame import Frame
 from bot.perception.groups import (OFF_COLUMN, TITLE_SHIFT, GroupTooltip, can_be_under_its_group, column_offset,
                                    find_group_tooltips, under_its_group)
-from bot.perception.layout import Point
+from bot.perception.layout import Layout, Point
 from bot.perception.popups import find_context_menu, find_flash_menu, find_small_menu
 from bot.perception.templates import match_template
 from bot.state.scene import Phase, read_scene
@@ -101,6 +103,13 @@ PROBE_BUTTONS = {"gauche": "left", "droit": "right"}  # engage.clic_sonde -> bou
 UNREACHABLE_RADIUS = 150  # deux groupes à 196 px l'un de l'autre (Calanques, 03/10) restent distincts
 UNREACHABLE_HITS = 2
 UNREACHABLE_FOR = 600.0
+# Mémoire de ces endroits d'une visite à l'autre (17/10 : sur Incarnam 3,0, coupée en deux, ~1 min de clics perdus à
+# chaque passage pour les réapprendre). Mode zone seulement, carte sûre (Traveler.place) : data/carte.json, par carte et
+# par côté d'arrivée (ce n'est pas la même moitié qui est accessible), en px de référence. Une zone notée y laisse ses
+# groupes d'emblée. Un combat lancé par un clic dans une zone notée la retire ; et toutes les UNREACHABLE_RECHECK
+# visites où elle a été laissée, elle est revérifiée : un clic permis (au lieu de UNREACHABLE_HITS), qui la confirme
+# s'il touche sans combat. Une zone notée par erreur n'est donc pas laissée pour toujours.
+UNREACHABLE_RECHECK = 5
 
 
 class Outcome(Enum):
@@ -142,6 +151,30 @@ class _Skip:
     since: float  # game.now()
     until: float
     reason: str
+
+
+@dataclass
+class _Zone:
+    """Endroit noté hors d'atteinte à une visite précédente (data/carte.json)."""
+    x: float  # px de référence
+    y: float
+    noted: str  # date de la dernière confirmation
+    left: int = 0  # visites où ses groupes ont été laissés d'emblée depuis
+    recheck: bool = False  # cette visite : revérifiée (un clic permis)
+
+    @classmethod
+    def of(cls, record: dict) -> "_Zone | None":
+        try:
+            return cls(float(record["x"]), float(record["y"]), str(record.get("notee") or ""),
+                       int(record.get("laissee") or 0))
+        except (KeyError, TypeError, ValueError):
+            return None
+
+    def record(self) -> dict:
+        return {"x": round(self.x), "y": round(self.y), "notee": self.noted, "laissee": self.left}
+
+    def at(self, layout: Layout) -> Point:
+        return layout.point(self.x, self.y)
 
 
 def _same_tooltip(a: GroupTooltip, b: GroupTooltip, frame: Frame) -> bool:
@@ -248,22 +281,107 @@ class Engager:
         self._z_until = float("-inf")  # jusqu'à quand les infobulles de Z peuvent rester affichées (game.now)
         self._unreachable: list[tuple[Point, float]] = []  # (clic, quand) : groupe touché, combat jamais lancé
         self._hit = False  # dernier clic sans menu « Attaquer » : quelque chose a été touché (ni menu de Flash, ni autre)
+        self._last_click: Point | None = None  # dernier clic sur un groupe de cette recherche
+        # Mémoire des zones hors d'atteinte (remember_in) : où l'écrire (World de travel.py) et où l'on est
+        # (Traveler.place : carte sûre et côté d'arrivée, ou None).
+        self._memory = None
+        self._where: Callable[[], tuple[str, str] | None] | None = None
+        self._place: tuple[str, str] | None = None  # carte et côté d'arrivée dont les zones sont chargées
+        self._zones: list[_Zone] = []
+
+    def remember_in(self, world, where: Callable[[], tuple[str, str] | None]) -> None:
+        """Mode zone : zones hors d'atteinte gardées dans `world` (travel.World : unreachable_from,
+        set_unreachable_from) pour la carte et le côté d'arrivée que donne `where`."""
+        self._memory, self._where = world, where
 
     def new_map(self) -> None:
-        """Changement de carte : les groupes ratés et les endroits hors d'atteinte de l'ancienne sont oubliés."""
+        """Changement de carte : les groupes ratés et les endroits hors d'atteinte de l'ancienne sont oubliés (ceux
+        notés de la nouvelle sont chargés à la recherche suivante)."""
         self._skipped, self._no_menu, self._unreachable = [], [], []
+        self._place, self._zones = None, []
+
+    def _arrive(self) -> None:
+        """Zones notées de la carte où l'on est, pour le côté par lequel on y est arrivé, chargées à la 1re recherche
+        (et de nouveau si la carte ou ce côté changent). Revérifiée tous les UNREACHABLE_RECHECK passages."""
+        place = self._where() if self._where is not None and self._memory is not None else None
+        if place is None or place == self._place:
+            return
+        self._place = place
+        self._zones = [z for z in map(_Zone.of, self._memory.unreachable_from(*place)) if z is not None]
+        if not self._zones:
+            return
+        for zone in self._zones:
+            zone.recheck = zone.left >= UNREACHABLE_RECHECK
+            if not zone.recheck:
+                zone.left += 1
+        rechecked = sum(z.recheck for z in self._zones)
+        log.info("Carte %s, arrivée par le %s : %d zone(s) hors d'atteinte notée(s) à un passage précédent, ses groupes "
+                 "laissés d'emblée%s", *place, len(self._zones),
+                 f" ({rechecked} à revérifier d'un clic)" if rechecked else "")
+        self._save()
+
+    def _save(self) -> None:
+        if self._place is not None and self._memory is not None:
+            self._memory.set_unreachable_from(*self._place, [z.record() for z in self._zones])
+
+    def _zone_near(self, point: tuple[float, float], layout: Layout) -> _Zone | None:
+        radius = layout.length(UNREACHABLE_RADIUS)
+        near = [(math.dist(point, z.at(layout)), z) for z in self._zones]
+        return min(((d, z) for d, z in near if d <= radius), key=lambda dz: dz[0], default=(None, None))[1]
+
+    def _hits_near(self, point: tuple[float, float], layout: Layout) -> int:
+        """Clics qui ont touché sans combat près de `point`, plus une zone notée : comptée UNREACHABLE_HITS (laissée
+        d'emblée), ou un de moins à revérifier."""
+        radius = layout.length(UNREACHABLE_RADIUS)
+        hits = sum(math.dist(point, p) <= radius for p, _ in self._unreachable)
+        zone = self._zone_near(point, layout)
+        return hits + (0 if zone is None else UNREACHABLE_HITS - 1 if zone.recheck else UNREACHABLE_HITS)
 
     def _out_of_reach(self, tooltip: GroupTooltip, frame: Frame) -> bool:
         points = hover_points(tooltip, frame)
-        if not points:
-            return False
-        (x, y), radius = points[0], frame.layout.length(UNREACHABLE_RADIUS)
-        return sum(math.hypot(x - px, y - py) <= radius for (px, py), _ in self._unreachable) >= UNREACHABLE_HITS
+        return bool(points) and self._hits_near(points[0], frame.layout) >= UNREACHABLE_HITS
+
+    def _note_unreachable(self, aim: Point, frame: Frame) -> None:
+        """Clic qui a touché sans que le combat se lance : noté ; s'il confirme l'endroit hors d'atteinte, celui-ci est
+        gardé pour les passages suivants (carte sûre, mode zone)."""
+        self._unreachable.append((aim, self.game.now()))
+        layout = frame.layout
+        if self._place is None or self._hits_near(aim, layout) < UNREACHABLE_HITS:
+            return
+        radius = layout.length(UNREACHABLE_RADIUS)
+        near = [layout.to_reference(p) for p, _ in self._unreachable if math.dist(aim, p) <= radius]
+        x, y = (sum(c) / len(near) for c in zip(*near))
+        zone = self._zone_near(aim, layout)
+        noted = datetime.now().isoformat(timespec="seconds")
+        if zone is None:
+            self._zones.append(_Zone(x, y, noted))
+            log.info("Endroit hors d'atteinte noté pour les prochains passages (carte %s, arrivée par le %s)",
+                     *self._place)
+        else:
+            zone.x, zone.y, zone.noted, zone.left, zone.recheck = x, y, noted, 0, False
+            log.info("Zone hors d'atteinte confirmée (carte %s, arrivée par le %s)", *self._place)
+        self._save()
+
+    def _reached(self, point: Point | None, frame: Frame) -> None:
+        """Combat lancé par un clic en `point` : cet endroit n'est pas hors d'atteinte (clics notés et zone oubliés)."""
+        if point is None:
+            return
+        layout = frame.layout
+        radius = layout.length(UNREACHABLE_RADIUS)
+        self._unreachable = [(p, when) for p, when in self._unreachable if math.dist(point, p) > radius]
+        kept = [z for z in self._zones if math.dist(point, z.at(layout)) > radius]
+        if len(kept) < len(self._zones):
+            self._zones = kept
+            log.info("Combat lancé dans une zone notée hors d'atteinte : je l'oublie (carte %s, arrivée par le %s)",
+                     *self._place)
+            self._save()
 
     def engage(self) -> bool:
         """True si un combat a commencé."""
         self.missed = False
         self.none_found = False
+        self._last_click = None
+        self._arrive()
         background = getattr(self.game, "background", False)  # arrière-plan : pas de survol, clics directs (08/10)
         frame = self._show_groups()
         if read_scene(frame).phase is not Phase.OUT_OF_COMBAT:
@@ -287,8 +405,8 @@ class Engager:
         self._unreachable = [(p, when) for p, when in self._unreachable if now - when < UNREACHABLE_FOR]
         reachable = [t for t in tooltips if not self._out_of_reach(t, frame)]
         if len(reachable) < len(tooltips):
-            log.info("Je laisse %d groupe(s) hors d'atteinte (touchés sans que le combat se lance, au même endroit)",
-                     len(tooltips) - len(reachable))
+            log.info("Je laisse %d groupe(s) hors d'atteinte (touchés sans que le combat se lance, au même endroit, "
+                     "ou zone notée à un passage précédent)", len(tooltips) - len(reachable))
         if not reachable:
             log.info("Plus que des groupes hors d'atteinte sur la carte")
             self.none_found = True
@@ -316,6 +434,7 @@ class Engager:
                 outcome = self._attack(point, tooltip, frame)
             if outcome is Outcome.COMBAT:
                 self._forget(tooltip, frame)
+                self._reached(self._last_click, frame)
                 return True
             if outcome is Outcome.LEFT:
                 self.missed = True  # il a bougé : nouvelle recherche aussitôt, avec Z
@@ -432,6 +551,7 @@ class Engager:
             aim = self.game.move(point, frame.layout.spread(4, 3))  # souris virtuelle : rien n'est survolé ni envoyé
             log.info("Groupe visé sans survol (arrière-plan), clic %s %d/%d en (%d, %d)", self.settings.probe_click,
                      probe, PROBES, *aim)
+            self._last_click = aim
             self.game.click(button=button)  # là où est la souris virtuelle, jamais au pixel du clic précédent
             if button == "right":
                 # Pas de menu : le personnage marche jusqu'au groupe et le combat se lance ; sinon, clic à côté (un
@@ -441,7 +561,7 @@ class Engager:
             else:
                 outcome = self._after_click(aim, tooltip, frame)
             if outcome is Outcome.NO_MENU and button == "right" and self._hit:
-                self._unreachable.append((aim, self.game.now()))
+                self._note_unreachable(aim, frame)
                 log.info("Groupe touché mais pas de combat : hors d'atteinte ? (endroit noté, pas d'autre clic dessus)")
                 return outcome
             if outcome is not Outcome.NO_MENU or probe == PROBES:
@@ -461,6 +581,7 @@ class Engager:
         return Outcome.NO_MENU
 
     def _attack(self, group: Point, tooltip: GroupTooltip, z_frame: Frame) -> Outcome:
+        self._last_click = group
         self.game.click()  # sur place : la souris survole le groupe
         return self._after_click(group, tooltip, z_frame)
 
