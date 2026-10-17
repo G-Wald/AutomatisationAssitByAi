@@ -300,7 +300,8 @@ class MapMemory:
 
     def learn_range(self, view: RangeView) -> None:
         free = view.castable | view.no_sight
-        self.obstacles = (self.obstacles - free) | view.obstacles
+        # Paroi teintée par la portée (côté d'un plateau ou d'une fosse) : pas un bloc, même lue bloc avant (17/10).
+        self.obstacles = (self.obstacles - free - view.walls) | view.obstacles
         self.unwalkable = (self.unwalkable - free) | view.obstacles
         self.seen |= free | view.obstacles
         self.known = True
@@ -1021,10 +1022,14 @@ class CombatAI:
             # Portée lue impossible : cases colorées décalées (carte à relief) ou lue depuis une autre case que la mienne
             # (03/10 : 1 à 12 pour une Flèche Magique de 1 à 8, le bot est allé chercher l'ennemi à 12 cases).
             log.debug("Portée de %s lue %d à %d, impossible (%d à %d) : ignorée", spell.name, *view.spell_range, low, high)
-        else:
-            if view.spell_range != self._use.measured.get(spell.spell_id):
-                log.info("Portée de %s : %d à %d cases", spell.name, *view.spell_range)
-            self._use.measured[spell.spell_id] = view.spell_range
+            # Losange pas centré sur ma case : ses « obstacles » (cases non colorées à la bonne distance de MA case) et
+            # l'accord de la ligne de vue ne veulent rien dire. 17/10 : 6 lectures de Pelle Fantomatique, obstacles
+            # appris à tort et 3 cartes crues à relief (22 à 88 %). Seules ses cases colorées servent : pas des blocs.
+            self.map.learn_range(RangeView(view.castable, view.no_sight, set(), view.spell_range, walls=view.walls))
+            return
+        if view.spell_range != self._use.measured.get(spell.spell_id):
+            log.info("Portée de %s : %d à %d cases", spell.name, *view.spell_range)
+        self._use.measured[spell.spell_id] = view.spell_range
         self.map.learn_range(view)
         blockers = self.map.obstacles | ({f.cell for f in fighters} - {me.cell})
         agreement = sight_agreement(view, me.cell, blockers)

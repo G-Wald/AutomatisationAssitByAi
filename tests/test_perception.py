@@ -361,6 +361,16 @@ def test_line_of_sight():
     assert line_of_sight((0, 0), (1, 1), {(5, 5)})
 
 
+def test_a_cell_touched_only_by_a_corner_does_not_block():
+    # 17/10, Incarnam : 236 lignes touchant un combattant ou un bloc par un seul coin (20 entre deux combattants qui se
+    # touchent par un coin), toutes montrées dégagées par le jeu ; la case du dessous d'une ligne horizontale bloquait.
+    assert line_of_sight((0, 0), (4, 0), {(1, 1), (1, -1), (3, 1)})  # ligne horizontale à l'écran
+    assert line_of_sight((0, 0), (0, 4), {(1, 1), (-1, 1)})  # verticale
+    assert line_of_sight((11, 19), (7, 17), {(9, 19)})  # en biais, par le coin (9, 18)
+    assert not line_of_sight((0, 0), (4, 0), {(2, 0)})  # case traversée
+    assert not line_of_sight((11, 19), (7, 17), {(10, 18)})
+
+
 def test_tactical_mode_button_found_when_off():
     frame = Frame.of(cv2.imread(str(FIXTURES / "placement_mode_normal.png")))
     assert not tactical_mode(frame)
@@ -591,6 +601,56 @@ def test_void_around_the_map_inside_a_range_is_not_an_obstacle():
         b, g, r = (int(v) for v in frame.image[y, x])
         assert not (abs(b - 45) <= 14 and abs(g - 30) <= 14 and abs(r - 10) <= 14), cell  # pas le vide bleu nuit
     assert len(view.obstacles) < 30
+
+
+def relief_frame(name: str, top: int, left: int) -> Frame:
+    """Extrait d'une capture 1920 x 1057 du 17/10 (Incarnam, 8 personnages), recollé à sa place sur fond noir."""
+    image = np.zeros((1057, 1920, 3), np.uint8)
+    crop = cv2.imread(str(FIXTURES / f"{name}.png"))
+    image[top:top + crop.shape[0], left:left + crop.shape[1]] = crop
+    return Frame.of(image)
+
+
+def relief_view(frame: Frame, me_cell):
+    fighters = find_fighters(frame)
+    me = Fighter(RED, *frame.grid.center(me_cell), me_cell)
+    view = read_range(frame, me, fighters)
+    return view, view.obstacles | ({f.cell for f in fighters} - {me_cell})
+
+
+def test_walls_of_a_plateau_and_a_pit_are_not_obstacles():
+    # 17/10, Incarnam 2,0 : les côtés du plateau et les parois de la fosse, teintés par la portée de Flèche Magique,
+    # étaient lus comme des blocs ; ligne de vue prédite juste sur 71 % des cases, carte crue à relief (le jeu montrait
+    # à portée le plateau à gauche et le fond de la fosse à droite).
+    frame = relief_frame("portee_relief_plateau_et_fosse_incarnam_2_0", 330, 940)
+    view, blockers = relief_view(frame, (17, 27))  # Pombro
+    assert view.spell_range == (1, 7)
+    assert len(view.walls) >= 5 and not view.obstacles
+    assert {(11, 27), (13, 29), (24, 22), (22, 28)} <= view.castable  # plateau, fond de la fosse
+    assert view.no_sight  # les cases cachées par les combattants restent sans ligne de vue
+    assert sight_agreement(view, (17, 27), blockers) == 1.0
+
+
+def test_cell_under_the_forbidden_cursor_is_not_an_obstacle():
+    # 17/10 : le curseur « interdit », laissé par le survol d'une cible, couvrait la case (16, 24) à moitié colorée ;
+    # lue bloc, elle coupait 12 lignes de vue vers la gauche (71 % de cases justes avec les parois de la fosse).
+    frame = relief_frame("portee_relief_curseur_interdit", 380, 1000)
+    view, blockers = relief_view(frame, (18, 24))  # Leproduitlatte
+    assert (16, 24) not in view.obstacles and (16, 24) not in view.castable
+    assert view.walls and not view.obstacles
+    assert sight_agreement(view, (18, 24), blockers) == 1.0
+
+
+def test_forbidden_cursor_is_not_a_fighter():
+    # 17/10 : le curseur « interdit » (rond rouge barré de 43 px) passait pour un morceau de cercle rouge, un allié
+    # inventé en (13, 21) coupait 11 lignes de vue sur 69 (86 %).
+    frame = relief_frame("portee_relief_curseur_pris_pour_un_cercle", 300, 700)
+    fighters = find_fighters(frame)
+    assert (13, 21) not in {f.cell for f in fighters}
+    assert {(9, 19), (11, 19), (11, 21)} <= {f.cell for f in fighters}  # les vrais cercles autour restent
+    view, blockers = relief_view(frame, (11, 19))  # Leproduitlatte
+    assert (7, 17) in view.castable  # la ligne ne touche (9, 19) que par un coin
+    assert sight_agreement(view, (11, 19), blockers) == 1.0
 
 
 def test_spectator_list_closed_with_its_fermer_button():

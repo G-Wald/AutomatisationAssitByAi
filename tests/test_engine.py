@@ -262,6 +262,16 @@ def test_hole_hidden_behind_an_ally_is_not_walked_on():
     assert MapMemory().unseen(cells) == set()  # terrain pas encore lu : rien n'est bloqué d'office
 
 
+def test_a_wall_tinted_by_a_range_is_no_longer_an_obstacle():
+    # 17/10, Incarnam : côté d'un plateau lu bloc plus tôt, puis vu teinté par la portée d'un sort : pas un bloc.
+    from bot.perception.sight import RangeView
+
+    memory = MapMemory()
+    memory.obstacles |= {(19, 17), (5, 5)}
+    memory.learn_range(RangeView({(20, 16)}, set(), {(6, 6)}, (1, 7), walls=frozenset({(19, 17)})))
+    assert memory.obstacles == {(5, 5), (6, 6)}
+
+
 def test_cached_sight_lines_match_line_of_sight():
     rng = random.Random(1)
     cells = [(i, j) for i in range(0, 30) for j in range(0, 30) if (i + j) % 2 == 0]

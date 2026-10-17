@@ -55,7 +55,7 @@ from bot.brain.tactics import (
     spell_range,
     unit,
 )
-from bot.perception.grid import Cell, distance
+from bot.perception.grid import CORNER_TOLERANCE, Cell, distance
 
 NEIGHBOURS = ((1, 1), (1, -1), (-1, 1), (-1, -1))  # un pas = une case voisine (1 PM)
 
@@ -282,8 +282,12 @@ def _crossed_from_origin(di: int, dj: int) -> tuple[Cell, ...]:
     # Les deux coins pairs du carré (fx, fy)-(fx+1, fy+1), dans l'ordre où lattice_cell les essaie.
     first_x, first_y = fx, np.where(even, fy, fy + 1)
     second_x, second_y = fx + 1, np.where(even, fy + 1, fy)
-    keep_first = np.abs(x - first_x) + np.abs(y - first_y) <= np.abs(x - second_x) + np.abs(y - second_y)
-    ci, cj = np.where(keep_first, first_x, second_x), np.where(keep_first, first_y, second_y)
+    first_gap = np.abs(x - first_x) + np.abs(y - first_y)
+    second_gap = np.abs(x - second_x) + np.abs(y - second_y)
+    keep_first = first_gap <= second_gap
+    # Point sur le bord de deux cases : pour aucune (une case touchée par un seul coin ne bloque pas, sight._crossed).
+    inside = np.abs(first_gap - second_gap) > CORNER_TOLERANCE
+    ci, cj = np.where(keep_first, first_x, second_x)[inside], np.where(keep_first, first_y, second_y)[inside]
     return tuple(sorted(set(zip(ci.astype(int).tolist(), cj.astype(int).tolist())) - {(0, 0), (di, dj)}))
 
 

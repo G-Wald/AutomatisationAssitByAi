@@ -15,6 +15,7 @@ Cell = tuple[int, int]
 # Mesuré sur les cases de placement de tests/fixtures/preparation.png (écart max 0,15 px).
 X0_REF, Y0_REF = 570.56, -0.35
 HALF_W_REF, HALF_H_REF = 48.143, 24.528
+CORNER_TOLERANCE = 1e-9  # point à égale distance de deux cases (à ça près) : sur leur bord commun (lignes de vue)
 
 
 def distance(a: Cell, b: Cell) -> int:
