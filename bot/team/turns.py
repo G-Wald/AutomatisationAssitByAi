@@ -13,6 +13,7 @@ fois de suite) : une invocation alliée ; il est retenu pour ce combat, et son t
 import logging
 
 from bot.perception.timeline import Portrait, same_portrait
+from bot.team.placement import merge_order
 
 log = logging.getLogger(__name__)
 
@@ -23,12 +24,22 @@ class TurnRouter:
         self.portraits: dict[str, Portrait] = {}  # gardés d'un combat à l'autre (même équipement)
         self.others: list[Portrait] = []  # alliés qui ne sont aucun des personnages (invocations) : ce combat
         self.order: list[str] = []  # ordre de jeu des personnages dans ce combat
+        # Ordre de jeu vu aux combats précédents (placement : team/placement.py), complété combat après combat.
+        self.known_order: list[str] = []
         self.last: str | None = None  # dernier personnage qui a joué
 
     def new_fight(self) -> None:
+        if self.order:
+            self.known_order = merge_order(self.order, self.known_order)
         self.others.clear()
         self.order.clear()
         self.last = None
+
+    def play_order(self, names: list[str]) -> tuple[list[str], bool]:
+        """Ordre de jeu attendu de ces personnages, et s'il a été vu (False : aucun combat encore, ordre par défaut :
+        celui de `names`, l'équipe du bot). Ceux qui n'ont jamais joué viennent en dernier, dans l'ordre de `names`."""
+        seen = [n for n in self.known_order if n in names]
+        return seen + [n for n in names if n not in seen], bool(seen)
 
     def learn(self, name: str, portrait: Portrait | None) -> None:
         """`name` joue (timer de son tour vu dans sa fenêtre) : son portrait est celui encadré à ce moment-là."""

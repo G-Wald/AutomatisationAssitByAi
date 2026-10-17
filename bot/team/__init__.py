@@ -4,7 +4,8 @@
 - member.py : un personnage = sa fenêtre (passée au premier plan avant chaque regard ou geste), son jeu, ses sorts,
   son IA de combat ; journal et captures à son nom ;
 - join.py : rejoindre le combat lancé par un autre (épée sur la carte, menu « Rejoindre ») ;
-- turns.py : à qui le tour, d'après le portrait encadré dans la timeline ;
+- turns.py : à qui le tour, d'après le portrait encadré dans la timeline ; ordre de jeu appris ;
+- placement.py : qui va sur quelle case au placement (logique pure) ;
 - loop.py : l'orchestrateur (TeamBot).
 
 Actions refaites dans chaque fenêtre, et comment :
@@ -18,6 +19,7 @@ Actions refaites dans chaque fenêtre, et comment :
 - repos : tabouret dans la fenêtre de chacun de ceux dont la vie est basse, assis en même temps ;
 - fenêtre des sorts : lue une fois par personnage, au premier tour des fenêtres ;
 - mode tactique : activé par l'IA de chaque personnage, dans sa fenêtre (réglage d'affichage propre à chaque jeu).
-Actions du principal seul : recherche des groupes (Z), attaque, choix du trajet. Placement : celui qui a lancé le
-combat seulement (les suiveurs ne savent pas encore reconnaître leur case parmi celles de l'équipe).
+- placement (team.place) : toute l'équipe selon l'ordre de jeu (placement.py), un clic par fenêtre et par passe,
+  vérifié par une seule lecture des cases dans la fenêtre de celui qui a lancé le combat.
+Actions du principal seul : recherche des groupes (Z), attaque, choix du trajet.
 """

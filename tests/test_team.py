@@ -610,37 +610,110 @@ def test_turn_options_for_the_combat_engine():
 # Placement
 
 
-def test_ready_pressed_in_every_window_the_host_last(monkeypatch):
+class Board:
+    """Le jeu simulé au placement, lu par read_placement : cases de mon équipe (rouges), ennemis (bleus), case de
+    chaque personnage. Un clic dans la fenêtre d'un personnage l'y déplace si la case est libre (comme le jeu), sauf
+    les cases de `refuse`."""
+
+    def __init__(self, screen: Screen, frame: Frame, cells: set, at: dict, enemies: set, refuse=()) -> None:
+        self.screen, self.frame, self.cells, self.at, self.enemies = screen, frame, cells, at, enemies
+        self.refuse = set(refuse)
+        self.seen = 0
+
+    def read(self, _frame):
+        from bot.perception.colors import BLUE
+        from bot.perception.placement import Placement
+
+        for event in self.screen.events[self.seen:]:
+            if event[1] == "click":
+                cell = self.frame.grid.cell_at(*event[2])
+                if cell in self.cells - set(self.at.values()) - self.refuse:
+                    self.at[event[0]] = cell
+        self.seen = len(self.screen.events)
+        occupied = set(self.at.values())
+        return Placement({RED: self.cells - occupied, BLUE: set()}, {RED: occupied, BLUE: set(self.enemies)})
+
+
+# Les 11 cases rouges de la capture « preparation », un ennemi sur une case bleue ; l'équipe du 16/10 dans l'ordre de
+# jeu vu aux 18 combats (Crâs : Flèche Magique 1 à 7 ; Enutrofs : Lancer de Pièces 0 à 8 ; Sadida : Ronce 1 à 6).
+RED_CELLS = {(5, 13), (7, 11), (7, 13), (7, 15), (8, 8), (8, 18), (9, 5), (9, 13), (9, 21), (11, 13), (13, 13)}
+TEAM_8 = [("Vertdepomme", (1, 7)), ("Dinarpepe", (0, 8)), ("Leproduitlatte", (1, 7)), ("Pesopepe", (0, 8)),
+          ("Pombro", (1, 7)), ("Vieenjaune", (1, 7)), ("Lestunes", (0, 8)), ("Koalaloupour", (1, 6))]
+
+
+def team_of_8(monkeypatch, seed=0, refuse=()):
+    import random
+
     monkeypatch.setattr("bot.team.loop.PLACEMENT_FIRST_TRY", 0)
+    monkeypatch.setattr("bot.team.loop.entry_banner", lambda f: False)
     screen = Screen()
-    placement = load_frame("preparation")
-    a, b, c = (member(n, screen, placement) for n in ("A", "B", "C"))
-    a.game.after_press["f1"] = [load_frame("combat_tour_adversaire")]  # le dernier prêt : le combat commence
-    bot = team_bot(a, b, c)
-    bot.team = TeamSettings(enabled=True, place=True)  # placement choisi par chacun (team.place)
+    frame = load_frame("preparation")
+    members = {}
+    for name, spell_range in TEAM_8:
+        members[name] = member(name, screen, frame)
+        members[name].ai.wanted_range = lambda r=spell_range: r
+    host = members["Koalaloupour"]
+    others = [m for n, m in members.items() if m is not host]
+    bot = team_bot(host, *others)
+    bot.team = TeamSettings(enabled=True, place=True)
+    at = dict(zip(members, random.Random(seed).sample(sorted(RED_CELLS), len(members))))
+    board = Board(screen, frame, set(RED_CELLS), at, {(20, 20)}, refuse)
+    monkeypatch.setattr("bot.team.loop.read_placement", board.read)
+    return screen, bot, host, members, board
+
+
+@pytest.mark.parametrize("seed", range(4))
+def test_whole_team_placed_in_a_few_passes_each_known_on_its_true_cell(monkeypatch, caplog, seed):
+    screen, bot, host, members, board = team_of_8(monkeypatch, seed)
+    bot.router.known_order = [name for name, _ in TEAM_8]  # vu aux combats précédents
+    start = dict(board.at)
+    with caplog.at_level(logging.INFO):
+        ready = bot._seat_team(host, list(members.values()))
+    assert bot.my_team == RED  # 8 cases occupées contre 1 : sans bouger personne
+    passes = [r.getMessage() for r in caplog.records if r.getMessage().startswith("Placement, passe")]
+    assert 1 <= len(passes) <= 3
+    assert "ordre de jeu Vertdepomme, Dinarpepe" in caplog.text and "vu aux combats précédents" in caplog.text
+    moved = {n for n in members if board.at[n] != start[n]}
+    assert moved and moved <= set(bot._cells)  # celui qui a bougé sait où il est
+    assert all(board.at[name] == cell for name, cell in bot._cells.items())  # et c'est vrai
+    assert len(set(board.at.values())) == 8
+    assert len(events(screen, "click")) >= len(moved)  # un détour peut faire bouger quelqu'un deux fois
+    assert "Koalaloupour" not in ready and ready <= set(bot._cells)  # Prêt seulement ceux qui ne bougeront plus
+    assert sorted(e[0] for e in events(screen, "press")) == sorted(ready)  # une fois chacun
+
+
+def test_ready_pressed_once_in_every_window_the_host_last_after_the_placement(monkeypatch):
+    screen, bot, host, members, board = team_of_8(monkeypatch, seed=1)
+    host.game.after_press["f1"] = [load_frame("combat_tour_adversaire")]  # le dernier prêt : le combat commence
     joined = []
     bot.joiner.ask = lambda m, hint: joined.append(m.name) or True  # tous rejoignent d'abord, sans s'attendre
     bot.joiner.wait_placement = lambda m, deadline: True
-    bot._note_cell = lambda m: None
-    bot._claim_cell = lambda m, taken: None
-    assert bot._placement(a) == [a, b, c]
-    assert joined == ["B", "C"]
-    assert bot.my_team == RED  # d'après le placement de A
-    assert [(e[0], e[2]) for e in events(screen, "press")] == [("B", "f1"), ("C", "f1"), ("A", "f1")]
-    assert screen.events.index(("A", "placement")) < screen.events.index(("B", "press", "f1"))
+    assert bot._placement(host) == [host] + [m for m in members.values() if m is not host]
+    assert len(joined) == 7
+    presses = [e[0] for e in events(screen, "press")]
+    assert sorted(presses) == sorted(members) and presses[-1] == "Koalaloupour"
+    first_click = next(i for i, e in enumerate(screen.events) if e[1] == "click")
+    assert screen.events.index(("Koalaloupour", "press", "f1")) > first_click
 
 
-def test_cell_of_each_character_noted_at_placement(monkeypatch):
-    monkeypatch.setattr("bot.team.loop.PLACEMENT_GIVE_UP", 0)
-    screen = Screen()
-    a = member("A", screen, load_frame("preparation"))
-    bot = team_bot(a)
-    bot.my_team = RED
-    bot._note_cell(a)
-    assert bot._cells == {"A": (9, 21)}  # la seule case rouge occupée
-    b = member("B", screen, load_frame("preparation"))  # aucune case nouvelle : pas de case pour B
-    bot._note_cell(b)
-    assert bot._cells == {"A": (9, 21)}
+def test_cell_where_nobody_went_is_not_taken_for_a_character_cell(monkeypatch):
+    screen, bot, host, members, board = team_of_8(monkeypatch, seed=2, refuse=RED_CELLS)  # le jeu ne bouge personne
+    bot._seat_team(host, list(members.values()))
+    assert bot._cells == {}
+    clicked = [members[e[0]].game.frames[0].grid.cell_at(*e[2]) for e in events(screen, "click")]
+    assert len(clicked) == len(set(clicked))  # une case refusée n'est pas réessayée
+
+
+def test_team_colour_from_the_number_of_characters_on_the_placement():
+    from bot.perception.colors import BLUE
+    from bot.perception.placement import Placement
+
+    bot = team_bot(member("A", Screen(), load_frame("preparation")))
+    eight = Placement({RED: {(0, 20)}, BLUE: {(20, 0)}},
+                      {RED: {(0, 2 * k) for k in range(8)}, BLUE: {(20, 2), (20, 4)}})
+    assert bot._team_colour(eight, 8) == RED
+    two = Placement({RED: set(), BLUE: set()}, {RED: {(0, 0), (0, 4)}, BLUE: {(20, 2), (20, 6)}})
+    assert bot._team_colour(two, 2) is None  # autant de monstres : il faudra bouger pour savoir
 
 
 # Hors combat
@@ -1010,29 +1083,6 @@ def test_result_window_closed_in_every_fight_window_with_one_look():
     assert follower.popups.handle(result, 0) and events(screen, "click") == []  # vérification : pas de second clic
 
 
-def test_follower_claims_its_cell_by_clicking_it(monkeypatch):
-    from bot.perception.colors import BLUE
-    from bot.perception.placement import Placement
-
-    screen = Screen()
-    frame = load_frame("preparation")
-    follower = member("B", screen, frame)
-    bot = team_bot(member("A", screen, frame), follower)
-    bot.my_team = RED
-    # Le suiveur est arrivé sur une case de l'équipe au hasard (9, 9) ; A est en (11, 11).
-    before = Placement({RED: {(13, 13), (15, 15)}, BLUE: set()}, {RED: {(11, 11), (9, 9)}, BLUE: {(20, 14)}})
-    after = Placement({RED: {(15, 15), (9, 9)}, BLUE: set()}, {RED: {(11, 11), (13, 13)}, BLUE: {(20, 14)}})
-    readings = iter([before, after])
-    monkeypatch.setattr("bot.team.loop.read_placement", lambda f: next(readings))
-    monkeypatch.setattr("bot.team.loop.entry_banner", lambda f: False)
-    taken = {(11, 11)}
-    bot._claim_cell(follower, taken)
-    # (13, 13) : à portée de l'ennemi (7 cases) et plus loin de lui que (15, 15) ; c'est là qu'il est allé.
-    assert bot._cells["B"] == (13, 13) and (13, 13) in taken
-    ((_, _, point),) = events(screen, "click")
-    assert frame.grid.cell_at(*point) == (13, 13)
-
-
 def test_click_cancelled_when_another_window_is_under_the_mouse(monkeypatch):
     from bot.actions import input as game_input
 
@@ -1246,3 +1296,29 @@ def test_member_whose_turn_never_passes_is_left_alone_for_a_while():
     assert bot._unless_stuck(one) is one
     bot._stuck["Premier"] = time.monotonic() + 30
     assert bot._unless_stuck(one) is None
+
+
+def test_team_split_on_two_maps_stops_before_the_first_attack():
+    # 17/10 : Koalaloupour (principal) réapparu à Astrub, les 7 autres à Incarnam : il s'est battu seul.
+    screen = Screen()
+    leader = member("Premier", screen, load_frame("hors_combat"))
+    other = member("Second", screen, load_frame("hors_combat_prairie"))
+    bot = team_bot(leader, other)
+    bot.roamer = None
+    assert not bot._together_before_fighting()
+    assert bot.finished and "Second" in bot._lost
+
+
+def test_team_together_fights_normally():
+    screen = Screen()
+    leader = member("Premier", screen, load_frame("hors_combat"))
+    other = member("Second", screen, load_frame("hors_combat"))
+    bot = team_bot(leader, other)
+    assert bot._together_before_fighting() and not bot.finished
+
+
+def test_sword_found_with_a_wider_handle_in_a_taller_window():
+    # 17/10, Incarnam 6,2, fenêtre 1920x1057 : poignée de 4 à 5 px de large (règle : 3,5 au plus), épée refusée ; les
+    # 7 suiveurs ne l'ont pas vue et Koalaloupour, seul, est mort.
+    (sword,) = find_fight_swords(load_frame("epee_champs_1057"))
+    assert abs(sword.center[0] - 1064) <= 6 and abs(sword.center[1] - 274) <= 6

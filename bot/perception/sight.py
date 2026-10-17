@@ -8,6 +8,7 @@ Les obstacles vus servent à prédire la ligne de vue depuis d'autres cases, pou
 Vérifié sur tests/fixtures/combat_portee_sort.png : 102 cases sur 103 prédites comme le jeu les affiche.
 """
 
+import functools
 import math
 from dataclasses import dataclass
 
@@ -246,13 +247,20 @@ def line_of_sight(a: Cell, b: Cell, blockers: set[Cell]) -> bool:
     Points du segment pris depuis `a` (puis décalés de `a`) : un point à égale distance de deux cases tombe toujours
     du même côté, où que soit la ligne sur la carte (même tracé que brain/engine.crossed, calculé une fois par écart)."""
     (i0, j0), (i1, j1) = a, b
-    samples = max(abs(i1 - i0), abs(j1 - j0)) * 24
+    return not any((i0 + di, j0 + dj) in blockers for di, dj in _crossed(i1 - i0, j1 - j0))
+
+
+@functools.lru_cache(maxsize=4096)
+def _crossed(di: int, dj: int) -> tuple[Cell, ...]:
+    """Cases traversées par le segment de (0, 0) à (di, dj), extrémités exclues, dans l'ordre (placement de toute
+    l'équipe, 17/10 : des centaines de lignes par plan, chacune calculée une fois par écart)."""
+    samples = max(abs(di), abs(dj)) * 24
+    cells: list[Cell] = []
     for t in np.linspace(0, 1, samples + 1)[1:-1]:
-        di, dj = lattice_cell((i1 - i0) * t, (j1 - j0) * t)
-        cell = (i0 + di, j0 + dj)
-        if cell != a and cell != b and cell in blockers:
-            return False
-    return True
+        cell = lattice_cell(di * t, dj * t)
+        if cell != (0, 0) and cell != (di, dj) and cell not in cells:
+            cells.append(cell)
+    return tuple(cells)
 
 
 def sight_agreement(view: RangeView, me: Cell, blockers: set[Cell]) -> float:

@@ -105,8 +105,11 @@ class MemberGame(Game):
     def click(self, point: tuple[float, float] | None = None, spread: Spread = NO_SPREAD, button: str = "left") -> bool:
         self.focus.to(self.window, settle=False)
         done = super().click(point, spread, button) is not False
-        if done and point is not None and self._layout is not None and self._layout.on_map(point):
-            self.last_map_click = (to_reference(self._layout, point), time.monotonic())
+        # Clic « sur place » (point None) : là où est la souris virtuelle. 17/10 : l'attaque d'un groupe se fait ainsi ;
+        # le dernier clic retenu était celui sur la barre de défilement des sorts, l'épée cherchée au mauvais endroit.
+        where = point if point is not None else self.input.cursor()
+        if done and where is not None and self._layout is not None and self._layout.on_map(where):
+            self.last_map_click = (to_reference(self._layout, where), time.monotonic())
         return done
 
     def wheel(self, point: tuple[float, float], notches: int, spread: Spread = NO_SPREAD) -> bool:

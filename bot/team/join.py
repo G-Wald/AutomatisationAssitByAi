@@ -115,13 +115,14 @@ class Joiner:
             # 16/10, groupe attaqué tout en haut (Incarnam 6,2) : épée coupée par le bord de l'écran et sous le nom de
             # la carte, introuvable pour les 7 suiveurs, le principal seul en combat. L'épée remplace le groupe : clic
             # droit là où le principal a cliqué pour attaquer.
+            self.sword_missing = True  # même sans clic du principal à viser (17/10 : 7 x 2 recherches encore)
             if hint is not None:
                 point = frame.layout.point(*hint)
                 log.info("Je vise l'endroit où le principal a attaqué, en %s", point)
                 if self._try(game, point, frame.layout.spread(*SWORD_SPREAD)):
                     self.known = hint
+                    self.sword_missing = False
                     return True
-            self.sword_missing = True
             return False
         for sword in _ranked(swords, hint, frame.layout)[:SWORDS_TRIED]:
             for point, spread in sword.points or ((sword.click, frame.layout.spread(*SWORD_SPREAD)),):

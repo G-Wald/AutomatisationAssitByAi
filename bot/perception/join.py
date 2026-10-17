@@ -66,7 +66,7 @@ HANDLE_SEEN = 10
 # JPEG, et dans une fenêtre réduite à 0,8) : sans cela, sous une icône collée au hasard, les boutons orange du haut à
 # droite, une fenêtre aux barres orange (7 sur 1 200 essais), puis le bord orange (4 px) d'un portrait de la
 # timeline (1 sur 2 000) passaient pour des poignées.
-HANDLE_WIDE, HANDLE_THIN = 6, 3.5
+HANDLE_WIDE, HANDLE_THIN = 6, 5.0
 SWORD_CLICK = (-1.5, 16)  # du centre du modèle au milieu de la garde (repère de référence)
 # Où cliquer, dans l'ordre, du centre du modèle : pommeau (au-dessus des têtes), poignée, garde, puis (04/10) le milieu
 # de la lame, sous la garde : seule partie visible avec la poignée quand l'épée est sous le nom de la carte (pommeau

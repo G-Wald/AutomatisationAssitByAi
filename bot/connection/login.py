@@ -67,6 +67,7 @@ class Login:
         self._ready_at = 0.0  # pas de regard avant (attente après un geste, ou chargement)
         self._leaving: tuple[LoginStep, float] | None = None  # écran qu'on attend de voir partir, jusqu'à quand
         self._confirm: tuple[LoginStep, str, str] | None = None  # bouton de l'écran, après un clic sur carte/personnage
+        self._server_error = False  # fenêtre « Erreur » vue : carte du serveur cliquée deux fois
         self._in_game: float | None = None  # titre au nom du personnage : échéance de la barre d'icônes
         self._unknown_since: float | None = None
         self._tried: set[str] = set()
@@ -122,6 +123,10 @@ class Login:
                 return self._click(view.button, template_spread(frame, button), confirm)
         if view.step is not LoginStep.OTHER:
             self._unknown_since = None
+        if view.step is LoginStep.MESSAGE and view.button is not None and view.error:
+            log.info("Fenêtre « Erreur » : « Ok » (la carte du serveur sera cliquée deux fois)")
+            self._server_error = True
+            return self._click(view.button, template_spread(frame, MESSAGE_OK))
         if view.step is LoginStep.MESSAGE and view.button is not None:
             log.info("Fenêtre « Connexion »%s : « Ok »", " (déconnecté pour inactivité)" if view.inactive else "")
             return self._click(view.button, template_spread(frame, MESSAGE_OK), LoginStep.MESSAGE)
@@ -157,6 +162,10 @@ class Login:
                               f"(capture : {path})")
         log.info("Serveur %s", self.settings.server)
         self._confirm = (LoginStep.SERVERS, SELECT_BUTTON, "Sélectionner")
+        if self._server_error:
+            # 17/10, compte à deux serveurs : clic sur la carte pas pris, « Choisis un serveur » à chaque « Sélectionner ».
+            self.game.click(point, frame.layout.spread(*CARD_SPREAD))
+            self.game.sleep(0.3)
         return self._click(point, frame.layout.spread(*CARD_SPREAD))
 
     def _character(self, frame: Frame, view: LoginView) -> None:

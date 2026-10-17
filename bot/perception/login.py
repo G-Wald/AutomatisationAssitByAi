@@ -25,6 +25,7 @@ SERVER_TITLE, SELECT_BUTTON = "connexion/choix_serveur.png", "connexion/selectio
 CHARACTER_TITLE, PLAY_BUTTON = "connexion/choix_personnage.png", "connexion/jouer.png"
 WELCOME_BUTTON = "connexion/se_connecter.png"
 MESSAGE_TITLE, MESSAGE_OK, INACTIVE = "connexion/connexion_titre.png", "connexion/ok.png", "connexion/inactif.png"
+ERROR_TITLE = "connexion/erreur_titre.png"  # fenêtre « Erreur » (« Choisis un serveur », 17/10) par-dessus un écran
 MESSAGE_BOX = (-60, 30, 560, 230)  # depuis le centre du titre « Connexion » : le texte et le bouton « Ok »
 DISCOVERY = "connexion/mode_decouverte.png"
 DISCOVERY_BOX = (400, -25, 1100, 25)  # depuis le centre du titre : bande à sa droite
@@ -59,9 +60,17 @@ class LoginView:
     button: Point | None = None  # « Se connecter », « Sélectionner » ou « Jouer »
     discovery: bool = False  # compte non abonné (« Mode découverte »)
     inactive: bool = False  # fenêtre « Connexion » : déconnecté pour inactivité
+    error: bool = False  # fenêtre « Erreur » (son « Ok » dans `button`)
 
 
 def read_login(frame: Frame) -> LoginView:
+    # 17/10 : « Erreur / Choisis un serveur / Ok » par-dessus le choix du serveur (clic sur la carte pas pris) ; le titre
+    # de l'écran reste visible derrière : la fenêtre d'erreur est cherchée d'abord, sinon on recliquait la carte dessous.
+    error = match_template(frame, ERROR_TITLE, threshold=0.85)
+    if error is not None:
+        ok = match_template(frame, MESSAGE_OK, box=_relative(frame, error[0], MESSAGE_BOX), threshold=0.8)
+        if ok is not None:
+            return LoginView(LoginStep.MESSAGE, error[0], ok[0], error=True)
     for step, title, button in ((LoginStep.CHARACTERS, CHARACTER_TITLE, PLAY_BUTTON),
                                 (LoginStep.SERVERS, SERVER_TITLE, SELECT_BUTTON)):
         found = match_template(frame, title, threshold=0.85)

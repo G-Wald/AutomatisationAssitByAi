@@ -7,10 +7,11 @@ brain/travel.py) ; les autres le suivent. Chaque personnage a son jeu, ses sorts
   au plus toutes les team.round_every secondes : fenêtres de résultat et de niveau supérieur fermées, fenêtre des
   sorts et caractéristiques lues une fois par personnage (ou reprises de la dernière session), vie notée (repos de
   tous ceux qui en ont besoin, assis en même temps).
-- Combat lancé par l'un d'eux (le principal qui attaque, ou un suiveur agressé) : il se place comme en solo (seul de
-  son équipe à ce moment-là), les autres le rejoignent par l'épée l'un après l'autre (team/join.py), puis Prêt dans
-  chaque fenêtre (F1), la sienne en dernier : le combat ne commence pas avant. La case de chacun est notée au
-  placement : la seule case de l'équipe qui s'est remplie quand il est arrivé.
+- Combat lancé par l'un d'eux (le principal qui attaque, ou un suiveur agressé) : les autres le rejoignent par l'épée
+  sans s'attendre (team/join.py) ; avec team.place, toute l'équipe se place ensuite selon l'ordre de jeu
+  (team/placement.py : quelques passes de clics dans toutes les fenêtres, une lecture des cases par passe, et la case
+  de chacun de ceux qui ont bougé est connue) ; puis Prêt dans chaque fenêtre (F1), la sienne en dernier : le combat
+  ne commence pas avant.
 - Tours : la timeline dit qui joue (team/turns.py). Tour d'un monstre : on regarde dans la dernière fenêtre active,
   sans changer de fenêtre. Tour d'un personnage : sa fenêtre, son IA (play_turn) avec `is_mine` (c'est bien SON tour)
   et sa case (`me_cell`, suivie d'un tour à l'autre ; à défaut `find_me` : le seul cercle de l'équipe qui n'est pas
@@ -41,14 +42,16 @@ from bot.perception.fighters import Fighter, clear_point
 from bot.perception.frame import Frame
 from bot.perception.grid import Cell, distance
 from bot.perception.maplabel import MapLabel, read_map_label
-from bot.perception.placement import entry_banner, read_placement, standing_cells
+from bot.perception.placement import Placement, entry_banner, read_placement, standing_cells
+from bot.perception.sight import read_blocks
 from bot.perception.popups import find_context_menu, find_known_popup
 from bot.perception.templates import match_template
 from bot.perception.timeline import Portrait, current_portrait, same_portrait
-from bot.perception.ui import READY_SPREAD, hp_ratio, pods_fill
+from bot.perception.ui import READY_SPREAD, hp_ratio, pods_fill, tactical_mode
 from bot.state.scene import Phase, Scene, read_scene
 from bot.team.join import Joiner, recent_click
 from bot.team.member import Member, to_reference
+from bot.team.placement import Seat, by_elimination, next_moves, plan_seats
 from bot.team.roster import TeamSettings
 from bot.team.turns import TurnRouter
 
@@ -98,6 +101,16 @@ FOLLOWER_STILL = 1.5  # s sans bouger avant de recliquer le soleil d'un suiveur 
 MAX_POPUPS = 6  # regards d'affilée dans une même fenêtre du jeu : fermer résultat, niveau supérieur, et retenter
 RESULT = "résultat du combat"  # même fenêtre, même bouton « Fermer » dans chaque fenêtre du combat
 RESULT_LAG = 0.2  # elle s'ouvre partout en même temps, à un instant près
+# Placement de toute l'équipe (team.place, team/placement.py). Une passe : un clic dans la fenêtre de chacun de ceux
+# qui bougent, puis une lecture des cases (PLACE_SETTLE après le premier clic, encore PLACE_RECHECK plus tard si un
+# déplacement ne se voit pas). Au plus PLACE_PASSES passes et PLACE_BUDGET s : avec 8 personnages sur les 8 à 12 cases
+# d'une équipe à Incarnam (client du jeu : 34 cartes à 8 cases, 46 à 9, 45 à 10), 0 à 4 cases libres seulement, et
+# chacune ne sert qu'à un personnage par passe.
+PLACE_PASSES = 3
+PLACE_BUDGET = 5.0
+PLACE_SETTLE = 0.35
+PLACE_RECHECK = 0.3
+PLACE_COLOUR_MARGIN = 2  # écart de cases occupées (rapporté à l'équipe) pour reconnaître ma couleur sans bouger
 
 
 @dataclass(frozen=True)
@@ -117,17 +130,9 @@ def _accepts(function, name: str) -> bool:
         return False
 
 
-def best_free_cell(free: set[Cell], enemies: set[Cell], spell_range: tuple[int, int]) -> Cell | None:
-    """Case de placement libre d'où un ennemi est à portée, la plus loin d'eux ; sinon la plus proche d'eux."""
-    if not free or not enemies:
-        return None
-    low, high = spell_range
-
-    def nearest(cell: Cell) -> int:
-        return min(distance(cell, e) for e in enemies)
-
-    in_range = [c for c in sorted(free) if any(low <= distance(c, e) <= high for e in enemies)]
-    return max(in_range, key=nearest) if in_range else min(sorted(free), key=nearest)
+def _standing(frame: Frame, placement: Placement) -> list[Fighter]:
+    """Combattants debout sur les cases de placement (un clic sur l'un d'eux le viserait, lui)."""
+    return [Fighter(team, *frame.grid.center(c), c) for team, cells in placement.occupied.items() for c in cells]
 
 
 def _same_turn(a: Portrait | None, b: Portrait | None) -> bool:
@@ -325,6 +330,8 @@ class TeamBot:
             return
         if self.engager is None:
             self._roam()
+            return
+        if not self._together_before_fighting():
             return
         if time.monotonic() < self._next_engage_at or self.engager.engage():
             return  # combat lancé : le placement est vu au tour de boucle suivant
@@ -591,6 +598,22 @@ class TeamBot:
         if label is not None and label.readable and label.coords is not None:
             self._seen_at[member.name] = label.coords
 
+    def _together_before_fighting(self) -> bool:
+        """Avant la première attaque : toute l'équipe sur la carte du principal. 17/10 : Koalaloupour, mort la veille,
+        réapparu à Astrub, les 7 autres à Incarnam : le principal s'est battu seul, aucun suiveur ne voyait l'épée. Les
+        perdus rejoignent d'abord (mode zone : _regroup) ; sans trajet possible, le bot s'arrête."""
+        if self._together_checked:
+            return not self._lost or self.roamer is None or self._regroup()
+        self._check_together()
+        if not self._lost:
+            return True
+        if self.roamer is None:
+            log.warning("%s pas sur la carte du principal, et pas de trajet possible dans ce mode : je m'arrête "
+                        "(réunis l'équipe sur une même carte, puis relance)", ", ".join(sorted(self._lost)))
+            self.finished = True
+            return False
+        return self._regroup()
+
     def _check_together(self) -> None:
         """Avant le premier trajet : chaque suiveur doit voir le même décor que le principal (même carte)."""
         self._together_checked = True
@@ -687,117 +710,165 @@ class TeamBot:
     def _placement(self, host: Member) -> list[Member]:
         """Les autres rejoignent le combat de celui qui l'a lancé, puis Prêt dans chaque fenêtre, la sienne en dernier.
         Renvoie les personnages du combat. Sans placement (team.place, défaut) : personne ne bouge, chacun est repéré à
-        son premier tour (portée d'un sort : CombatAI._locate_by_range). Avec : le principal se place (seul de son
-        équipe à ce moment-là, comme en solo), puis chaque suiveur choisit sa case."""
+        son premier tour (portée d'un sort : CombatAI._locate_by_range). Avec : toute l'équipe se place d'un coup,
+        selon l'ordre de jeu (_seat_team, team/placement.py), une fois tout le monde arrivé."""
         log.info("Placement : combat de %s", host.name)
         hint = recent_click(host)  # près du groupe attaqué : l'épée est là
-        if self.auto_ready and self.team.place:
-            self._place(host)
         others = [m for m in self.members if m is not host]
-        if others and self.team.place:
-            self._note_cell(host)  # avant l'arrivée des autres : la seule case occupée de l'équipe
-        # Tous rejoignent d'abord, l'un après l'autre sans s'attendre ; chacun se place ensuite lui-même : la case où
-        # son propre clic l'a envoyé est la sienne (plus besoin de les faire arriver un par un pour les reconnaître).
+        # Tous rejoignent d'abord, l'un après l'autre sans s'attendre (cases tirées au hasard par le jeu).
         asked = [m for m in others if self.joiner.ask(m, hint)]
         deadline = time.monotonic() + self.joiner.timeout
         joined = []
         for member in others:
             if (member in asked and self.joiner.wait_placement(member, deadline)) or self.joiner.join(member, hint):
                 joined.append(member)
+        ready: set[str] = set()
         if self.team.place:
-            taken = set(self._cells.values())
-            for member in joined:
-                self._claim_cell(member, taken)
+            ready = self._seat_team(host, [host] + joined)
         if self.auto_ready:
             for member in joined + [host]:
-                self._ready(member)
+                if member.name not in ready:
+                    self._ready(member)
         return [host] + joined if self._wait_combat(host) else []
 
-    def _claim_cell(self, member: Member, taken: set[Cell]) -> None:
-        """Placement d'un suiveur, qui dit aussi QUELLE case est la sienne parmi celles de l'équipe : il clique la
-        meilleure case libre (un ennemi à portée, le plus loin possible d'eux), son personnage y va. `taken` : cases
-        des personnages déjà placés, complétée."""
-        if self.my_team is None:
-            return  # couleur de l'équipe inconnue (placement pas fait par le bot)
-        start, tried = time.monotonic(), set()
-        while time.monotonic() - start < PLACEMENT_GIVE_UP:
-            frame = member.game.look(park=False)
-            if read_scene(frame).phase is not Phase.PLACEMENT:
-                return
-            if entry_banner(frame):
-                member.game.sleep(self.poll)
-                continue
-            member.ai.ensure_tactical_mode(frame)  # dans chaque fenêtre : réglage d'affichage propre à chaque jeu
-            frame = member.game.look(park=False)
-            placement = read_placement(frame)
-            other = BLUE if self.my_team == RED else RED
-            enemies = standing_cells(placement.occupied[other])
-            target = best_free_cell(placement.free[self.my_team] - taken - tried, enemies, member.ai.wanted_range())
-            if target is None:
-                break
-            tried.add(target)
-            standing = [Fighter(t, *frame.grid.center(c), c) for t, cells in placement.occupied.items() for c in cells]
-            member.game.click(*clear_point(frame.grid, target, standing))  # pas sur un personnage debout devant
-            member.game.sleep(0.3)
-            if target in standing_cells(read_placement(member.game.look(park=False)).occupied[self.my_team]):
-                self._cells[member.name] = target
-                taken.add(target)
-                log.info("Placement : %s en %s (sa case : il vient d'y aller)", member.name, target)
-                return
-        log.info("Placement : %s n'a pas pu choisir sa case : je ne sais pas laquelle est la sienne", member.name)
-
-    def _place(self, host: Member) -> None:
+    def _placement_frame(self, host: Member) -> Frame | None:
+        """Capture du placement lisible dans la fenêtre de `host` : bandeau d'entrée parti, mode tactique (l'herbe
+        brouille la couleur des cases). None si le placement est fini."""
         start = time.monotonic()
         while True:
-            elapsed = time.monotonic() - start
             frame = host.game.look(park=False)
             if read_scene(frame).phase is not Phase.PLACEMENT:
-                return
-            if elapsed < PLACEMENT_FIRST_TRY or (entry_banner(frame) and elapsed < PLACEMENT_GIVE_UP):
-                host.game.sleep(self.poll)  # « Tu es entré en combat ! » assombrit une bande de cases
-                continue
-            host.ai.ensure_tactical_mode(frame)  # avant de lire les cases : l'herbe brouille leurs couleurs
-            team = host.ai.place(host.game.look(), self.my_team or self._last_team, last_try=elapsed >= PLACEMENT_GIVE_UP)
-            if team is None:
-                host.game.sleep(self.poll)  # cases pas encore lisibles : nouvel essai
-                continue
-            if team and self.learn_team and self.my_team is None:
-                self.my_team = team
-                log.info("Mon équipe pour ce combat : %s (d'après le placement)", team)
-            return
-
-    def _note_cell(self, member: Member) -> None:
-        """Case de placement du personnage qui vient d'arriver : la seule case de l'équipe occupée qui n'est pas celle
-        d'un personnage déjà noté. Lue dans sa fenêtre, en mode tactique, une fois le bandeau d'entrée parti."""
-        if self.my_team is None:
-            return  # couleur de l'équipe inconnue (placement pas fait par le bot)
-        placed = getattr(member.ai, "placed_cell", None)
-        if placed is not None:  # case sûre, d'après son propre placement (clic suivi d'effet, ou case unique)
-            self._cells[member.name] = placed
-            log.info("Placement : %s en %s", member.name, placed)
-            return
-        start, known, tries = time.monotonic(), set(self._cells.values()), 0
-        while True:
+                return None
             elapsed = time.monotonic() - start
-            # La souris sur un personnage cache sa case : écartée seulement si la première lecture n'a pas suffi.
-            frame = member.game.look(park=tries > 0)
-            if read_scene(frame).phase is not Phase.PLACEMENT:
-                return
-            if entry_banner(frame) and elapsed < PLACEMENT_GIVE_UP:
-                member.game.sleep(self.poll)
+            if elapsed < PLACEMENT_FIRST_TRY or (entry_banner(frame) and elapsed < PLACEMENT_GIVE_UP):
+                host.game.sleep(self.poll)
                 continue
-            member.ai.ensure_tactical_mode(frame)  # dans chaque fenêtre : réglage d'affichage propre à chaque jeu
-            new = standing_cells(read_placement(member.game.look(park=tries > 0)).occupied[self.my_team]) - known
-            tries += 1
-            if len(new) == 1:
-                (self._cells[member.name],) = new
-                log.info("Placement : %s en %s", member.name, self._cells[member.name])
-                return
-            if elapsed >= PLACEMENT_GIVE_UP:
-                log.info("Placement : je ne sais pas quelle case est celle de %s (%d case(s) nouvelle(s) de l'équipe)",
-                         member.name, len(new))
-                return
-            member.game.sleep(self.poll)
+            host.ai.ensure_tactical_mode(frame)
+            return host.game.look(park=True)
+
+    def _team_colour(self, placement: Placement, count: int) -> str | None:
+        """Couleur de mon équipe : celle dont les cases occupées sont au nombre de mes personnages (8 contre 1 à 3
+        monstres) ; None si on ne peut pas trancher (autant de monstres que de personnages). Cases occupées comptées
+        entre les deux : un grand personnage paraît aussi sur la case au-dessus de la sienne, et deux des miens dans la
+        même colonne, à deux rangées l'un de l'autre, n'en font qu'un pour standing_cells."""
+        if self.my_team is not None:
+            return self.my_team
+
+        def gap(team: str) -> int:
+            low, high = len(standing_cells(placement.occupied[team])), len(placement.occupied[team])
+            return 0 if low <= count <= high else min(abs(low - count), abs(high - count))
+
+        gaps = {team: gap(team) for team in (RED, BLUE)}
+        mine, other = sorted(gaps, key=gaps.get)
+        return mine if gaps[other] - gaps[mine] >= PLACE_COLOUR_MARGIN else None
+
+    def _seat_team(self, host: Member, fighters: list[Member]) -> set[str]:
+        """Toute l'équipe sur ses cases (team/placement.py) : à chaque passe, chacun dont la case prévue est libre y
+        va, un clic dans sa fenêtre sans attendre ; une lecture des cases dans la fenêtre de `host` vérifie la passe.
+        Ceux qui sont à leur place sont Prêts pendant l'attente de la passe suivante. Retient la case de chacun de ceux
+        qui sont reconnus (self._cells). Renvoie les noms de ceux qui sont déjà Prêts."""
+        started = time.monotonic()
+        frame = self._placement_frame(host)
+        if frame is None:
+            return set()
+        placement = read_placement(frame)
+        if host.game.recorder.keeps():  # aucune capture de placement à 8 dans tests/fixtures (17/10)
+            host.game.recorder.save(frame.image, "placement_equipe_avant")
+        team = self._team_colour(placement, len(fighters))
+        known: dict[str, Cell] = {}
+        if team is None:
+            # Autant de monstres que de personnages : la couleur se vérifie en déplaçant `host` (comme en solo).
+            self._place(host)
+            team = self.my_team
+            if getattr(host.ai, "placed_cell", None) is not None:
+                known[host.name] = host.ai.placed_cell
+            frame = host.game.look(park=True)
+            placement = read_placement(frame)
+        elif self.learn_team and self.my_team is None:
+            self.my_team = team
+            log.info("Mon équipe pour ce combat : %s (%d personnages au placement)", team, len(fighters))
+        if not team:
+            log.info("Placement : couleur de mon équipe inconnue, personne ne bouge")
+            return set()
+        other = BLUE if team == RED else RED
+        enemies = standing_cells(placement.occupied[other])
+        if not enemies:
+            log.info("Placement : je ne vois aucun ennemi, personne ne bouge")
+            return set()
+        by_name = {m.name: m for m in fighters}
+        order, seen = self.router.play_order([m.name for m in fighters])
+        log.info("Placement : ordre de jeu %s (%s)", ", ".join(order),
+                 "vu aux combats précédents" if seen else "par défaut, aucun combat encore : celui de l'équipe")
+        seats = [Seat(name, by_name[name].ai.wanted_range(), getattr(by_name[name].ai, "move_points", 3))
+                 for name in order]
+        standing = _standing(frame, placement)
+        blockers = read_blocks(frame, standing) if tactical_mode(frame) else None
+        fixed: dict[str, Cell] = {}
+        refused: set[Cell] = set()  # cases libres où le clic n'a mené personne
+        ready: set[str] = set()
+        passes, plan, budget = 0, {}, time.monotonic() + PLACE_BUDGET
+        while passes < PLACE_PASSES and time.monotonic() < budget:
+            free = placement.free[team] - refused
+            cells = free | standing_cells(placement.occupied[team])
+            plan = plan_seats(seats, cells, enemies, blockers, fixed, free, known)
+            fixed.update({name: cell for name, cell in known.items() if plan.get(name) == cell})
+            moves = [(name, cell) for name, cell in next_moves(plan, known, free, order, passes < PLACE_PASSES - 1)
+                     if name not in fixed]
+            if not moves:
+                break
+            passes += 1
+            log.info("Placement, passe %d : %s (%d case(s) libre(s))", passes,
+                     ", ".join(f"{n} -> {c}" + ("" if plan[n] == c else " (détour)") for n, c in moves), len(free))
+            sent = time.monotonic()
+            for name, cell in moves:
+                point, spread = clear_point(frame.grid, cell, standing)  # pas sur un personnage debout devant
+                game = by_name[name].game
+                layout = getattr(game, "layout", None) or frame.layout
+                game.click(layout.point(*to_reference(frame.layout, point)), spread)
+            if self.auto_ready:  # pendant que le jeu les déplace : Prêt de ceux qui ne bougeront plus
+                for name in order:
+                    if name in fixed and name not in ready and by_name[name] is not host:
+                        self._ready(by_name[name])
+                        ready.add(name)
+            host.game.sleep(max(0.0, PLACE_SETTLE - (time.monotonic() - sent)))
+            for attempt in range(2):
+                frame = host.game.look(park=True)
+                if read_scene(frame).phase is not Phase.PLACEMENT:
+                    self._cells.update(known)
+                    return ready
+                placement = read_placement(frame)
+                occupied = placement.occupied[team]
+                if attempt or all(cell in occupied for _, cell in moves):
+                    break
+                host.game.sleep(PLACE_RECHECK)  # un déplacement pas encore affiché
+            standing = _standing(frame, placement)
+            for name, cell in moves:
+                if cell in occupied:
+                    known[name] = cell
+                    if plan[name] == cell:
+                        fixed[name] = cell
+                else:
+                    refused.add(cell)
+                    known.pop(name, None)  # clic sans effet, ou tombé sur une autre case : on ne sait plus
+                    log.info("Placement : %s n'est pas allé en %s", name, cell)
+            guess = by_elimination(known, order, standing_cells(occupied))
+            if guess is not None:
+                known[guess[0]] = guess[1]
+                log.info("Placement : %s en %s (la seule case des miens qui reste)", *guess)
+        self._cells.update(known)
+        self._placement_report(host, frame, order, plan, known, enemies, started, passes)
+        return ready
+
+    def _placement_report(self, host: Member, frame: Frame, order: list[str], plan: dict[str, Cell],
+                          known: dict[str, Cell], enemies: set[Cell], started: float, passes: int) -> None:
+        placed = [n for n in order if n in known and plan.get(n) == known[n]]
+        unknown = [n for n in order if n not in known]
+        log.info("Placement fait en %.1f s, %d passe(s) : %d personnage(s) sur leur case prévue, %d reconnu(s) "
+                 "sur %d%s", time.monotonic() - started, passes, len(placed), len(known), len(order),
+                 f" ; à repérer à leur premier tour : {', '.join(unknown)}" if unknown else "")
+        if host.game.recorder.keeps():
+            marks = [(frame.grid.center(c), f"{order.index(n) + 1} {n}") for n, c in known.items()]
+            host.game.recorder.save(annotate(frame, cells=set(enemies), marks=marks), "placement_equipe")
 
     def _ready(self, member: Member) -> None:
         """Un seul appui : un second annulerait le premier."""

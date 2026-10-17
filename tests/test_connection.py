@@ -607,3 +607,12 @@ def test_gui_connection_options():
     # Connexion : des fenêtres encore à l'écran de connexion ne sont pas une erreur.
     assert validate(Choices(team=True, leader="Gela-[A13]", connect=True), {}, titles=["Dofus Retro v1.49.6"]) == []
     assert validate(Choices(connect=True, server=" "), {}) == ["Connexion automatique : choisis le serveur"]
+
+
+def test_server_error_window_is_closed_before_anything_else():
+    # 17/10 : « Erreur / Choisis un serveur / Ok » par-dessus le choix du serveur ; le bot recliquait la carte dessous.
+    from bot.perception.login import LoginStep, read_login
+
+    view = read_login(frame("connexion_erreur_choisis_un_serveur"))
+    assert view.step is LoginStep.MESSAGE and view.error
+    assert abs(view.button[0] - 1214) <= 6 and abs(view.button[1] - 578) <= 6

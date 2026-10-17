@@ -20,6 +20,10 @@ from bot.perception.templates import match_template
 
 MIN_COVERAGE = 0.3  # en dessous : pas une case de placement
 OCCUPIED_DROP = 0.035  # couverture plus basse que celle des cases libres de cette couleur : quelqu'un dessus
+# Couverture d'une case libre, au moins (0,94 à 1,0 sur les captures, JPEG compris ; occupées : 0,35 à 0,94). Le
+# 3e quartile des cases d'une couleur n'est celle d'une case libre que si la plupart le sont : avec 8 personnages sur
+# les 10 cases de l'équipe, il tomberait sur une case occupée (vers 0,8) et des cases occupées passeraient pour libres.
+FREE_COVERAGE = 0.95
 ENTRY_BANNER = "bandeau_entree_combat.png"  # texte blanc du bandeau, au milieu de la carte
 BANNER_ZONE = (900, 300, 1600, 480)
 
@@ -60,12 +64,17 @@ def read_placement(frame: Frame) -> Placement:
             if coverage >= MIN_COVERAGE:
                 coverages[team][cell] = coverage
     for team, cells in coverages.items():
-        if not cells:
-            continue
-        clear = float(np.percentile(list(cells.values()), 75))  # la plupart des cases sont libres
-        for cell, coverage in cells.items():
-            (free if coverage >= clear - OCCUPIED_DROP else occupied)[team].add(cell)
+        free[team], occupied[team] = split_cells(cells)
     return Placement(free, occupied)
+
+
+def split_cells(coverages: dict[Cell, float]) -> tuple[set[Cell], set[Cell]]:
+    """Cases d'une couleur (couverture de chacune par la couleur) : (libres, occupées)."""
+    if not coverages:
+        return set(), set()
+    clear = max(float(np.percentile(list(coverages.values()), 75)), FREE_COVERAGE)  # repère : une case libre
+    free = {cell for cell, coverage in coverages.items() if coverage >= clear - OCCUPIED_DROP}
+    return free, set(coverages) - free
 
 
 def standing_cells(cells: set[Cell]) -> set[Cell]:

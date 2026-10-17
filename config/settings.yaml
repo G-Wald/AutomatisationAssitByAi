@@ -116,7 +116,10 @@ team:                      # mode équipe : une fenêtre du jeu par personnage, 
   join_timeout: 20         # secondes au plus, pour chaque autre personnage, pour rejoindre le combat (épée -> Rejoindre)
   round_every: 15          # hors combat, tour des fenêtres au plus toutes les 15 s (fenêtres à fermer, agression...)
   place: false             # placement : false : personne ne bouge, Prêt tout de suite, chacun repéré à son
-                           # premier tour par la portée d'un sort (rapide à 8) ; true : chacun choisit sa case
+                           # premier tour par la portée d'un sort (rapide à 8) ; true (17/10, à l'essai) : toute
+                           # l'équipe se place selon l'ordre de jeu vu au combat précédent, les premiers à jouer à
+                           # portée des ennemis, les derniers plus loin (bot/team/placement.py) ; 3 passes au plus,
+                           # chacun de ceux qui ont bougé est reconnu (pas de repérage à son premier tour)
   turn_signal: "notifications"  # qui joue : timeline (portrait et timer du tour, lus à l'écran) ; notifications : aussi les
                            # notifications Windows que le jeu envoie au début du tour d'un personnage (option du jeu
                            # « Notifications en arrière-plan »), lues par l'API de Windows pendant l'attente d'un tour :
