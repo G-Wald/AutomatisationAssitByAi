@@ -688,3 +688,15 @@ def test_npc_dialog_found_by_its_cross():
                                   "epee_pnj_menu_parler", "menu_flash_clic_droit", "combat_mon_tour", "preparation"])
 def test_no_npc_dialog_elsewhere(name):
     assert find_npc_dialog(load_frame(name)) is None
+
+
+def test_mouse_moved_away_inside_the_flash_scene_never_in_the_chat():
+    # 17/10 : écartée dans le chat (hors de la scène Flash), la souris restait pour le jeu sur le monstre visé, et le
+    # même sort sur lui était ignoré. Toujours à droite du chat, sous la carte, dans la fenêtre.
+    from bot.perception.layout import Layout
+    from bot.perception.ui import scene_park_point
+
+    for width, height in ((1920, 1057), (1918, 1008), (1280, 729)):
+        layout = Layout(width, height)
+        for x, y in (scene_park_point(layout) for _ in range(300)):
+            assert layout.map_box[0] <= x < width and layout.map_box[3] <= y < height

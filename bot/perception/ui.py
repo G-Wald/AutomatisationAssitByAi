@@ -191,6 +191,17 @@ def park_point(layout: Layout) -> Point:
     return layout.point(random.uniform(x0, x1), random.uniform(y0, y1))
 
 
+def scene_park_point(layout: Layout) -> Point:
+    """Où écarter la souris virtuelle (arrière-plan) pour que le jeu la voie partir : le bas-gauche de l'interface
+    seulement. Le chat n'est pas dans la scène Flash (15/10 : un clic dans le chat ne ferme pas le menu de Flash) :
+    un « souris ici » dans le chat n'y arrive pas. 17/10 (journaux 161256, 180638, 183520) : après un Lancer de
+    Pièces, la souris écartée dans le chat (2 fois sur 3, tirage au hasard selon la surface) restait pour le jeu sur
+    le monstre visé ; le même sort sur le même monstre était ignoré (rien dans le chat, PA inchangés), et repartait
+    après un déplacement (souris passée ailleurs)."""
+    x0, y0, x1, y1 = PARK_ZONES[0]
+    return layout.point(random.uniform(x0, x1), random.uniform(y0, y1))
+
+
 def tactical_mode(frame: Frame) -> bool:
     """Carte en mode tactique (cases grises unies) : couleurs de portée et de déplacement fiables. Part du gris parmi
     les pixels qui ne sont pas noirs : 16/10, Incarnam 6,1, petite carte dans le vide noir, 28 % de gris sur toute la

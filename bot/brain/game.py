@@ -22,7 +22,7 @@ from bot.capture.window import GameWindow
 from bot.debug.recorder import Recorder
 from bot.perception.frame import Frame
 from bot.perception.layout import Layout, Point
-from bot.perception.ui import find_end_turn_button, movement_zone, park_point, tactical_mode
+from bot.perception.ui import find_end_turn_button, movement_zone, park_point, scene_park_point, tactical_mode
 from bot.state.scene import Phase, read_scene
 
 log = logging.getLogger(__name__)
@@ -115,7 +115,7 @@ class Game:
         n'affiche plus la fiche du combattant visé à la place de la barre de sorts. Au premier plan : rien (la vraie
         souris est écartée quand une capture en a besoin)."""
         if self.background and self._layout is not None:
-            self.input.hover(park_point(self._layout))
+            self.input.hover(scene_park_point(self._layout))  # pas dans le chat : hors de la scène Flash
 
     def sleep(self, seconds: float) -> None:
         """Attente allongée au hasard (réglage human.slowdown) pour ne jamais garder le même rythme."""
