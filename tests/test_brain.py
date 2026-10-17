@@ -7,7 +7,6 @@ from dataclasses import replace
 
 import cv2
 import numpy as np
-import pytest
 
 import bot.brain.combat as combat_module
 from bot.brain.combat import (
@@ -238,70 +237,6 @@ def test_background_cast_without_effect_is_a_refusal_not_three_tries(monkeypatch
     ai = CombatAI(game, CombatSettings(cast_confirm=0.15))
     assert ai._cast(frame, me, target, [me, target], RED) is Cast.OUT_OF_REACH
     assert len(clicks(game)) == 1 and not ai._banned
-
-
-class ChainGame(FakeGame):
-    """Arrière-plan : le jeu ignore les `ignored` premiers clics de lancer (PA inchangés, sort toujours sélectionné
-    jusqu'à Échap), puis montre les PA dépensés. `clicked_at` : horloge simulée à chaque clic."""
-
-    background = True
-
-    def __init__(self, frame: Frame, ignored: int) -> None:
-        super().__init__(frame)
-        self.frame, self.ignored, self.clicked_at = frame, ignored, []
-
-    def click(self, point=None, spread=(0, 0), button="left"):
-        self.clicked_at.append(self.clock)
-        super().click(point, spread, button)
-
-    def look(self, park=True):
-        if ("press", "escape") in self.actions:
-            return load_frame("combat_mon_tour")  # sans portée affichée
-        return spent_pa(self.frame) if len(self.clicked_at) > self.ignored else self.frame
-
-
-def chained_cast(ignored: int, since: float, gap: float = 0.0):
-    """Lancer de Pièces tenté `since` s après le clic du sort parti juste avant ; `gap` : écart déjà appris."""
-    frame = load_frame("combat_portee_sort")
-    me, _ = me_and_enemy(frame)
-    target = enemy_in_range(frame)
-    game = ChainGame(frame, ignored)
-    ai = CombatAI(game, CombatSettings(cast_confirm=0.15))
-    ai._gone_at, ai._chain_gap = -since, gap
-    return ai._cast(frame, me, target, [me, target], RED), ai, game, target
-
-
-def test_spell_chained_too_soon_is_retried_here_not_taken_for_out_of_reach():
-    # 17/10, 16:20-16:43 : 39 Lancers de Pièces sur 46, cliqués 1,5 à 2,4 s après le précédent parti, ignorés par le jeu
-    # (ni chat ni PA) ; le bot les croyait hors de portée et se déplaçait d'une case (2 à 4 s de plus chacun). Relancés
-    # d'ici 3 s ou plus après le précédent, ils partaient.
-    result, ai, game, target = chained_cast(ignored=1, since=1.6)
-    assert result is Cast.DONE
-    assert clicks(game) == [(round(target.x), round(target.y))] * 2  # nouvel essai, même case, sans nouveau plan
-    assert ai._chain_gap == combat_module.CHAIN_GAP and ai._gone_at == game.clicked_at[1]
-    assert game.clicked_at[1] + 1.6 >= combat_module.CHAIN_GAP  # 2e clic : l'écart appris est écoulé
-    assert not ai._use.refused and not ai._banned
-
-
-def test_chained_spell_waits_the_learned_gap_before_its_click():
-    result, ai, game, _ = chained_cast(ignored=0, since=1.0, gap=3.0)
-    assert result is Cast.DONE and len(game.clicked_at) == 1
-    assert game.clicked_at[0] + 1.0 == pytest.approx(3.0)  # touche et portée lue (0,15 s), puis le reste de l'écart
-    result, ai, game, _ = chained_cast(ignored=0, since=1.0)  # rien d'appris : pas d'attente
-    assert result is Cast.DONE and game.clicked_at[0] + 1.0 < 1.5
-
-
-def test_chained_spell_still_ignored_after_the_retry_is_a_refusal_and_the_gap_grows():
-    result, ai, game, _ = chained_cast(ignored=2, since=2.8, gap=3.0)
-    assert result is Cast.OUT_OF_REACH and len(game.clicked_at) == 2  # un seul nouvel essai
-    assert ai._chain_gap == pytest.approx(3.0 + combat_module.CHAIN_GAP_STEP)  # 3,0 s d'écart ne suffisaient pas
-    result, ai, game, _ = chained_cast(ignored=1, since=4.4, gap=4.5)
-    assert result is Cast.DONE and ai._chain_gap == combat_module.CHAIN_GAP_MAX  # plafonné
-
-
-def test_spell_ignored_long_after_the_last_one_is_a_plain_refusal():
-    result, ai, game, _ = chained_cast(ignored=1, since=combat_module.CHAIN_WINDOW)
-    assert result is Cast.OUT_OF_REACH and len(game.clicked_at) == 1 and ai._chain_gap == 0
 
 
 def test_spell_confirmed_only_once_the_animation_is_over():

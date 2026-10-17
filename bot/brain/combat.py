@@ -116,14 +116,6 @@ CONFIRM_EVERY = 0.15  # secondes entre deux vérifications qu'un sort est parti 
 CHAT_EVERY = 0.3  # s entre deux lectures du chat (OCR : ~40 ms)
 CHAT_REFUSED_AFTER = 2.0  # s après le clic sans annonce ni PA dépensés : sort refusé (temps d'annonce mesuré au journal)
 CHAT_PA_GRACE = 1.2  # s après l'annonce pour voir les PA changer (capture de départ d'une rafale), puis parti quand même
-# Sort enchaîné trop tôt (17/10, 8 personnages en arrière-plan, Incarnam) : de 16:20 à la fin du test, le jeu ignorait un
-# sort cliqué moins de ~2,5 s après le clic du sort parti juste avant (39 sur 46 Lancers de Pièces enchaînés, à 1,5 à
-# 2,4 s ; partis à 3,0 s et plus, et tous à 1,6 s avant 16:20 et dans la session de 15:50), quels que soient la cible et
-# le monstre : rien dans le chat, PA inchangés, sort désélectionné. Pas une question de portée : relancé d'ici sur la
-# même case ou la voisine, il part. Un tel « refus » moins de CHAIN_WINDOW s après un sort parti : nouvel essai d'ici, et
-# les sorts suivants de la session attendent CHAIN_GAP s depuis le précédent (+ CHAIN_GAP_STEP à chaque nouveau refus).
-CHAIN_WINDOW = 5.0
-CHAIN_GAP, CHAIN_GAP_STEP, CHAIN_GAP_MAX = 3.0, 0.5, 4.5
 MOVES_PER_TURN = 3  # déplacements au plus par tour : aller lancer, encore un pas, repli (01/10)
 TURN_RECHECK = 0.6  # secondes avant de revérifier que mon tour est vraiment fini
 # « Mon tour » moins de SAME_TURN_WINDOW secondes après la fin du précédent, sans mes PA pleins : c'est la suite du même
@@ -411,8 +403,6 @@ class CombatAI:
         self._sent: Frame | None = None  # capture qui a montré le dernier sort parti (_confirm_cast)
         self._aim: tuple[Cell, tuple[float, float], tuple[float, float]] | None = None  # (case, point, dispersion) visés
         self._cast_at = float("-inf")  # heure du dernier clic de lancer (sélection refusée juste après : animation)
-        self._gone_at: float | None = None  # game.now() au clic du dernier sort parti (sort enchaîné : CHAIN_WINDOW)
-        self._chain_gap = 0.0  # écart appris entre le clic d'un sort parti et le suivant (CHAIN_GAP), pour la session
         self._life_saved: set[str] = set()  # captures de fiche déjà gardées (vie lue, illisible : _read_life)
         self.new_combat()
 
@@ -1200,15 +1190,12 @@ class CombatAI:
                 return self._cancel_spell()
             hp = self._read_life(self._hovered, target) if target.team and self._hovered is not None else None
             log.info("%s lancé sur %s%s", spell.name, _aim_label(target), f" ({hp} PV)" if hp is not None else "")
-            self._chain_wait()
             self.game.click()  # sur place : la souris est déjà sur la cible vérifiée
-            clicked = self.game.now()
             self._mouse_away()
             self._cast_at = time.monotonic()
             if not confirm:  # dernier sort du tour (fast_end) : la fin de tour suit, sans attendre l'animation
                 self._turn_stats().casts += 1
                 self._note_cast(spell, target.cell)
-                self._gone_at = clicked
                 return Cast.DONE
             after = self._confirm_cast(before, my_team, spell)
             if after is not None and target.team and self._left_its_cell(before, after, target):
@@ -1221,14 +1208,8 @@ class CombatAI:
             if after is None:
                 self._note_cast(spell, target.cell)
                 self._not_gone[spell.spell_id] = 0
-                self._gone_at = clicked
                 return Cast.DONE
             path = self.game.recorder.save(after.image, "sort_pas_parti", lossless=True)
-            if attempt == 1 and self._chained_too_soon(spell, clicked, path) and self.game_background:
-                # Jeu pas prêt (CHAIN_WINDOW) : le même lancer d'ici, une fois, sans nouveau plan ni déplacement. Au
-                # premier plan, la boucle relance déjà ; l'écart appris vaut pour les deux.
-                if spell_range_visible(after) or self._select_spell(after, spell) is not None:
-                    continue
             if self.game_background:
                 # 11/10 : en arrière-plan, pas de curseur « interdit » à voir avant de cliquer ; un sort refusé par le
                 # jeu (hors de portée, sans ligne de vue) ne se voit qu'aux PA inchangés. Pas de nouvel essai (5 s
@@ -1258,31 +1239,6 @@ class CombatAI:
             return any(f.cell == target.cell and f.team == target.team for f in find_fighters(frame))
 
         return standing(before) and not standing(after)
-
-    def _chain_wait(self) -> None:
-        """Juste avant le clic d'un sort : l'écart appris (CHAIN_GAP) depuis le clic du dernier sort parti, s'il n'est
-        pas encore écoulé (la touche du sort et la lecture de sa portée en ont déjà pris une partie)."""
-        if not self._chain_gap or self._gone_at is None:
-            return
-        left = self._chain_gap - (self.game.now() - self._gone_at)
-        if left > 0:
-            log.debug("Sort enchaîné : %.1f s d'attente (%.1f s au moins après le sort précédent)", left, self._chain_gap)
-            self.game.sleep(left)
-
-    def _chained_too_soon(self, spell: CombatSpell, clicked: float, path: str) -> bool:
-        """Sort pas parti moins de CHAIN_WINDOW s après le clic d'un sort parti : le jeu n'était pas prêt (17/10), ce
-        n'est pas un refus de portée. L'écart entre deux sorts grandit : au moins CHAIN_GAP, et CHAIN_GAP_STEP de plus
-        que l'écart de ce lancer (CHAIN_GAP_MAX au plus)."""
-        if self._gone_at is None or clicked - self._gone_at >= CHAIN_WINDOW:
-            return False
-        since = clicked - self._gone_at
-        gap = min(CHAIN_GAP_MAX, max(self._chain_gap, CHAIN_GAP, since + CHAIN_GAP_STEP))
-        learned = f", et {gap:.1f} s entre deux sorts désormais" if gap > self._chain_gap else ""
-        log.info("%s pas parti %s s après le sort précédent (capture : %s) : le jeu n'était pas prêt, pas une question "
-                 "de portée ; nouvel essai d'ici%s", spell.name, f"{since:.1f}".replace(".", ","), path,
-                 learned.replace(".", ","))
-        self._chain_gap = gap
-        return True
 
     def _note_cast(self, spell: CombatSpell, cell: Cell) -> None:
         """Un sort vient de partir sur `cell` : noté pour mesurer ses dégâts à la prochaine lecture de vie."""
@@ -1420,9 +1376,7 @@ class CombatAI:
             stats.tries += 1
             log.info("%s lancé sur %s (rafale, %d/%d%s)", spell.name, _aim_label(target), done + 2, wanted + 1,
                      "" if hp is None else f", {hp} PV")
-            self._chain_wait()
             self.game.click()  # sur place : la souris est sur la cible vérifiée
-            clicked = self.game.now()
             self._mouse_away()
             self._cast_at = time.monotonic()
             if self.settings.fast_end:
@@ -1439,10 +1393,8 @@ class CombatAI:
             if after is not None:
                 path = self.game.recorder.save(after.image, "sort_pas_parti", lossless=True)
                 log.warning("Rafale arrêtée : %s ne semble pas parti (PA inchangés, capture : %s)", spell.name, path)
-                self._chained_too_soon(spell, clicked, path)  # écart appris ; le tour reprend son cours (nouveau plan)
                 stuck = spell_range_visible(after) and self._cancel_spell() is Cast.STUCK
                 break
-            self._gone_at = clicked
             self._use.record(spell, step.cell)
             self._note_cast(spell, step.cell)
             self._wound(spell, step)
@@ -1513,7 +1465,6 @@ class CombatAI:
         personnage. Le 01/10, le jeu a ignoré le clic droit à partir du 6e combat (sort survolé, rien de lancé) :
         la façon qui a marché en dernier passe en premier, pour toute la session."""
         for method in sorted(SELF_CAST_METHODS, key=lambda m: m != self._self_cast):
-            self._chain_wait()
             if method == "clic droit":
                 log.info("%s lancé sur moi (clic droit sur sa case)", spell.name)
                 self.game.click(spell_slot_point(before.layout, spell.slot), before.layout.spread(*SPELL_SLOT_SPREAD),
@@ -1530,10 +1481,8 @@ class CombatAI:
                     self.game.recorder.save(self.game.look(park=False).image, "sort_sur_moi_selectionne", lossless=True)
                 log.info("%s lancé sur moi (touche %s puis clic sur mon personnage)", spell.name, key)
                 self.game.click((me.x, me.y), before.grid.click_spread())
-            clicked = self.game.now()
             after = self._confirm_cast(before, my_team, spell)  # after_cast compris (mode fixe)
             if after is None:
-                self._gone_at = clicked  # l'attaque qui suit est un sort enchaîné (CHAIN_WINDOW)
                 if method != self._self_cast:
                     log.info("Sorts sur moi : %s, gardé pour la session", method)
                 self._self_cast = method

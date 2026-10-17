@@ -293,13 +293,3 @@ def test_dossiers_rapport_complet_et_json(tmp_path, capsys):
     donnees = json.loads(sortie.read_text(encoding="utf-8"))
     assert donnees["sessions"][0]["compteurs"]["passages_ok"] == 2
     assert donnees["outils"][0]["issue"] == "réussi"
-
-
-def test_sort_enchaine_trop_tot_compte_a_part_des_refus():
-    # 17/10 : un sort ignoré par le jeu juste après un autre n'est pas un refus de portée (combat._chained_too_soon).
-    s = lire([
-        EQUIPE,
-        "16:22:03.784 INFO    [Dinarpepe] Lancer de Pièces pas parti 1,7 s après le sort précédent (capture : C:\\x.png) "
-        ": le jeu n'était pas prêt, pas une question de portée ; nouvel essai d'ici, et 3,0 s entre deux sorts désormais",
-    ])
-    assert (s.n["sort_trop_tot"], s.n["sort_refuse"], s.n["sorts_tentes"]) == (1, 0, 0)
