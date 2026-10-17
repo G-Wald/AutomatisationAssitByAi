@@ -86,7 +86,8 @@ travel:                    # changement de carte par les soleils du bord (repér
   still_for: 2.0           # still_after s laissées au départ -> soleil suivant de ce côté, sans attendre walk_timeout
                            # (11/10 : 60 s perdues à chaque mur) ; still_for 0 : attente complète
   motion_cells: 6          # cases de la vue réduite (160 x 90) qui changent quand le personnage marche
-  empty_searches: 2        # mode zone : recherches sans groupe attaquable avant de changer de carte
+  empty_searches: 1        # mode zone : recherches sans groupe attaquable avant de changer de carte (17/10 : 2 -> 1,
+                           # une recherche regarde déjà deux fois avec Z ; la seconde coûtait retry_delay de plus)
   test_steps: 2            # --travel-test : cartes à parcourir avant de revenir
   avoid_zones: ["Incarnam (Cimetière)"]  # zones où ne jamais aller : « Région (Zone) », ou « Zone » pour toutes
                                          # les régions ; Cimetière d'Incarnam : Chafers agressifs (mort le 28/09)
