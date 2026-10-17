@@ -30,6 +30,7 @@ from bot.actions import keys
 from bot.brain.combat import MapMemory
 from bot.brain.engage import Engager, EngageSettings
 from bot.brain.loop import PLACEMENT_FIRST_TRY, PLACEMENT_GIVE_UP, SETTLE_AFTER_READY, SETTLE_SECONDS
+from bot.brain.popups import close_flash_menu
 from bot.brain.rest import CHECK_EVERY, STOOL, STOOL_SPREAD, STOOL_ZONE, RestSettings
 from bot.brain.travel import (RECLICK_EVERY, SCENE_CHANGED, SCENE_STABLE, Journey, TravelSettings, Traveler,
                               escape_menu, make_roamer, same_map)
@@ -44,7 +45,7 @@ from bot.perception.grid import Cell, distance
 from bot.perception.maplabel import MapLabel, read_map_label
 from bot.perception.placement import Placement, entry_banner, read_placement, standing_cells
 from bot.perception.sight import read_blocks
-from bot.perception.popups import find_context_menu, find_known_popup
+from bot.perception.popups import find_context_menu, find_flash_menu, find_known_popup
 from bot.perception.templates import match_template
 from bot.perception.timeline import Portrait, current_portrait, same_portrait
 from bot.perception.ui import READY_SPREAD, hp_ratio, pods_fill, tactical_mode
@@ -188,6 +189,7 @@ class TeamBot:
         self._rejoin: dict[str, Journey] = {}  # trajet d'un suiveur perdu jusqu'à la carte du principal (_regroup)
         self._departure: tuple[int, int] | None = None  # carte que le principal vient de quitter
         self._together_checked = False  # équipe vue sur la carte du principal avant le premier trajet
+        self._flash_checked: set[str] = set()  # combat en cours : fenêtres où un menu de Flash oublié a été cherché
         self._dispatch_to: tuple[int, int] | None = None  # carte où mène le soleil cliqué par toute l'équipe
         self._dispatch_side: str | None = None  # côté de ce soleil
         self._leader_stuck = 0  # fois de suite où les suiveurs sont passés sans le principal
@@ -701,6 +703,7 @@ class TeamBot:
         self._hinted = None
         self._early = None
         self._cells = {}
+        self._flash_checked = set()
         if read_scene(host.game.look(park=False)).phase is Phase.PLACEMENT:
             fighters = self._placement(host)
         else:
@@ -1107,6 +1110,14 @@ class TeamBot:
         frame = member.game.look(park=False)
         if find_known_popup(frame, member.popups.specs) is not None:
             member.popups.handle(frame, None)
+        # 17/10 (journal 155034) : menu de Flash ouvert par le clic droit qui a fait entrer Vertdepomme dans le combat,
+        # par-dessus la timeline : tour illisible (« équipe ? »), 2 min 30 perdues à chacun de ses tours. Cherché dans
+        # toute la fenêtre (0,16 s) au premier tour de chacun dans le combat.
+        if member.name not in self._flash_checked:
+            self._flash_checked.add(member.name)
+            if find_flash_menu(frame, anywhere=True) is not None:
+                log.info("Menu de Flash resté ouvert dans la fenêtre de %s : je le ferme avant de jouer", member.name)
+                close_flash_menu(member.game, frame)
         options = {}
         if _accepts(member.ai.play_turn, "is_mine"):
             options["is_mine"] = lambda frame: self._shows_turn(member, frame)

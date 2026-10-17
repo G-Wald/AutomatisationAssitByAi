@@ -134,17 +134,21 @@ FLASH_MENU_THRESHOLD = 0.8  # 1,0 sur sa capture ; 0,5 au plus sur les autres ca
 FLASH_MENU_REACH = (350, 300)  # px de référence autour du clic : le menu s'ouvre au clic (à gauche ou au-dessus près
 # d'un bord), d'environ 300 x 220
 FLASH_CLOSE_REF = (1465, 991)  # repère de référence : fond beige en bas à gauche de la barre de sorts (15/10)
+FLASH_CLOSE_IN_COMBAT_REF = (1700, 1000)  # sous la 2e rangée de sorts : beige en combat (bouton de fin de tour à gauche)
 FLASH_CLOSE_CLEARANCE = 6  # px de référence autour de ce point : beige uni exigé
 
 
-def find_flash_menu(frame: Frame, around: Point | None = None) -> Point | None:
+def find_flash_menu(frame: Frame, around: Point | None = None, anywhere: bool = False) -> Point | None:
     """Menu contextuel de Flash (« DOFUS RETRO Client », « Flash player WIN », « Qualité Flash », « Options »...) :
     ouvert par un clic droit tombé à côté d'un monstre (14/10, un Piou, clic de sonde en arrière-plan). Échap ne le
     ferme pas (il ouvre le Menu principal derrière) : il se ferme d'un clic ailleurs (flash_close_point). Centre de sa
     1re ligne, None s'il n'est pas là. Cherché autour de `around` (le clic) s'il est donné, sinon au-dessus des
-    grandes surfaces beiges de la carte (ses autres lignes), pas sur tout l'écran (0,16 s)."""
+    grandes surfaces beiges de la carte (ses autres lignes), pas sur tout l'écran (0,16 s) ; `anywhere` : sur tout
+    l'écran quand même (17/10 : ouvert sur la timeline, loin de toute surface beige, le clic qui l'a ouvert oublié)."""
     layout = frame.layout
-    if around is not None:
+    if anywhere:
+        boxes = [(0, 0, layout.width, layout.height)]
+    elif around is not None:
         rx, ry = layout.spread(*FLASH_MENU_REACH)
         boxes = [(round(around[0] - rx), round(around[1] - ry), round(around[0] + rx), round(around[1] + ry))]
     else:
@@ -171,14 +175,16 @@ def find_flash_menu(frame: Frame, around: Point | None = None) -> Point | None:
 def flash_close_point(frame: Frame) -> Point | None:
     """Où cliquer pour fermer le menu de Flash sans rien déclencher : le fond beige en bas à gauche de la barre de
     sorts, sous aucun raccourci. Un clic dans le chat ne le ferme pas (15/10, deux fois en jeu : le chat n'est pas
-    dans la scène Flash). None si ce fond n'est pas beige uni à cet endroit : en combat, le bouton de fin de tour y
-    est (le menu de Flash ne s'ouvre qu'en cherchant un groupe, hors combat), ou une fenêtre assombrit l'écran."""
-    x, y = frame.layout.point(*FLASH_CLOSE_REF)
+    dans la scène Flash). En combat, le bouton de fin de tour y est : le fond beige sous la 2e rangée de sorts, à
+    droite de ce bouton (17/10 : menu de Flash ouvert en rejoignant un combat). None si aucun des deux n'est beige uni
+    (une fenêtre assombrit l'écran)."""
     r = round(frame.layout.length(FLASH_CLOSE_CLEARANCE))
-    patch = frame.image[max(0, y - r) : y + r + 1, max(0, x - r) : x + r + 1]
-    if patch.size == 0 or not near(patch, UI_BEIGE, 10).all():
-        return None
-    return x, y
+    for ref in (FLASH_CLOSE_REF, FLASH_CLOSE_IN_COMBAT_REF):
+        x, y = frame.layout.point(*ref)
+        patch = frame.image[max(0, y - r) : y + r + 1, max(0, x - r) : x + r + 1]
+        if patch.size and near(patch, UI_BEIGE, 10).all():
+            return x, y
+    return None
 
 
 def find_unknown_window(frame: Frame) -> Box | None:

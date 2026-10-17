@@ -24,7 +24,7 @@ import time
 
 from bot.perception.join import JOIN_SPREAD, SWORD_SPREAD, Sword, find_fight_swords, find_join_entry
 from bot.perception.layout import Layout
-from bot.brain.popups import close_flash_menu
+from bot.brain.popups import close_flash_menu, close_small_menu
 from bot.perception.popups import find_context_menu, find_flash_menu, find_small_menu
 from bot.state.scene import Phase, read_scene
 from bot.team.member import Member, to_reference
@@ -158,6 +158,11 @@ class Joiner:
             game.sleep(MENU_WAIT)
             menu = game.look(park=False)
             if read_scene(menu).phase is not Phase.OUT_OF_COMBAT:
+                # 17/10 (journal 155034) : entré dans le combat ET menu de Flash ouvert par le même clic, laissé sur la
+                # timeline : chacun de ses tours illisible. Fermé aussitôt.
+                if find_flash_menu(menu, around=point) is not None:
+                    log.info("Entré dans le combat, mais le clic a aussi ouvert le menu de Flash : je le ferme")
+                    close_flash_menu(game, menu, around=point)
                 return True
             entry = find_join_entry(menu)
             if entry is not None:
@@ -175,8 +180,8 @@ class Joiner:
             if find_small_menu(menu, around=point) is not None or find_context_menu(menu) is not None:
                 log.info("Le clic sur l'épée en %s a ouvert le menu de quelqu'un qui est dessus : je le ferme et je vise "
                          "un autre endroit de l'épée", point)
-                game.press("escape")
-                game.sleep(0.3)
+                close_small_menu(game, menu, lambda f: find_small_menu(f, around=point) is not None
+                                 or find_context_menu(f) is not None)
                 return False
             if time.monotonic() >= end:
                 return False

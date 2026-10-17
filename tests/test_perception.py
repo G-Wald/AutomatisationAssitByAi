@@ -569,9 +569,22 @@ def test_flash_close_point_is_plain_beige_under_the_spell_bar(name):
     assert (np.abs(patch - np.array(UI_BEIGE)).max(axis=2) <= 10).all()
 
 
-@pytest.mark.parametrize("name", ["combat_cra_10pa_4pm", "combat_mon_tour"])
-def test_no_flash_close_point_in_combat_where_the_end_turn_button_is(name):
-    assert flash_close_point(load_frame(name)) is None
+@pytest.mark.parametrize("name", ["combat_cra_10pa_4pm", "combat_mon_tour", "combat_menu_flash_sur_timeline"])
+def test_flash_close_point_in_combat_is_right_of_the_end_turn_button(name):
+    # En combat, le bouton de fin de tour est sous le point d'avant : le fond beige sous la 2e rangée de sorts.
+    frame = load_frame(name)
+    x, y = flash_close_point(frame)
+    end_turn_x, _ = frame.layout.point(1465, 991)
+    assert not frame.layout.on_map((x, y)) and x > end_turn_x + frame.layout.length(150)
+
+
+def test_flash_menu_left_on_the_timeline_found_anywhere():
+    # 17/10 : ouvert par le clic droit qui a fait entrer Vertdepomme dans le combat, par-dessus la timeline : loin de
+    # toute surface beige de la carte, pas trouvé sans le clic ; tour illisible à chacun de ses tours.
+    frame = load_frame("combat_menu_flash_sur_timeline")
+    assert find_flash_menu(frame) is None
+    x, y = find_flash_menu(frame, anywhere=True)
+    assert abs(x - 1469) <= 3 and abs(y - 701) <= 3
 
 
 def test_cells_under_a_long_timeline_are_not_obstacles():

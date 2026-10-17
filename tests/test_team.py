@@ -962,6 +962,20 @@ def test_sword_with_someone_on_it_is_clicked_on_its_pommel_and_a_wrong_menu_is_s
     assert find_small_menu(load_frame("hors_combat")) is None
 
 
+def test_small_menu_closed_by_a_click_under_the_spell_bar_not_escape():
+    # 17/10 (journaux 112944, 125352, 161256) : menu « Parler », « Lin / Cueillir / Faucher »... Échap ne le fermait pas
+    # et ouvrait le Menu principal derrière. Clic sur le fond beige sous la barre de sorts, comme le menu de Flash.
+    from bot.brain.popups import close_small_menu
+    from bot.perception.popups import find_small_menu
+
+    screen = Screen()
+    menu, closed = load_frame("epee_pnj_menu_parler"), load_frame("hors_combat")
+    game = member("Second", screen, menu, closed).game
+    close_small_menu(game, menu, lambda f: find_small_menu(f, around=(1438, 350)) is not None)
+    (close,) = [e[2] for e in events(screen, "click")]
+    assert not menu.layout.on_map(close) and not events(screen, "press")
+
+
 def test_sword_found_by_its_parts_whatever_its_ground_circle_and_background():
     # 01/10 : cercle cyan (et non violet), fleur blanche derrière le pommeau : le modèle entier ne donnait que 0,57.
     (sword,) = find_fight_swords(load_frame("epee_cercle_cyan_fleur"))
@@ -1192,6 +1206,32 @@ def test_flash_menu_opened_by_a_sword_click_is_closed_without_escape():
     close = [e[2] for e in events(screen, "click")]
     assert close and not sword.layout.on_map(close[0])
     assert len(events(screen, "click_right")) >= 2
+
+
+def test_flash_menu_opened_by_the_click_that_joins_is_closed_at_once():
+    # 17/10 (journal 155034) : le clic droit fait entrer Vertdepomme ET ouvre le menu de Flash, laissé sur la timeline.
+    screen = Screen()
+    sword = with_sword("hors_combat", at=(900, 300))
+    joined = with_flash_menu(load_frame("preparation"), at=(982, 346))
+    follower = member("Second", screen, sword, joined, load_frame("preparation"))
+    assert Joiner(timeout=5).join(follower, hint=None)
+    (close,) = [e[2] for e in events(screen, "click")]
+    assert not sword.layout.on_map(close)
+    assert not [e for e in events(screen, "press") if e[2] == "escape"]
+
+
+def test_flash_menu_left_open_is_closed_at_the_first_turn_of_the_fight_only():
+    # 17/10 (journal 155034) : menu de Flash oublié sur la timeline de Vertdepomme, 2 min 30 perdues à chacun de ses
+    # tours. Cherché dans toute la fenêtre à son premier tour du combat (0,16 s), pas aux suivants.
+    screen = Screen()
+    stuck = load_frame("combat_menu_flash_sur_timeline")
+    fighter = member("Vertdepomme", screen, stuck, stuck, load_frame("combat_mon_tour"))
+    bot = team_bot(fighter)
+    bot._play(fighter, read_scene(stuck))
+    (close,) = [e[2] for e in events(screen, "click")]
+    assert not stuck.layout.on_map(close) and [e[1] for e in screen.events].count("tour") == 1
+    bot._play(fighter, read_scene(stuck))
+    assert len(events(screen, "click")) == 1
 
 
 def test_out_of_combat_screen_right_after_ready_is_not_the_fight_end(monkeypatch):

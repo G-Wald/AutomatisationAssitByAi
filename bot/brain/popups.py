@@ -9,6 +9,7 @@
 
 import logging
 import time
+from collections.abc import Callable
 
 from bot.brain.game import Game
 from bot.perception.frame import Frame
@@ -48,6 +49,20 @@ def close_flash_menu(game: Game, frame: Frame, around: Point | None = None) -> b
         frame = game.look(park=False)
     log.warning("Le menu de Flash reste ouvert : ferme-le toi-même (clic à côté du menu)")
     return False
+
+
+def close_small_menu(game: Game, frame: Frame, still_open: Callable[[Frame], bool]) -> None:
+    """Petit menu du jeu ouvert par un clic droit (ressource « Lin / Cueillir / Faucher », personnage, PNJ) : fermé
+    d'un clic sur le même fond beige que le menu de Flash. 17/10 (journaux 112944, 125352, 161256) : Échap ne le
+    fermait pas et ouvrait le Menu principal derrière, à chaque fois. Échap seulement si ce fond n'est pas libre."""
+    point = flash_close_point(frame)
+    if point is None or frame.layout.on_map(point):
+        game.press("escape")
+        return
+    reach = frame.layout.length(FLASH_CLOSE_CLEARANCE / 2)
+    game.click(point, (reach, reach))
+    if game.wait_until(lambda f: not still_open(f), FLASH_CLOSE_WAIT, park=False) is None:
+        log.info("Le menu est encore là après le clic sous la barre de sorts")
 
 
 class PopupCloser:

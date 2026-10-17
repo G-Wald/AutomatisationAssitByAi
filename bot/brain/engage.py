@@ -34,7 +34,7 @@ from datetime import datetime
 from enum import Enum
 
 from bot.brain.game import WATCH_SLACK, Game
-from bot.brain.popups import close_flash_menu
+from bot.brain.popups import close_flash_menu, close_small_menu
 from bot.debug.draw import annotate
 from bot.perception.frame import Frame
 from bot.perception.groups import (OFF_COLUMN, TITLE_SHIFT, GroupTooltip, can_be_under_its_group, column_offset,
@@ -618,8 +618,10 @@ class Engager:
             close_flash_menu(self.game, frame, around=group)
         else:
             if find_context_menu(frame) is not None or find_small_menu(frame, around=group) is not None:
-                log.info("Un autre menu s'est ouvert au clic (personnage ou PNJ sur le groupe ?) : je le ferme")
-                self.game.press("escape")
+                log.info("Un autre menu s'est ouvert au clic (ressource, personnage ou PNJ sur le groupe ?) : je le "
+                         "ferme d'un clic sous la barre de sorts")
+                close_small_menu(self.game, frame, lambda f: find_context_menu(f) is not None
+                                 or find_small_menu(f, around=group) is not None)
             else:
                 self._hit = True
             if self._wait_for_combat(DIRECT_ATTACK_WAIT):
