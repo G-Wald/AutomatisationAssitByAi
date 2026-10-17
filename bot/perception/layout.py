@@ -40,6 +40,10 @@ class Layout:
     def point(self, x_ref: float, y_ref: float) -> Point:
         return round(self.x(x_ref)), round(self.y(y_ref))
 
+    def to_reference(self, point: tuple[float, float]) -> tuple[float, float]:
+        """Point d'une capture -> repère de référence (inverse de point), pour le refaire dans une autre fenêtre."""
+        return REF_WIDTH - (self.width - point[0]) / self.scale, point[1] / self.scale
+
     def length(self, length_ref: float) -> float:
         return length_ref * self.scale
 

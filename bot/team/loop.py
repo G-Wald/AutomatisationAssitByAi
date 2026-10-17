@@ -194,6 +194,8 @@ class TeamBot:
         if self.roamer is not None:
             self.roamer.traveler.on_crossed = self._crossed
             self.roamer.traveler.on_click = self._dispatch
+        if self.engager is not None and self.roamer is not None:  # zones hors d'atteinte gardées (brain/engage.py)
+            self.engager.remember_in(self.roamer.traveler.world, self.roamer.traveler.place)
         self.rest_settings = RestSettings.from_settings(settings)
         # Repos seulement quand le bot circule lui-même (combats enchaînés, déplacements), comme en solo.
         self.rest_enabled = (self.engager is not None or self.roamer is not None) and self.rest_settings.enabled

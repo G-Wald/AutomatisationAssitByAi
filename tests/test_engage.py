@@ -13,18 +13,21 @@ de ceux du combat. 08/10 : en arrière-plan, le survol ne montre rien ; le group
 (BackgroundGame).
 """
 
+import math
 from contextlib import contextmanager
 
 import cv2
 import pytest
 
 from bot.brain.engage import (BELOW_OFFSETS, DIRECT_ATTACK_WAIT, EDGE_SHIFTS, HOVER_WAIT, NEIGHBOURS, NO_MENU_LIMIT,
-                              PROBES, RETRY_SKIPPED, SHOWN_ON_ARRIVAL, SKIP_FOR, UNREACHABLE_HITS, Z_LINGER, Engager,
-                              EngageSettings, hover_points)
+                              PROBES, RETRY_SKIPPED, SHOWN_ON_ARRIVAL, SKIP_FOR, UNREACHABLE_HITS, UNREACHABLE_RECHECK,
+                              Z_LINGER, Engager, EngageSettings, hover_points)
 from bot.brain.game import Game
+from bot.brain.travel import World
 from bot.config import load_settings
 from bot.perception.frame import Frame
 from bot.perception.groups import column_offset, find_group_tooltips, under_its_group
+from bot.perception.layout import Layout
 from conftest import FIXTURES, load_frame, with_flash_menu
 
 
@@ -595,6 +598,114 @@ def test_background_groups_out_of_reach_left_until_the_next_map(caplog):
     engager.new_map()
     assert not engager.engage()
     assert len(clicks(game)) == 1
+
+
+MAP_3_0 = "Incarnam 3,0"
+
+
+def unreachable_visit(world, entry="gauche", **kwargs) -> tuple[BackgroundGame, Engager]:
+    """Visite d'Incarnam 3,0 (arrivée par `entry`), sable des Calanques en arrière-plan : clic droit sur un groupe, ni
+    menu ni combat (hors d'atteinte), sauf `direct`."""
+    game = sand_background_game(opens=(), **{"direct": (), **kwargs})
+    engager = Engager(game, EngageSettings())
+    engager.remember_in(world, lambda: (MAP_3_0, entry))
+    return game, engager
+
+
+def learn_unreachable(world, entry="gauche") -> BackgroundGame:
+    """Les 2 groupes touchés UNREACHABLE_HITS fois chacun sans combat : leurs endroits sont notés."""
+    game, engager = unreachable_visit(world, entry)
+    for _ in range(2 * UNREACHABLE_HITS):
+        assert not engager.engage()
+    assert len(clicks(game)) == 2 * UNREACHABLE_HITS
+    return game
+
+
+def test_unreachable_zones_remembered_for_the_next_visit(tmp_path, caplog):
+    # 17/10, Incarnam 3,0 : ~1 min de clics à chaque passage pour réapprendre les groupes hors d'atteinte. Notés dans
+    # data/carte.json (par carte, par côté d'arrivée), ils sont laissés d'emblée au passage suivant, même après
+    # relance (mémoire relue du fichier) : aucun clic, la carte compte comme vide (mode zone : carte suivante).
+    caplog.set_level("INFO")
+    path = tmp_path / "carte.json"
+    learn_unreachable(World(path))
+    assert "Endroit hors d'atteinte noté pour les prochains passages" in caplog.text
+    zones = World(path).unreachable_from(MAP_3_0, "gauche")
+    assert len(zones) == 2 and all(zone["laissee"] == 0 for zone in zones)
+    game, engager = unreachable_visit(World(path))
+    assert not engager.engage()
+    assert clicks(game) == [] and engager.none_found and not engager.missed
+    assert "2 zone(s) hors d'atteinte notée(s) à un passage précédent" in caplog.text
+    assert [zone["laissee"] for zone in World(path).unreachable_from(MAP_3_0, "gauche")] == [1, 1]
+
+
+def test_unreachable_zones_kept_in_reference_pixels():
+    # Les endroits notés ne dépendent pas de la taille de la fenêtre : repère des captures de référence.
+    world = World(None)
+    game = learn_unreachable(world)
+    layout = game.z.layout
+    for zone in world.unreachable_from(MAP_3_0, "gauche"):
+        assert any(math.dist((zone["x"], zone["y"]), layout.to_reference(click)) <= 1 for click in clicks(game))
+    small = Layout(959, 504)
+    assert small.to_reference(small.point(1148.0, 402.0)) == pytest.approx((1148, 402), abs=1)
+
+
+def test_unreachable_zones_depend_on_the_arrival_side():
+    # Carte coupée en deux : arrivé par l'autre côté, c'est l'autre moitié qui est accessible ; rien n'est laissé.
+    world = World(None)
+    learn_unreachable(world, entry="gauche")
+    game, engager = unreachable_visit(world, entry="droite")
+    assert not engager.engage()
+    assert len(clicks(game)) == 1
+
+
+def test_map_never_noted_unchanged(tmp_path):
+    # Carte sans zone notée (ou position pas sûre) : comme avant, rien d'écrit tant que rien n'est confirmé.
+    path = tmp_path / "carte.json"
+    game, engager = unreachable_visit(World(path))
+    assert not engager.engage()
+    assert len(clicks(game)) == 1 and not path.exists()
+    world = World(None)
+    learn_unreachable(world)
+    game = sand_background_game(opens=(), direct=())
+    engager = Engager(game, EngageSettings())
+    engager.remember_in(world, lambda: None)  # carte pas sûre : la mémoire n'est ni lue ni écrite
+    assert not engager.engage()
+    assert len(clicks(game)) == 1
+
+
+def test_noted_zone_rechecked_with_one_click_then_confirmed(caplog):
+    # Toutes les UNREACHABLE_RECHECK visites où elle a été laissée, une zone est revérifiée : un seul clic, qui la
+    # confirme s'il touche sans combat (compteur remis à zéro), et ses groupes sont de nouveau laissés.
+    caplog.set_level("INFO")
+    world = World(None)
+    learn_unreachable(world)
+    world.set_unreachable_from(MAP_3_0, "gauche", [{**zone, "laissee": UNREACHABLE_RECHECK}
+                                                   for zone in world.unreachable_from(MAP_3_0, "gauche")])
+    game, engager = unreachable_visit(world)
+    assert not engager.engage()
+    assert len(clicks(game)) == 1 and "(2 à revérifier d'un clic)" in caplog.text
+    assert "Zone hors d'atteinte confirmée" in caplog.text
+    assert sorted(zone["laissee"] for zone in world.unreachable_from(MAP_3_0, "gauche")) == [0, UNREACHABLE_RECHECK]
+    assert not engager.engage()
+    assert len(clicks(game)) == 2  # l'autre zone revérifiée à son tour
+    game.actions.clear()
+    assert not engager.engage()
+    assert clicks(game) == [] and engager.none_found
+
+
+def test_combat_in_a_noted_zone_forgets_it(caplog):
+    # Pas de faux positif éternel : à sa revérification, le groupe de la zone lance le combat ; elle est retirée.
+    caplog.set_level("INFO")
+    world = World(None)
+    learn_unreachable(world)
+    world.set_unreachable_from(MAP_3_0, "gauche", [{**zone, "laissee": UNREACHABLE_RECHECK}
+                                                   for zone in world.unreachable_from(MAP_3_0, "gauche")])
+    game, engager = unreachable_visit(world, direct=("right",))
+    assert engager.engage()
+    assert "je l'oublie" in caplog.text
+    assert len(world.unreachable_from(MAP_3_0, "gauche")) == 1
+    world.set_unreachable_from(MAP_3_0, "gauche", [])
+    assert "hors_atteinte_depuis" not in world.maps[MAP_3_0]
 
 
 def test_background_clicks_limited_then_the_group_is_skipped(caplog):

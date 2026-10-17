@@ -11,8 +11,9 @@ entoure de blanc (perception/exits.py). Un clic sur le soleil fait marcher le pe
 voisine ; on attend que le nom de la carte change.
 
 Mémoire (data/carte.json) : pour chaque carte, sa zone, son dernier passage, la case de ses soleils et ce que
-donne chaque sortie (carte voisine, « bloquée »), d'une session à l'autre. Références (config/monde, voir
-brain/atlas.py) : cases des soleils, carte où mène chaque côté et zone de chaque carte, avant même d'y être passé.
+donne chaque sortie (carte voisine, « bloquée »), d'une session à l'autre ; selon le côté d'arrivée, les zones de
+groupes hors d'atteinte (brain/engage.py). Références (config/monde, voir brain/atlas.py) : cases des soleils, carte
+où mène chaque côté et zone de chaque carte, avant même d'y être passé.
 Ordre de confiance : ce que le bot a vu, puis les références, puis la recherche à l'écran.
 
 Cartes et zones interdites (travel.avoid_maps, travel.avoid_zones) : jamais prises, demi-tour si on y arrive
@@ -54,6 +55,7 @@ log = logging.getLogger(__name__)
 
 BLOCKED = "bloquée"
 MENU = "menu"  # le clic a ouvert le menu d'un personnage ou d'un monstre posé sur le soleil
+START = "départ"  # côté d'arrivée inconnu : carte du début du trajet (Traveler.place)
 # Toujours sur la carte de départ, décor inchangé : le soleil est recliqué toutes les RECLICK_EVERY s (un personnage passait
 # dessus, le clic l'a visé lui : 03/10, 12 s perdues). En marche, recliquer la même case ne change rien.
 RECLICK_EVERY = 3.0
@@ -267,6 +269,29 @@ class World:
         if changed:
             self.save()
         return changed
+
+    def unreachable_from(self, key: str | None, entry: str | None) -> list[dict]:
+        """Zones de groupes hors d'atteinte (brain/engage.py) pour qui arrive sur la carte par le côté `entry` (START :
+        début du trajet), en px de référence."""
+        if not key or not entry:
+            return []
+        zones = ((self.maps.get(key) or {}).get("hors_atteinte_depuis") or {}).get(entry) or []
+        return [dict(zone) for zone in zones if isinstance(zone, dict)]
+
+    def set_unreachable_from(self, key: str | None, entry: str | None, zones: list[dict]) -> None:
+        if not key or not entry:
+            return
+        info = self.maps.get(key)
+        if not zones and not (info or {}).get("hors_atteinte_depuis", {}).get(entry):
+            return  # rien de noté, rien à retirer : la carte n'est pas créée pour rien
+        by_entry = self.maps.setdefault(key, {"sorties": {}}).setdefault("hors_atteinte_depuis", {})
+        if zones:
+            by_entry[entry] = zones
+        else:
+            del by_entry[entry]
+            if not by_entry:
+                del self.maps[key]["hors_atteinte_depuis"]
+        self.save()
 
     def forget_sun(self, key: str | None, side: str) -> None:
         if key and side in (self.maps.get(key) or {}).get("soleils", {}):
@@ -525,6 +550,14 @@ class Traveler:
             return label.coords == self.coords
         return not self.jumped and self._unread_steps <= SURE_UNREAD
 
+    def place(self) -> tuple[str, str] | None:
+        """(carte, côté par lequel on y est arrivé, START au début du trajet) si la carte est sûre (_sure_here), None
+        sinon : ce qui est noté selon le côté d'arrivée (groupes hors d'atteinte, brain/engage.py) n'est lu et écrit
+        que là. Sur une carte coupée en deux, ce côté dit quelle moitié est accessible."""
+        if not self._sure_here():
+            return None
+        return self.key(), self.entry or START
+
     def _remember_suns(self, exits: list[Exit]) -> None:
         if self._sure_here():
             self.world.remember_suns(self.key(), exits)
@@ -711,6 +744,7 @@ class Traveler:
             dx, dy = DELTA[side]
             expected = (info.leads_to.get(side) if info else None) or (before_coords[0] + dx, before_coords[1] + dy)
         self._locate(frame, label, expected)
+        self._last_label = label  # carte sûre ou non (place) dès l'arrivée, avant le look suivant
         log.info("Nouvelle carte : %s%s", label.describe(),
                  f" (coordonnées {self.coords[0]},{self.coords[1]} d'après le chemin)"
                  if label.coords is None and self.coords else "")

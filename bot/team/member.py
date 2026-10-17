@@ -28,7 +28,7 @@ from bot.brain.popups import PopupCloser
 from bot.brain.spellbook import SpellBook
 from bot.capture.window import GameWindow
 from bot.debug.recorder import Recorder
-from bot.perception.layout import REF_WIDTH, Layout, Point
+from bot.perception.layout import Layout, Point
 from bot.perception.popups import load_popup_specs
 
 log = logging.getLogger(__name__)
@@ -38,7 +38,7 @@ FOCUS_TRIES = 3
 
 def to_reference(layout: Layout, point: tuple[float, float]) -> tuple[float, float]:
     """Point d'une capture -> repère de référence (inverse de Layout.point), pour le refaire dans une autre fenêtre."""
-    return REF_WIDTH - (layout.width - point[0]) / layout.scale, point[1] / layout.scale
+    return layout.to_reference(point)
 
 
 class Focus:
