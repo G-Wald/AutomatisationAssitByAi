@@ -62,6 +62,19 @@ def test_find_fighters(name, expected):
     assert_near(positions(name), expected)
 
 
+def test_team_of_8_placed_in_a_diagonal_line_is_seen():
+    """18/10, forêt d'Incarnam 1,6 : les 8 personnages placés en diagonale, leurs cercles collés en une seule tache de
+    424 x 215 px, trop grande pour des cercles collés ; aucun ne se voyait (deux combats de 7 et 4 min, tours passés)."""
+    frame = load_frame("combat_equipe_8_en_diagonale")
+    fighters = find_fighters(frame)
+    assert sorted(f.cell for f in fighters if f.team == RED) == [(18, 14), (19, 13), (20, 12), (21, 11), (22, 10),
+                                                                  (23, 9), (24, 8), (25, 7)]
+    assert [f.cell for f in fighters if f.team == BLUE] == [(8, 2)]  # sous « Coordonnées », en haut à gauche
+    for fighter in fighters:
+        x, y = frame.grid.center(fighter.cell)
+        assert abs(x - fighter.x) < 4 and abs(y - fighter.y) < 4
+
+
 def test_fighters_stand_on_cell_centers():
     frame = load_frame("combat_portee_sort")
     for fighter in find_fighters(frame):

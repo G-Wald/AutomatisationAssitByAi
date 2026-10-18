@@ -52,10 +52,13 @@ def _is_ring(blob: Blob, layout: Layout) -> bool:
 
 
 def _touching_rings(blob: Blob, layout: Layout) -> bool:
-    """Tache creuse plus grande qu'un cercle : plusieurs cercles collés (115 x 55 px pour deux, le 01/10)."""
+    """Tache creuse plus grande qu'un cercle : plusieurs cercles collés (115 x 55 px pour deux, le 01/10). Pas de
+    taille maximale : 18/10, forêt d'Incarnam 1,6, les 8 personnages placés en diagonale faisaient une seule tache de
+    424 x 215 px (plus que les 400 x 200 admis alors) ; personne ne se voyait, deux combats de 7 et 4 min. Chaque
+    cercle est vérifié sur sa case (_rings_in)."""
     return (
-        layout.length(52) <= blob.w <= layout.length(400)
-        and layout.length(26) <= blob.h <= layout.length(200)
+        layout.length(52) <= blob.w
+        and layout.length(26) <= blob.h
         and blob.area >= layout.area(300)
         and blob.fill <= 0.45
     )

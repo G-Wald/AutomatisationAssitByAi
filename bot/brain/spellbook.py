@@ -48,6 +48,7 @@ from bot.perception.spellbook import (
     LIST_POINT,
     ROWS,
     THUMB_BOTTOM,
+    THUMB_TOP,
     SpellEntry,
     find_close_button,
     find_spell_window,
@@ -86,6 +87,9 @@ FIRST_NOTCHES = 2
 PAGE_STEP = 7
 MAX_PAGES = 6  # 22 sorts par classe : 3 pages suffisent même à une ligne par cran
 TOP_NOTCHES = 30  # liste restée défilée à l'ouverture : remontée tout en haut d'un coup
+# Molette sans effet (arrière-plan) : clics sur le rail au-dessus de la poignée, ~5 lignes chacun (18/10 : la molette
+# n'a pas remonté la liste de Lestunes, lue à partir de la 11e ligne comme si c'était la 1re ; Enutrof sans ses sorts).
+TOP_CLICKS = 6
 ARROW_CLICKS = 3  # molette et rail sans effet : clics sur la flèche du bas de la barre de défilement
 # 11/10 (tools/arriere_plan_sorts.py, en arrière-plan) : molette (3 façons), flèche du bas (clic d'un bloc ou lent) et
 # touches sans effet ; un clic sur le rail sous la poignée fait défiler d'environ 5 lignes (poignée glissée aussi).
@@ -433,6 +437,16 @@ def _filled(entry: SpellEntry) -> int:
     return (entry.pa is not None) + (entry.reach is not None) + (entry.level is not None)
 
 
+def _rows_text(rows: list[int]) -> str:
+    """Lignes de la liste (numérotées à partir de 0) pour le journal : « lignes 1 à 10 », « ligne 12 », « lignes 1, 3 »."""
+    rows = sorted(rows)
+    if len(rows) == 1:
+        return f"ligne {rows[0] + 1}"
+    if rows == list(range(rows[0], rows[-1] + 1)):
+        return f"lignes {rows[0] + 1} à {rows[-1] + 1}"
+    return "lignes " + ", ".join(str(r + 1) for r in rows)
+
+
 class SpellBook:
     """Sorts (et caractéristiques) d'un personnage pour la session : lus à l'écran ou repris de la dernière session.
 
@@ -498,8 +512,13 @@ class SpellBook:
         return bool(self.entries)
 
     def _read_window(self) -> bool:
-        """Ouvre la fenêtre des sorts, lit la liste, referme. True si lu."""
+        """Ouvre la fenêtre des sorts, lit la liste, referme. True si lu.
+
+        Lignes numérotées dans toute la liste : la première visible d'après la poignée de la barre de défilement si la
+        liste n'a pas pu être remontée en haut. Lecture incomplète (lignes d'avant ou d'après pas lues, moins de lignes
+        que n'en compte la poignée) : complétée par la lecture retenue, et jamais retenue à sa place (_remember)."""
         self._tries += 1
+        self._incomplete = False
         frame = self.game.look()
         if find_spell_window(frame) is None:
             button = find_spells_button(frame)
@@ -510,12 +529,23 @@ class SpellBook:
             self.game.sleep(0.8)
             frame = self.game.look()
         frame = self._scroll_to_top(frame)
-        entries = read_spell_window(frame)
+        bar = scroll_bar(frame)
+        first = bar.first_row if bar is not None else 0
+        entries = read_spell_window(frame, first_row=first)
         self.game.recorder.save(frame.image, "fenetre_sorts", lossless=True)
         if not entries:
             log.warning("Fenêtre des sorts introuvable ou illisible : portées supposées (combat.spell.range)")
             return False
-        entries = self._next_pages(frame, entries)
+        if first:
+            self._incomplete = True
+            log.warning("Liste des sorts restée défilée : lue à partir de la ligne %d (d'après la poignée de la barre de "
+                        "défilement), les %d premières manquent", first + 1, first)
+        entries = self._next_pages(frame, entries, first)
+        expected = bar.rows if bar is not None else None
+        if expected and len(entries) < expected:
+            self._incomplete = True
+            log.warning("Fenêtre des sorts : %d lignes lues sur %d (d'après la poignée de la barre de défilement)",
+                        len(entries), expected)
         if self._incomplete:
             entries = self._completed_from_memory(entries)
         self.learn(entries)
@@ -525,9 +555,9 @@ class SpellBook:
         return True
 
     def _scroll(self, frame: Frame, notches: int, mode: str = "molette") -> Frame | None:
-        """Fait défiler la liste (`notches` crans de molette, un clic sur le rail sous la poignée, ou `notches` clics sur
-        la flèche du bas), écarte la souris de la liste (une ligne survolée pourrait changer d'aspect), puis capture.
-        None si le geste a été annulé."""
+        """Fait défiler la liste (`notches` crans de molette, un clic sur le rail sous la poignée, ou au-dessus pour
+        « rail_haut », ou `notches` clics sur la flèche du bas), écarte la souris de la liste (une ligne survolée
+        pourrait changer d'aspect), puis capture. None si le geste a été annulé."""
         corner = find_spell_window(frame)
         if corner is None:
             return None
@@ -543,6 +573,13 @@ class SpellBook:
             for _ in range(notches):
                 if self.game.click(window_point(frame, corner, ARROW_DOWN), frame.layout.spread(2, 2)) is False:
                     return None
+        elif mode == "rail_haut":
+            bar = scroll_bar(frame)
+            if bar is None:
+                return None
+            above = (ARROW_DOWN[0], (THUMB_TOP + bar.top) / 2)  # entre le haut de la course et la poignée
+            if self.game.click(window_point(frame, corner, above), frame.layout.spread(2, 4)) is False:
+                return None
         elif self.game.wheel(window_point(frame, corner, LIST_POINT), notches, spread) is False:
             return None
         self.game.move(window_point(frame, corner, AWAY_POINT), spread)
@@ -556,18 +593,36 @@ class SpellBook:
         if bar is None or bar.at_top:
             return frame
         log.info("Liste des sorts défilée à l'ouverture : je la remonte en haut")
-        return self._scroll(frame, -TOP_NOTCHES) or frame
+        if SpellBook.scroll_mode in (None, "molette"):  # molette pas encore essayée, ou qui a marché
+            frame = self._scroll(frame, -TOP_NOTCHES) or frame
+            bar = scroll_bar(frame)
+            if bar is None or bar.at_top:
+                return frame
+            log.info("La molette ne remonte pas la liste des sorts : clics sur la barre de défilement, au-dessus de la "
+                     "poignée")
+        for _ in range(TOP_CLICKS):
+            after = self._scroll(frame, 1, "rail_haut")
+            if after is None:
+                break
+            frame, before, bar = after, bar, scroll_bar(after)
+            if bar is None or bar.at_top:
+                return frame
+            if bar.top >= before.top:
+                break  # le clic ne la fait pas remonter
+        log.warning("Liste des sorts pas remontée en haut")
+        return frame
 
-    def _next_pages(self, frame: Frame, entries: list[SpellEntry]) -> list[SpellEntry]:
+    def _next_pages(self, frame: Frame, entries: list[SpellEntry], first_row: int = 0) -> list[SpellEntry]:
         """Lignes au-delà des 10 premières : la liste défile (molette, sinon flèche du bas) page par page jusqu'en
         bas ; chaque page est recalée sur la précédente par les icônes de ses lignes (page_shift) et ses nouvelles
-        lignes sont ajoutées, numérotées dans toute la liste. Au moindre doute, on garde ce qui est déjà lu."""
+        lignes sont ajoutées, numérotées dans toute la liste (`first_row` : ligne montrée en haut de la 1re page). Au
+        moindre doute, on garde ce qui est déjà lu."""
         bar = scroll_bar(frame)
         if bar is None or not bar.scrolls:
             return entries
         mode = SpellBook.scroll_mode or "molette"
         notches = {"molette": FIRST_NOTCHES, "rail": 1, "fleche": ARROW_CLICKS}[mode]
-        icons, offset, pages = row_icons(frame), 0, 1
+        icons, offset, pages = row_icons(frame), first_row, 1
         while pages < MAX_PAGES + 3:  # le rail avance moins vite (~5 lignes) : quelques pages de plus
             after = self._scroll(frame, notches, mode)
             if after is None:
@@ -624,22 +679,23 @@ class SpellBook:
 
     def _completed_from_memory(self, entries: list[SpellEntry]) -> list[SpellEntry]:
         """Liste lue en partie (11/10 : en arrière-plan, elle ne défilait pas : 10 sorts sur 23, Tempête de Puissance et
-        Maîtrise de l'Arc inconnues) : les lignes suivantes reprises de la dernière lecture retenue, si elle va plus
-        loin. Les lignes lues à l'instant gardent la priorité."""
+        Maîtrise de l'Arc inconnues) : les lignes manquantes (suivantes, ou précédentes quand la liste n'a pas pu être
+        remontée en haut, 18/10) reprises de la dernière lecture retenue, si elle va plus loin. Les lignes lues à
+        l'instant gardent la priorité. Reprises d'une lecture elle-même incomplète : le tout le reste."""
         record = self.memory.load(self.name) if self.memory is not None else None
         spells = (record or {}).get("sorts") or {}
         lines = spells.get("lignes") if isinstance(spells, dict) else None
         stored = [entry_of(line) if isinstance(line, dict) else None for line in lines or []]
         if not stored or not all(stored) or len(stored) <= len(entries):
             log.warning("%s : liste des sorts incomplète, et rien de plus complet en mémoire : les sorts des lignes "
-                        "suivantes resteront inconnus", self.name or "Personnage")
+                        "manquantes resteront inconnus", self.name or "Personnage")
             return entries
         read = {entry.row for entry in entries}
-        merged = entries + [entry for entry in stored if entry.row not in read]
-        log.info("%s : liste des sorts incomplète : lignes %d à %d reprises de la lecture du %s", self.name,
-                 len(entries) + 1, len(merged), when(spells.get("lus_le")))
-        self._incomplete = False
-        return sorted(merged, key=lambda e: e.row)
+        added = [entry for entry in stored if entry.row not in read]
+        log.info("%s : liste des sorts incomplète : %s reprises de la lecture du %s", self.name,
+                 _rows_text([entry.row for entry in added]), when(spells.get("lus_le")))
+        self._incomplete = spells.get("complete") is False
+        return sorted(entries + added, key=lambda e: e.row)
 
     def _log_spells(self, frame: Frame | None = None) -> None:
         for spell in self.spells.values():
@@ -658,7 +714,10 @@ class SpellBook:
         spells = (record or {}).get("sorts") or {}
         lines = spells.get("lignes") if isinstance(spells, dict) else None
         entries = [entry_of(line) if isinstance(line, dict) else None for line in lines or []]
-        if entries and all(entries):
+        if entries and all(entries) and spells.get("complete") is False:
+            log.info("%s : sorts retenus d'une lecture incomplète (%d lignes, %s) : lus à l'écran", self.name,
+                     len(entries), when(spells.get("lus_le")))
+        elif entries and all(entries):
             self.learn(entries)
             self._spells_read_at = spells.get("lus_le")
             self._recalled_slots = {str(k): str(v) for k, v in (spells.get("cases") or {}).items()}
@@ -697,14 +756,17 @@ class SpellBook:
 
     def _remember(self) -> None:
         """Retient pour la session suivante ce qui est connu ; une partie pas lue cette fois (lecture ratée) garde ce
-        qui avait été retenu avant."""
+        qui avait été retenu avant. Une lecture des sorts qui a moins de lignes que celle retenue ne la remplace pas
+        (18/10 : 11 lignes sur 21 chez Lestunes, retenues à la place des 21), sauf si celle-ci était incomplète."""
         if self.memory is None:
             return
         record = self.memory.load(self.name) or {}
-        stored = ((record.get("sorts") or {}).get("lignes") or []) if isinstance(record.get("sorts"), dict) else []
-        if self.entries and self._incomplete and len(stored) > len(self.entries):
-            log.info("%s : lecture des sorts incomplète, la lecture retenue (%d lignes) est gardée", self.name,
-                     len(stored))
+        spells = record.get("sorts") if isinstance(record.get("sorts"), dict) else {}
+        stored = spells.get("lignes") or []
+        if self.entries and len(stored) > len(self.entries) and (self._incomplete or spells.get("complete") is not False):
+            log.info("%s : lecture des sorts %s (%d lignes), la lecture retenue (%d lignes, %s) est gardée", self.name,
+                     "incomplète" if self._incomplete else "plus courte", len(self.entries), len(stored),
+                     when(spells.get("lus_le")))
         elif self.entries:
             record["sorts"] = self._spells_record()
         if self.stats is not None:
@@ -727,8 +789,8 @@ class SpellBook:
                                 degats=round(mean_damage(effects, self.stats), 2))
             lines.append(line)
         slots = {str(slot): self._slot_name(entry) for slot, entry in sorted(self.slots.items())}
-        return {"lus_le": self._spells_read_at or now_text(), "classe": self.class_key, "lignes": lines,
-                "cases": slots or self._recalled_slots}
+        return {"lus_le": self._spells_read_at or now_text(), "classe": self.class_key, "complete": not self._incomplete,
+                "lignes": lines, "cases": slots or self._recalled_slots}
 
     def _slot_name(self, entry: SpellEntry) -> str:
         spell = self.spells.get(entry.row)

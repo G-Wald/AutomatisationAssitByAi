@@ -226,3 +226,94 @@ def test_real_list_read_to_the_last_row():
     assert names[4] == ("Flèche Magique", 6) and names[6] == ("Flèche Enflammée", 6)  # « Niv. 6 » lu
     assert names[21] == ("Maîtrise de l'Arc", 5) and names[13] == ("Tir Puissant", 4)
     assert by_row[9].reach == (1, 9) and by_row[12].reach == (6, 8)  # chiffres 9 et 6 lus
+
+
+# Liste restée défilée en bas à l'ouverture, que la molette ne remonte pas (18/10, Lestunes, en arrière-plan : lue à
+# partir de sa 11e ligne comme si c'était la 1re, l'Enutrof sans aucun sort de sa barre, case 3 jouée 41 fois).
+LESTUNES = ("fenetre_sorts_enutrof_defilee_en_bas", "fenetre_sorts_enutrof_defilee_en_bas_page_2")
+
+
+def test_scroll_bar_tells_the_list_length_and_the_first_row_shown():
+    first, last = (scroll_bar(load_frame(name)) for name in LESTUNES)
+    assert (first.rows, first.first_row) == (21, 10) and not first.at_end  # lignes 11 à 20 sur 21
+    assert (last.rows, last.first_row) == (21, 11) and last.at_end
+    assert scroll_bar(on_screen(CRA)).first_row == 0
+    assert [scroll_bar(list_page(offset)).first_row for offset in (0, 4, 6, 10)] == [0, 4, 6, 10]
+
+
+def test_list_left_scrolled_goes_back_up_with_the_scroll_bar_when_the_wheel_does_nothing(caplog):
+    closed = load_frame("hors_combat")
+    game = FakeGame(closed, list_page(10), list_page(10), list_page(5), list_page(0),  # molette sans effet, 2 clics
+                    list_page(0), list_page(5), list_page(10), list_page(10), closed)
+    book = SpellBook(game)
+    with caplog.at_level(logging.INFO):
+        assert book.read()
+    assert "La molette ne remonte pas la liste des sorts" in caplog.text
+    up = clicks(game)[1:3]  # après le bouton baguette : sur le rail, au-dessus de la poignée (en bas : 442 à 692)
+    assert all(abs(x - (640 + 548)) <= 3 and 40 + 193 < y < 40 + 442 for x, y in up)
+    assert [e.row for e in book.entries] == list(range(20)) and not book._incomplete
+
+
+def test_list_stuck_at_the_bottom_is_numbered_from_the_scroll_bar_and_completed_from_memory(tmp_path, caplog):
+    from bot.brain.memory import CharacterMemory, SessionSettings
+    session = SessionSettings(mode="controle", stats=False, memory=tmp_path)
+    closed = load_frame("hors_combat")
+    full = SpellBook(FakeGame(closed, list_page(0), list_page(6), list_page(10), list_page(10), closed),
+                     name="Lestunes", session=session)
+    assert full.read() and len(full.entries) == 20
+    stuck = FakeGame(closed, list_page(10), list_page(10), list_page(10), list_page(10), closed)  # rien ne la remonte
+    book = SpellBook(stuck, name="Lestunes", session=session)
+    with caplog.at_level(logging.INFO):
+        assert book.read()
+    assert "lue à partir de la ligne 11" in caplog.text and "lignes 1 à 10 reprises de la lecture" in caplog.text
+    assert [e.row for e in book.entries] == list(range(20))
+    enutrof = read_spell_window(on_screen(ENUTROF))  # lignes 11 à 20 : lues à l'instant, à leur place
+    assert [(e.pa, e.spell_range) for e in book.entries[10:]] == [(e.pa, e.spell_range) for e in enutrof]
+    assert [(e.pa, e.spell_range) for e in book.entries] == [(e.pa, e.spell_range) for e in full.entries]
+    stored = CharacterMemory(tmp_path).load("Lestunes")["sorts"]
+    assert len(stored["lignes"]) == 20 and stored["complete"]
+
+
+def test_real_list_stuck_at_the_bottom_rows_numbered_from_the_scroll_bar(caplog):
+    closed = load_frame("hors_combat")
+    first, last = (load_frame(name) for name in LESTUNES)
+    game = FakeGame(closed, first, first, first, last, last, closed)  # ni la molette ni le rail ne la remontent
+    book = SpellBook(game)
+    with caplog.at_level(logging.INFO):
+        assert book.read()
+    assert [e.row for e in book.entries] == list(range(10, 21)) and book.class_key == "enutrof"
+    assert "11 lignes lues sur 21" in caplog.text and book._incomplete
+
+
+def test_shorter_reading_never_replaces_a_longer_one_in_memory(tmp_path, caplog):
+    """18/10 : la lecture de 11 lignes de Lestunes, pas signalée incomplète, a remplacé ses 21 lignes retenues."""
+    from bot.brain.memory import CharacterMemory, SessionSettings
+    session = SessionSettings(mode="controle", stats=False, memory=tmp_path)
+    closed = load_frame("hors_combat")
+    full = SpellBook(FakeGame(closed, list_page(0), list_page(6), list_page(10), list_page(10), closed),
+                     name="Lestunes", session=session)
+    assert full.read()
+    short = SpellBook(FakeGame(closed, on_screen(ENUTROF), closed), name="Lestunes", session=session)
+    short.learn(read_spell_window(on_screen(ENUTROF)))  # 10 lignes, lecture que rien ne dit incomplète
+    with caplog.at_level(logging.INFO):
+        short._remember()
+    assert "la lecture retenue (20 lignes" in caplog.text
+    assert len(CharacterMemory(tmp_path).load("Lestunes")["sorts"]["lignes"]) == 20
+
+
+def test_incomplete_reading_in_memory_is_read_again_on_screen(tmp_path, caplog):
+    from bot.brain.memory import CharacterMemory, SessionSettings
+    closed = load_frame("hors_combat")
+    stuck = FakeGame(closed, list_page(10), list_page(10), list_page(10), list_page(10), closed)
+    control = SessionSettings(mode="controle", stats=False, memory=tmp_path)
+    assert SpellBook(stuck, name="Lestunes", session=control).read()
+    assert CharacterMemory(tmp_path).load("Lestunes")["sorts"]["complete"] is False  # rien de mieux en mémoire
+    memory = SessionSettings(mode="memoire", stats=False, memory=tmp_path)
+    game = FakeGame(closed, list_page(0), list_page(6), list_page(10), list_page(10), closed)
+    book = SpellBook(game, name="Lestunes", session=memory)
+    with caplog.at_level(logging.INFO):
+        assert book.read()
+    assert "sorts retenus d'une lecture incomplète" in caplog.text
+    assert [e.row for e in book.entries] == list(range(20))
+    stored = CharacterMemory(tmp_path).load("Lestunes")["sorts"]
+    assert len(stored["lignes"]) == 20 and stored["complete"]  # la lecture complète remplace l'incomplète

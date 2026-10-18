@@ -880,8 +880,9 @@ class CombatAI:
             log.info("Sort pour la tactique : %s (case %d, %d PA, portée %d à %d%s, %s)", spell.name, spell.slot,
                      spell.pa, *spell.spell_range, ", en ligne" if spell.in_line else "", what)
         if not self._spells:
-            log.warning("Aucun sort de la barre n'est connu (fenêtre des sorts, Solomonk) : j'utilise la case %d",
-                        self.settings.spell_slot)
+            # « Solomonk » : la référence des sorts (config/sorts/solomonk.json), pas un sort lu.
+            log.warning("Aucun sort de la barre n'est connu (sorts lus dans la fenêtre des sorts et retrouvés dans la "
+                        "référence Solomonk) : j'utilise la case %d", self.settings.spell_slot)
 
     def _learn_blocks(self, frame: Frame, fighters: list[Fighter]) -> None:
         """Blocs et trous lus sur la carte propre (mode tactique, sans portée affichée) : MapMemory.learn_terrain."""
