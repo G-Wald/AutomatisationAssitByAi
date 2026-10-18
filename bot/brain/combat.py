@@ -650,6 +650,7 @@ class CombatAI:
                 self._use.refused |= refusals(spell, step.cell, self.spells, self._use)
                 if all(e.cell != step.cell for e in enemies):
                     self._use.empty_refused.add(spell.spell_id)  # zone sur une case vide : pas une autre d'ici
+                    self._use.empty_refusals[spell.spell_id] += 1  # ... ni du combat, au-delà de EMPTY_REFUSALS_LIMIT
                 self._use.beyond.update(refused_beyond(spell, distance(me.cell, step.cell), self.spells, self._use))
             else:
                 break

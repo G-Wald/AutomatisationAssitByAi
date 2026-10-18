@@ -150,6 +150,18 @@ def test_zone_refused_on_an_empty_cell_tries_no_other_empty_cell_from_here():
     assert again is None or again.cell in enemies  # plus de case vide d'ici ; un ennemi visé reste possible
 
 
+def test_zone_refused_twice_on_empty_cells_aims_only_at_enemies_for_the_fight():
+    # 18/10, Chafers 3,6 : la même case vide refusée depuis 3 cases de suite (un pas entre chaque efface les refus d'ici).
+    from bot.brain.tactics import EMPTY_REFUSALS_LIMIT
+
+    poussiere = solomonk_spell("96")
+    enemies = [(3, 1), (5, 1), (4, 4)]
+    use = new_use(6)
+    use.empty_refusals[poussiere.spell_id] = EMPTY_REFUSALS_LIMIT  # empty_refused vide : un pas vient d'être fait
+    again = plan((0, 0), 0, enemies, [poussiere], use=use).first
+    assert again is None or again.cell in enemies
+
+
 def test_ally_is_never_targeted_nor_caught_in_a_zone():
     # Allié juste derrière l'ennemi : la ligne de la Flèche Enflammée le prendrait -> Flèche Magique.
     turn = plan((0, 0), 0, [(2, 2)], [MAGIQUE, ENFLAMMEE], pa=4, allies=[(3, 3)])

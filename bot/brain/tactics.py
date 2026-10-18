@@ -91,6 +91,10 @@ class SpellUse:
     # Enflammée refusée sur 3 cases vides alignées vers un ennemi caché par un bloc, puis de nouveau après un pas, 6
     # refus et ~20 s pour Vertdepomme, autant pour Vieenjaune). Oublié après un déplacement, comme `refused`.
     empty_refused: set = field(default_factory=set)
+    # Refus sur des cases vides, ce combat (pas oubliés après un déplacement) : à EMPTY_REFUSALS_LIMIT, ce sort ne vise
+    # plus que des ennemis jusqu'à la fin du combat. 18/10, Chafers 3,6 : la même case vide (18, 10) refusée à
+    # Vertdepomme depuis 3 cases de suite, un pas entre chaque (le pas efface `empty_refused`).
+    empty_refusals: Counter = field(default_factory=Counter)
     unavailable: set = field(default_factory=set)  # sorts non sélectionnables ce tour
     greyed: set = field(default_factory=set)  # sorts grisés dans la barre sur la dernière capture
     measured: dict[str, tuple[int, int]] = field(default_factory=dict)  # portée affichée ce tour
@@ -186,6 +190,9 @@ def unit(a: Cell, b: Cell) -> Cell:
     """Pas de la grille dans la direction de `a` vers `b` (signe de chaque coordonnée)."""
     di, dj = b[0] - a[0], b[1] - a[1]
     return (di > 0) - (di < 0), (dj > 0) - (dj < 0)
+
+
+EMPTY_REFUSALS_LIMIT = 2  # refus sur des cases vides, un combat : ce sort ne vise plus que des ennemis (SpellUse)
 
 
 def spell_range(spell: CombatSpell, use: SpellUse) -> tuple[int, int]:
