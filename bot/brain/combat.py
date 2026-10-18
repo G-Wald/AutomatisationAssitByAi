@@ -569,8 +569,13 @@ class CombatAI:
             can_move = moves < MOVES_PER_TURN
             # Plan tenu : arrivé sur la case choisie pour lancer, on n'en change pas pour une autre un peu meilleure
             # selon des prévisions qui bougent à chaque capture (01/10 : 3 déplacements, 3 plans dans un tour).
-            plan = self._plan(frame, me, enemies, allies, pm, visited, missed, can_move=can_move, move_first=not committed)
-            if committed and can_move and (plan.first is None or plan.first.kind != CAST) and self._spell_fits():
+            # Au contact d'un ennemi : les sorts d'ici d'abord (18/10, utilisateur : un déplacement d'abord est souvent
+            # taclé, et l'ennemi au contact est à portée) ; se déplacer seulement si rien ne part d'ici.
+            in_contact = any(distance(e.cell, me.cell) <= 1 for e in enemies)
+            plan = self._plan(frame, me, enemies, allies, pm, visited, missed, can_move=can_move,
+                              move_first=not committed and not in_contact)
+            if (committed or in_contact) and can_move and (plan.first is None or plan.first.kind != CAST) \
+                    and self._spell_fits():
                 plan = self._plan(frame, me, enemies, allies, pm, visited, missed, can_move=can_move)  # rien d'ici
             self._explain_dropped(plan, me, enemies, allies)
             self._log_plan(plan)

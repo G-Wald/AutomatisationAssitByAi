@@ -1068,6 +1068,7 @@ def test_click_right_after_a_window_switch_does_not_wait_for_the_redraw():
 
 
 def test_next_follower_clicks_the_sword_where_it_worked_for_the_first(monkeypatch):
+    monkeypatch.setattr("bot.team.join.QUICK_SAME_SPOT", 1.0)  # le point qui a marché (sinon : autre partie haute)
     screen = Screen()
     sword = with_sword("hors_combat", at=(900, 300))
     first = member("Second", screen, sword, with_join_menu(sword, at=(950, 330)), load_frame("preparation"))
