@@ -5,9 +5,10 @@
 - rien dans le losange de portée : obstacle (bloc, trou, bord de carte), sauf si un sprite cache la case.
 
 Les obstacles vus servent à prédire la ligne de vue depuis d'autres cases, pour choisir où se déplacer.
-Vérifié sur tests/fixtures/combat_portee_sort.png : 102 cases sur 103 prédites comme le jeu les affiche ; le 17/10, sur
-les 50 captures « ligne_de_vue_a_revoir » d'Incarnam (plateaux et fosses) : 3421 cases sur 3421 (3030 avant de ne plus
-lire les parois teintées comme des blocs ni compter les coins de case).
+Vérifié sur tests/fixtures/combat_portee_sort.png : 103 cases sur 103 prédites comme le jeu les affiche (102 avant le
+18/10) ; le 17/10, sur les 50 captures « ligne_de_vue_a_revoir » d'Incarnam (plateaux et fosses) : 3421 cases sur 3421
+(3030 avant de ne plus lire les parois teintées comme des blocs ni compter les coins de case) ; le 18/10, sur les 13 de
+la forêt d'Incarnam (piliers et plateaux en relief) : 1396 sur 1396 (1235 sur 1363 avant de lire les blocs à leur dessus).
 """
 
 import functools
@@ -25,6 +26,10 @@ from bot.perception.timeline import timeline_portraits
 
 NO_SIGHT_BLUE = (137, 117, 95)  # BGR, bleu clair : à portée mais ligne de vue bloquée
 VOID_IN_RANGE = (45, 30, 10)  # BGR, bleu nuit : le vide autour de la carte, teinté par la portée (16/10, Incarnam 6,1)
+# Boutons du combat au-dessus de la fin de la timeline (mode tactique, cercles…), en repère de référence :
+# 18/10, forêt d'Incarnam, la case dessous lue bloc coupait une ligne de vue sur deux captures.
+FIGHT_BUTTONS = (1756, 664, 1918, 707)
+HIDDEN_CENTER_MARGIN = 0.1  # range_center : avance (indice de Jaccard) qu'il faut à une case cachée sur une case vue
 
 
 @dataclass(frozen=True)
@@ -68,13 +73,27 @@ def range_center(frame: Frame, spell_range: tuple[int, int], min_match: float = 
     is_colored = np.array([c in colored for c in cells])
     low, high = spell_range
     mean = grid[is_colored].mean(axis=0)
-    best, score = None, 0.0
-    for center in grid[np.abs(grid - mean).max(axis=1) <= high]:  # le losange peut être coupé : centre décalé
-        gap = np.abs(grid - center).max(axis=1)
-        diamond = (gap >= low) & (gap <= high)
-        match = (diamond & is_colored).sum() / (diamond | is_colored).sum()
-        if match > score:
-            best, score = (int(center[0]), int(center[1])), float(match)
+
+    def best_of(candidates: np.ndarray) -> tuple[Cell | None, float]:
+        best, score = None, 0.0
+        for center in candidates[np.abs(candidates - mean).max(axis=1) <= high]:  # losange coupé : centre décalé
+            gap = np.abs(grid - center).max(axis=1)
+            diamond = (gap >= low) & (gap <= high)
+            match = (diamond & is_colored).sum() / (diamond | is_colored).sum()
+            if match > score:
+                best, score = (int(center[0]), int(center[1])), float(match)
+        return best, score
+
+    best, score = best_of(grid)
+    # Le centre peut être une case cachée : 18/10, forêt d'Incarnam, lanceur juste au-dessus de la timeline, sa case
+    # comptée sous les portraits ; le centre trouvé une case à côté désignait un autre cercle (3 captures « ligne de vue
+    # à revoir » sur 13). Seulement s'il colle nettement mieux : le losange d'une case cachée, à moitié retiré, est
+    # moins pénalisé quand la portée attendue est trop grande (0,63 contre 0,57 pour la bonne case sur une capture,
+    # 0,91 à 0,93 contre 0,73 à 0,77 pour les vrais lanceurs cachés).
+    if view.hidden:
+        hidden_best, hidden_score = best_of(np.array(sorted(view.hidden)))
+        if hidden_score >= score + HIDDEN_CENTER_MARGIN:
+            best, score = hidden_best, hidden_score
     return best if score >= min_match else None
 
 
@@ -93,6 +112,29 @@ def _foreign(bgr: np.ndarray) -> bool:
     return not _tinted_wall(bgr) and (_shade(bgr) == OTHER or int(bgr.max()) - int(bgr.min()) > 30)
 
 
+def _raised_top(image: np.ndarray, grid, cell: Cell, hidden) -> bool:
+    """Bloc en relief sur `cell` : son dessus clair, jamais teinté par la portée, remonté d'une demi-hauteur de case
+    (losange centré une demi-hauteur au-dessus du centre de la case). Trois points sur quatre de ce dessus suffisent
+    (le quatrième peut tomber sous un texte de dégâts)."""
+    x, y = grid.center(cell)
+    height, width = image.shape[:2]
+    points = [(round(x + dx * grid.half_w), round(y + dy * grid.half_h)) for dx, dy in ((0, -0.6), (0, -0.3), (-0.5, -1), (0.5, -1))]
+    if not all(0 <= px < width and 0 <= py < height for px, py in points) or any(hidden(px, py) for px, py in points):
+        return False
+    return sum(_shade(image[py, px]) == TOP for px, py in points) >= 3
+
+
+def _in_relief(grid, raised: set[Cell], px: float, py: float) -> bool:
+    """Point de l'écran caché par le relief d'un bloc de `raised` : son dessus (remonté d'une demi-hauteur) et ses
+    côtés, de sommets (0, -2), (±1, -1), (±1, 0) et (0, 1) en demi-cases autour du centre de sa case."""
+    for cell in raised:
+        x, y = grid.center(cell)
+        dx, dy = abs(px - x) / grid.half_w, (py - y) / grid.half_h
+        if dx <= 1 and dx - 2 <= dy <= 1 - dx:
+            return True
+    return False
+
+
 def read_range(frame: Frame, me: Fighter, fighters: list[Fighter]) -> RangeView:
     grid = frame.grid
     dark = near(frame.image, RANGE_BLUE, 25)
@@ -108,22 +150,32 @@ def read_range(frame: Frame, me: Fighter, fighters: list[Fighter]) -> RangeView:
     # La rangée des portraits, jusqu'au bord droit (flèches de défilement), et le bas de la carte sous l'interface.
     row = (min(b[0] for b in portraits), min(b[1] for b in portraits), max(b[3] for b in portraits)) if portraits else None
     map_bottom = frame.layout.y(MAP_BOTTOM) - frame.layout.length(2)
+    buttons = frame.layout.box(*FIGHT_BUTTONS)
 
     def hidden(px: int, py: int) -> bool:
-        return py >= map_bottom or (row is not None and px >= row[0] and row[1] <= py <= row[2])
+        return (py >= map_bottom or (row is not None and px >= row[0] and row[1] <= py <= row[2])
+                or (buttons[0] <= px < buttons[2] and buttons[1] <= py < buttons[3]))
 
+    raised = {cell for cell in grid.cells() if cell != me.cell and _raised_top(image, grid, cell, hidden)}
     for cell in grid.cells():
-        if cell == me.cell:
+        if cell == me.cell or cell in raised:
             continue
         x, y = grid.center(cell)
         points = [(round(x + dx * grid.half_w), round(y + dy * grid.half_h)) for dx, dy in ((-0.6, 0), (0.6, 0), (0, -0.6), (0, 0.6))]
         points = [(px, py) for px, py in points if 0 <= px < width and 0 <= py < height]
-        if sum(dark[py, px] for px, py in points) >= 3:
+        # 18/10, forêt d'Incarnam : le relief d'un bloc (dessus et côtés) cache le bas des cases juste au-dessus de lui
+        # à l'écran ; leurs points cachés ne disent rien de leur couleur. Une telle case n'est jamais un obstacle.
+        seen = [(px, py) for px, py in points if not _in_relief(grid, raised, px, py)]
+        behind = len(seen) < len(points)
+        points = seen
+        if len(points) >= 2 and sum(dark[py, px] for px, py in points) >= min(3, len(points)):
             castable.add(cell)
         elif sum(light[py, px] for px, py in points) >= 2:
             no_sight.add(cell)
         elif sum(hidden(px, py) for px, py in points) >= 2:
             hidden_cells.add(cell)
+        elif behind:
+            continue
         elif sum(void[py, px] for px, py in points) >= 2:
             if sum(tinted[py, px] for px, py in points) >= 2:
                 void_cells.add(cell)
@@ -152,6 +204,9 @@ def read_range(frame: Frame, me: Fighter, fighters: list[Fighter]) -> RangeView:
     # Puissance (3 à 4) : les 11 cases à 1 ou 2 de Brawli prises pour des blocs, ligne de vue prédite juste sur 8 % des
     # cases au lieu de 96 %, carte crue à relief (4 cases de marge) : tirs prévus à 6 cases, refusés par le jeu.
     obstacles = {c for c in uncolored if low <= distance(c, me.cell) <= reach} - ignored
+    # Bloc reconnu à son dessus, même sous le corps d'un combattant posé derrière (18/10 : un pilier caché ainsi par
+    # l'ennemi de la case du dessous, oublié, laissait voir 4 cases que le jeu montrait sans ligne de vue).
+    obstacles |= {c for c in raised if distance(c, me.cell) <= reach} - {f.cell for f in fighters}
     return RangeView(castable, no_sight, obstacles, (low, reach), frozenset(void_cells), frozenset(hidden_cells),
                      frozenset(wall_cells))
 

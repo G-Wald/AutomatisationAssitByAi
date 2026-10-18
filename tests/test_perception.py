@@ -143,10 +143,12 @@ def test_spell_range_and_obstacles_from_colored_cells():
     view = read_range(frame, me, fighters)
     assert view.spell_range == (1, 7)  # Flèche Magique : pas de portée minimale
     assert view.no_sight == {(19, 17)}  # derrière l'angle du bloc, en haut à droite
-    # Dessus des blocs en haut à droite et en bas ; pas la case cachée par mon personnage.
-    assert view.obstacles == {(15, 17), (16, 18), (17, 17), (18, 18), (11, 31), (12, 30), (13, 31), (14, 30)}
+    # Blocs en haut à droite et en bas ; pas la case cachée par mon personnage. 18/10 : un bloc est sur la case du coin
+    # bas de son dessus ; (12, 30) et (14, 30), à droite des deux piliers du bas, sont des cases cachées par leur
+    # relief, plus des blocs (la case (15, 31) était prédite sans ligne de vue : 103 cases justes sur 103, 102 avant).
+    assert view.obstacles == {(15, 17), (16, 18), (17, 17), (18, 18), (11, 31), (13, 31)}
     blockers = view.obstacles | ({f.cell for f in fighters} - {me.cell})
-    assert sight_agreement(view, me.cell, blockers) >= 0.98  # ligne de vue prédite comme le jeu l'affiche
+    assert sight_agreement(view, me.cell, blockers) == 1.0  # ligne de vue prédite comme le jeu l'affiche
     assert read_range(load_frame("combat_mon_tour"), me, fighters).spell_range is None
 
 
@@ -159,7 +161,10 @@ def test_no_obstacles_inside_the_minimum_range():
     me = next(f for f in fighters if f.cell == (11, 15))
     view = read_range(frame, me, fighters)
     assert view.spell_range == (3, 4)
-    assert view.obstacles == {(10, 18), (14, 16)}  # les deux blocs à 3 cases, en bas à gauche et à droite
+    # Les deux blocs, en bas à gauche et à droite ; 18/10 : le pilier de droite est en (15, 17), coin bas de son dessus,
+    # (14, 16) n'est que cachée en partie par lui (le jeu la colore).
+    assert view.obstacles == {(10, 18), (15, 17)}
+    assert (14, 16) in view.castable
     blockers = view.obstacles | ({f.cell for f in fighters} - {me.cell})
     assert sight_agreement(view, me.cell, blockers) >= 0.9  # pas une « carte à relief »
 
@@ -664,6 +669,30 @@ def test_forbidden_cursor_is_not_a_fighter():
     view, blockers = relief_view(frame, (11, 19))  # Leproduitlatte
     assert (7, 17) in view.castable  # la ligne ne touche (9, 19) que par un coin
     assert sight_agreement(view, (11, 19), blockers) == 1.0
+
+
+def test_raised_pillars_of_the_forest_block_only_their_own_cell():
+    # 18/10, forêt d'Incarnam 2,4 : piliers et plateaux à dessus blanc, remontés d'une demi-case, jamais teintés par la
+    # portée. Leur relief cachait le bas des cases juste au-dessus d'eux, lues blocs ; un pilier caché par le corps de
+    # l'ennemi posé devant était oublié. Ligne de vue prédite juste sur 90 % des cases (88 % sur 13 captures).
+    frame = relief_frame("portee_foret_piliers_incarnam_2_4", 400, 740)
+    view, blockers = relief_view(frame, (14, 26))  # Vertdepomme, Flèche Magique
+    assert view.spell_range == (1, 9)
+    assert {(11, 23), (14, 22), (17, 23)} <= view.obstacles  # piliers, (17, 23) sous le corps de l'ennemi en (17, 25)
+    assert not {(13, 21), (16, 22)} & view.obstacles  # cases derrière un pilier
+    assert sight_agreement(view, (14, 26), blockers) == 1.0
+
+
+def test_caster_found_on_a_cell_counted_under_the_timeline():
+    # 18/10, forêt d'Incarnam 3,4 : Vertdepomme juste au-dessus de la timeline, sa case comptée sous les portraits ;
+    # le centre trouvé une case à côté désignait un autre cercle, toutes les lignes de vue prédites de là. La case sous
+    # les boutons du combat (au-dessus de la fin de la timeline) était lue bloc.
+    frame = relief_frame("portee_foret_plateau_lanceur_sur_la_timeline_incarnam_3_4", 470, 990)
+    assert range_center(frame, (1, 9)) == (19, 29)
+    view, blockers = relief_view(frame, (19, 29))
+    assert (26, 28) not in view.obstacles and (26, 28) in view.hidden
+    assert {(20, 20), (21, 21), (22, 20)} <= view.obstacles  # bord du plateau
+    assert sight_agreement(view, (19, 29), blockers) == 1.0
 
 
 def test_spectator_list_closed_with_its_fermer_button():
