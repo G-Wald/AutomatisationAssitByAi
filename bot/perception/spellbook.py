@@ -53,7 +53,7 @@ SCROLL_COLUMNS = (544, 548, 552)  # colonnes lues dans la barre de défilement (
 SCROLL_SPAN = (185, 700)  # rail entre les flèches du haut et du bas
 THUMB_TOP, THUMB_BOTTOM = 193, 694  # course de la poignée, mesurée (04/10 : bas de liste du Crâ et du Iop)
 THUMB_DARK = 130  # niveau de gris de la poignée : 74 (reflets 101), rail 183
-ARROW_DOWN = (548, 704)  # flèche du bas de la barre de défilement
+ARROW_DOWN = (548, 704)  # flèche du bas de la barre de défilement (le rail : même colonne)
 LIST_POINT = (300, 450)  # au milieu de la liste : la molette la fait défiler
 AWAY_POINT = (290, 22)  # barre de titre : la souris n'y survole aucune ligne de la liste
 SAME_ICON = 0.9  # deux icônes de ligne identiques (même sort) : corrélation au moins
@@ -79,6 +79,24 @@ class ScrollBar:
     @property
     def at_end(self) -> bool:
         return self.bottom >= THUMB_BOTTOM - 3
+
+    @property
+    def rows(self) -> int | None:
+        """Lignes de toute la liste, d'après la longueur de la poignée (elle couvre la part visible de la liste : 239 px
+        sur 501 pour 10 lignes sur 21, 18/10) ; None si la liste ne défile pas."""
+        if not self.scrolls:
+            return None
+        return max(ROWS + 1, round(ROWS * (THUMB_BOTTOM - THUMB_TOP) / max(1, self.bottom - self.top)))
+
+    @property
+    def first_row(self) -> int:
+        """Ligne de la liste montrée en haut (0 : la première), d'après la place de la poignée sur sa course. 18/10 :
+        liste de Lestunes restée défilée en bas à l'ouverture, poignée en y 431 à 670 : lignes 11 à 20 visibles."""
+        rows = self.rows
+        if rows is None or self.at_top:
+            return 0
+        free = max(1, THUMB_BOTTOM - THUMB_TOP - (self.bottom - self.top))
+        return min(rows - ROWS, max(0, round((self.top - THUMB_TOP) / free * (rows - ROWS))))
 
 
 @dataclass(frozen=True)
