@@ -488,6 +488,21 @@ def test_form_group_skips_grouped_and_reports_missing_friend():
     assert not any(inside(action[1], (969, 328, 1329, 738)) for action in leader.actions if action[0] == "click")
 
 
+def test_form_group_invites_again_who_missed_the_first_invitation(monkeypatch):
+    # 18/10 : Dinarpepe, invité juste après la connexion, n'avait pas reçu l'invitation : hors du groupe toute la session.
+    import bot.connection.group as group_module
+
+    tries = []
+    monkeypatch.setattr(group_module, "in_group", lambda member: False)
+    monkeypatch.setattr(group_module, "close_friends", lambda leader: None)
+    monkeypatch.setattr(group_module, "invite", lambda leader, member: tries.append(member.name) or len(tries) > 2)
+    leader = ScreenGame("hors_combat", lambda *args: None, "Gela-[A13] - Dofus Retro v1.49.6")
+    a = ScreenGame("hors_combat", lambda *args: None, "A - Dofus Retro v1.49.6")
+    b = ScreenGame("hors_combat", lambda *args: None, "B - Dofus Retro v1.49.6")
+    missing = form_group(Player("Gela-[A13]", leader), [Player("A", a), Player("B", b)], collapse_frames=False)
+    assert tries == ["A", "B", "A", "B"] and missing == []  # les deux réinvités après les autres, puis acceptés
+
+
 def test_watcher_reconnects_the_same_character(titles, monkeypatch):
     runs = []
 

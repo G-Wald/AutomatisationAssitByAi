@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from bot.brain.game import Game
 from bot.perception.party import (ACCEPT, CANCEL, INVITE_ENTRY, find_friend, find_friends_icon, find_friends_window,
                                   find_invitation, find_invite_entry, find_pending_invite, group_arrow)
+from bot.perception.popups import find_known_popup, load_popup_specs
 from bot.perception.templates import template_spread
 
 log = logging.getLogger(__name__)
@@ -38,6 +39,14 @@ def in_group(player: Player) -> bool:
 def open_friends(leader: Player):
     """Fenêtre « Amis » du principal ouverte : (capture, centre de son titre) ; None si elle ne s'ouvre pas."""
     frame = leader.game.look(park=False)
+    # 18/10 (journal 112233) : « Résultat du combat » resté ouvert chez le principal (bot arrêté juste après un combat),
+    # par-dessus l'icône « Amis » : fenêtre jamais ouverte, Dinarpepe hors du groupe. Fenêtre connue fermée d'abord.
+    known = find_known_popup(frame, load_popup_specs())
+    if known is not None and known.close_point is not None:
+        log.info("%s : fenêtre « %s » fermée avant d'ouvrir « Amis »", leader.name, known.spec.name)
+        leader.game.click(known.close_point, known.close_spread)
+        leader.game.sleep(0.5)
+        frame = leader.game.look(park=False)
     title = find_friends_window(frame)
     if title is None:
         icon = find_friends_icon(frame)
@@ -126,7 +135,15 @@ def form_group(leader: Player, members: list[Player], collapse_frames: bool = Tr
             continue
         invited = True
         if not invite(leader, member):
-            missing.append(member.name)
+            missing.append(member)
+    # 18/10 (journal 110414) : Dinarpepe, le premier invité juste après la connexion, n'avait pas reçu l'invitation ; pas
+    # de nouvel essai, hors du groupe toute la session (combats réservés au groupe : épée grisée, jamais rejoints). Un
+    # second passage, après les autres (le temps pour sa fenêtre de finir de charger).
+    for member in list(missing):
+        log.info("Nouvel essai : %s invité de nouveau dans le groupe", member.name)
+        if in_group(member) or invite(leader, member):
+            missing.remove(member)
+    missing = [member.name for member in missing]
     if invited:
         close_friends(leader)
     if collapse_frames:
