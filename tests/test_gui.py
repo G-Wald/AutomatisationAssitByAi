@@ -12,8 +12,8 @@ from bot.brain.travel import WORLDS as TRAVEL_WORLDS
 from bot.config import apply_overrides, load_settings, parse_override
 from bot.brain.memory import READING_MODES
 from bot.gui.launch import (MAIN_PATH, READINGS, WORLDS, BotProcess, Choices, build_args, character_names, coords_text,
-                            default_choices, display_command, format_override, load_choices, main_options,
-                            overrides, parse_coords, save_choices, validate, window_title)
+                            default_choices, display_command, format_override, known_dungeons, load_choices,
+                            main_options, overrides, parse_coords, save_choices, validate, window_title)
 
 SETTINGS = {
     "window": {"title": "- Dofus Retro"},
@@ -123,6 +123,28 @@ def test_mode_arguments():
     assert build_args(choices(mode="explore", explore_from="1,6"), SETTINGS)[2:4] == ["--explore", "--position=1,6"]
     assert build_args(choices(mode="explore"), SETTINGS)[2:] == ["--explore"]
     assert build_args(choices(mode="test"), SETTINGS)[2] == "--travel-test"
+
+
+def test_dungeon_farm_arguments():
+    # Utilisateur, 18/10 : choisir le donjon dans une liste des donjons connus (config/donjons_entree.yaml).
+    assert known_dungeons()["incarnam"] == ("Donjon d'Incarnam", "incarnam")
+    team = {"team": True, "leader": "Koalaloupour", "mode": "donjon", "donjon": "incarnam"}
+    assert build_args(choices(**team), SETTINGS)[2:4] == ["--donjon", "incarnam"]
+    assert build_args(choices(**team, passages="3"), SETTINGS)[2:6] == ["--donjon", "incarnam", "--passages", "3"]
+    zone = {**SETTINGS, "travel": {"mode": "zone", "region": "Incarnam"}}  # pas de changement de carte au donjon
+    assert ("travel.mode", "") in overrides(choices(**team), zone)
+
+
+def test_dungeon_farm_errors():
+    team = {"team": True, "leader": "Koalaloupour", "mode": "donjon"}
+    assert validate(choices(**team, donjon="incarnam"), SETTINGS) == []
+    assert validate(choices(**team), SETTINGS) == ["Farm de donjon : choisis le donjon"]
+    assert "n'est pas dans config/donjons_entree.yaml" in validate(choices(**team, donjon="bouftou"), SETTINGS)[0]
+    assert validate(choices(**team, donjon="incarnam", monde="douze"), SETTINGS)[0].endswith("choisis-le dans Monde")
+    assert validate(choices(mode="donjon", donjon="incarnam"), SETTINGS) == [
+        "Farm de donjon : en mode équipe seulement (coche « Mode équipe »)"]
+    assert validate(choices(**team, donjon="incarnam", passages="0"), SETTINGS)[0].startswith(
+        "Farm de donjon : nombre de passages")
 
 
 def test_negative_coordinates_are_joined_by_equal_sign():

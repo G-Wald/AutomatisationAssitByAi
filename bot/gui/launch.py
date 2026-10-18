@@ -19,6 +19,7 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass, fields, replace
 from pathlib import Path
 
+import yaml
 from pynput import keyboard
 
 from bot.actions.stop import parse_key
@@ -29,6 +30,7 @@ from bot.config import ROOT
 
 GUI_PATH = ROOT / "data" / "gui.json"  # derniers choix, rechargés à l'ouverture
 MAIN_PATH = ROOT / "bot" / "__main__.py"  # options de la ligne de commande, lues dans le code (main_options)
+DUNGEONS_PATH = ROOT / "config" / "donjons_entree.yaml"  # donjons connus (chemin d'entrée), lus par bot/team/dungeon.py
 VENV_PYTHON = Path(".venv") / "Scripts" / "python.exe"
 
 MODES = {
@@ -37,6 +39,7 @@ MODES = {
     "aller": "Déplacement",
     "explore": "Exploration",
     "test": "Test de déplacement",
+    "donjon": "Farm de donjon",
     "recolte": "Récolte (métier)",
 }
 SOON = ("recolte",)  # prévus, pas encore programmés : bouton grisé
@@ -63,6 +66,8 @@ class Choices:
     aller_from: str = ""  # déplacement : carte de départ (--position) ; vide : lue à l'écran
     aller_to: str = ""  # déplacement : carte d'arrivée (--aller)
     explore_from: str = ""  # exploration : carte de départ (--position) ; vide : lue à l'écran
+    donjon: str = ""  # farm de donjon : clé du donjon dans config/donjons_entree.yaml (--donjon), « incarnam »
+    passages: str = "1"  # farm de donjon : passages complets (--passages)
     combat_only: bool = False  # --combat-only : le bot n'attaque pas les groupes, il joue les combats lancés à la main
     observe: bool = False  # --observe : aucun clic, aucune touche
     monde: str = "incarnam"  # --monde
@@ -128,6 +133,16 @@ def coords_text(text: str) -> str:
     return f"{coords[0]},{coords[1]}" if coords else text.strip()
 
 
+def known_dungeons(path: Path = DUNGEONS_PATH) -> dict[str, tuple[str, str]]:
+    """Donjons connus : clé -> (nom affiché, monde), dans l'ordre du fichier ; {} s'il est illisible."""
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError):
+        return {}
+    return {str(key): (str(d.get("nom") or key), str(d.get("monde") or key)) for key, d in data.items()
+            if isinstance(d, dict)}
+
+
 def window_title(name: str, title_part: str) -> str:
     """Titre de la fenêtre d'un personnage : « Jesuisleking », « - Dofus Retro » -> « Jesuisleking - Dofus Retro »."""
     return f"{name.strip()} - {title_part.strip().lstrip('-').strip()}"
@@ -153,9 +168,9 @@ def overrides(choices: Choices, settings: dict) -> list[tuple[str, object]]:
     """Réglages de config/settings.yaml à remplacer au lancement (--set) : seulement ceux qui diffèrent des choix."""
     base = default_choices(settings)
     changed: list[tuple[str, object]] = []
-    if choices.mode == "carte" and (settings.get("travel") or {}).get("mode"):
+    if choices.mode in ("carte", "donjon") and (settings.get("travel") or {}).get("mode"):
         changed.append(("travel.mode", ""))  # sinon le bot changerait de carte d'après travel.mode
-    if choices.mode in COMBAT_MODES and not choices.combat_only and base.combat_only:
+    if (choices.mode == "donjon" or choices.mode in COMBAT_MODES and not choices.combat_only) and base.combat_only:
         changed.append(("engage.enabled", True))
     if not choices.team and base.team:
         changed.append(("team.enabled", False))  # pas d'option pour le mode solo quand team.enabled vaut true
@@ -204,6 +219,10 @@ def build_args(choices: Choices, settings: dict) -> list[str]:
             args.append(_coords_option("--position", choices.explore_from))
     elif choices.mode == "test":
         args.append("--travel-test")
+    elif choices.mode == "donjon":
+        args += ["--donjon", choices.donjon.strip()]
+        if choices.passages.strip() != "1":
+            args += ["--passages", choices.passages.strip()]
     if choices.mode in COMBAT_MODES and choices.combat_only:
         args.append("--combat-only")
     if choices.observe:
@@ -273,12 +292,14 @@ def detect_screens() -> list[tuple[str, str]]:
 
 
 def validate(choices: Choices, settings: dict, titles: list[str] | None = None,
-             options: frozenset[str] | None = None, screens: int | None = None) -> list[str]:
+             options: frozenset[str] | None = None, screens: int | None = None,
+             dungeons: dict[str, tuple[str, str]] | None = None) -> list[str]:
     """Ce qui empêche de lancer le bot, en clair ; [] si tout va bien.
 
     `titles` : titres des fenêtres du jeu ouvertes (detect_windows ; None : pas vérifié) ;
     `options` : options connues de bot/__main__.py (main_options ; None : pas vérifié) ;
-    `screens` : nombre d'écrans détectés (None : pas vérifié)."""
+    `screens` : nombre d'écrans détectés (None : pas vérifié) ;
+    `dungeons` : donjons connus (known_dungeons ; None : lus dans config/donjons_entree.yaml)."""
     errors: list[str] = []
     screen = choices.screen.strip().lower()
     if not valid_choice(screen):
@@ -298,6 +319,8 @@ def validate(choices: Choices, settings: dict, titles: list[str] | None = None,
             errors.append(f"Déplacement : l'arrivée est la carte de départ ({start[0]},{start[1]})")
     elif choices.mode == "explore":
         _check_coords(errors, "Exploration", "de départ", choices.explore_from)
+    elif choices.mode == "donjon":
+        _check_dungeon(errors, choices, dungeons if dungeons is not None else known_dungeons())
     if choices.monde not in WORLDS:
         errors.append(f"Monde inconnu : {choices.monde!r} ({' ou '.join(WORLDS)})")
     if choices.wait_mode not in WAIT_MODES:
@@ -334,6 +357,23 @@ def validate(choices: Choices, settings: dict, titles: list[str] | None = None,
             else:
                 errors.append(f"L'option {option} n'existe pas encore dans bot/__main__.py")
     return errors
+
+
+def _check_dungeon(errors: list[str], choices: Choices, dungeons: dict[str, tuple[str, str]]) -> None:
+    key = choices.donjon.strip()
+    if not key:
+        errors.append("Farm de donjon : choisis le donjon")
+    elif key not in dungeons:
+        errors.append(f"Farm de donjon : « {key} » n'est pas dans config/donjons_entree.yaml "
+                      f"(connus : {', '.join(dungeons) or 'aucun'})")
+    elif dungeons[key][1] != choices.monde:
+        name, world = dungeons[key]
+        errors.append(f"Farm de donjon : {name} est dans le monde « {WORLDS.get(world, world)} » : choisis-le dans "
+                      "Monde")
+    if not choices.team:
+        errors.append("Farm de donjon : en mode équipe seulement (coche « Mode équipe »)")
+    if not choices.passages.strip().isdigit() or int(choices.passages) < 1:
+        errors.append(f"Farm de donjon : nombre de passages attendu (1, 2, 3...), pas « {choices.passages.strip()} »")
 
 
 def main_options(path: Path = MAIN_PATH) -> frozenset[str] | None:

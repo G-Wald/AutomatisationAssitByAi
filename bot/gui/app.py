@@ -22,7 +22,8 @@ from bot.config import load_settings
 from bot.connection.characters import known_characters, parse_names
 from bot.gui.launch import (COMBAT_MODES, GUI_PATH, MODES, READINGS, SERVERS, SOON, WORLDS, BotProcess, Choices,
                             bot_command, build_args, character_names, default_choices, detect_screens, detect_windows,
-                            display_command, load_choices, main_options, save_choices, stop_key, validate)
+                            display_command, known_dungeons, load_choices, main_options, save_choices, stop_key,
+                            validate)
 
 LOG_LINES = 1000  # lignes du journal gardées à l'écran
 TICK_MS = 100  # lecture du journal et de l'état du bot
@@ -39,6 +40,9 @@ HELP = {
              "à gauche du jeu ; départ vide : lu à l'écran.",
     "explore": "Sans combat : visite toutes les cartes de la région. Départ vide : lu à l'écran.",
     "test": "Sans combat : s'éloigne de 2 cartes puis revient sur la carte de départ (vérifie les déplacements).",
+    "donjon": "Mode équipe : l'équipe devant l'entrée du donjon choisi y entre (dalles, clef au PNJ), fait les combats "
+              "de salle en salle, ressort par le PNJ de fin, et recommence autant de fois que de passages "
+              "(--donjon, --passages). Donjons connus : config/donjons_entree.yaml.",
     "recolte": "Récolte des ressources d'un métier : prévue, pas encore programmée.",
     "combat_only": "Le bot n'attaque pas les groupes : il joue les combats que tu lances toi-même (--combat-only).",
     "observe": "Le bot regarde et écrit dans le journal ce qu'il voit, sans aucun clic ni aucune touche (--observe).",
@@ -192,7 +196,8 @@ class App:
         box = ttk.LabelFrame(parent, text="Que doit faire le bot ?", padding=8)
         rows = {"carte": [], "zone": [("carte X,Y", "zone_xy")],
                 "aller": [("départ X,Y", "aller_from"), ("arrivée X,Y", "aller_to")],
-                "explore": [("départ X,Y", "explore_from")], "test": [], "recolte": []}
+                "explore": [("départ X,Y", "explore_from")], "test": [], "donjon": [("passages", "passages")],
+                "recolte": []}
         notes = {"zone": "vide : lue à l'écran", "aller": "départ vide : lu à l'écran", "explore": "facultatif",
                  "recolte": "bientôt"}
         self.entries: dict[str, tuple[str, ttk.Entry]] = {}  # champ de coordonnées -> (son mode, la case)
@@ -204,6 +209,8 @@ class App:
                 radio.state(["disabled"])
             cell = ttk.Frame(box)
             cell.grid(row=row, column=1, sticky="w")
+            if mode == "donjon":
+                self._dungeon_select(cell)
             for label, name in cells:
                 ttk.Label(cell, text=label).pack(side="left", padx=(8, 3))
                 entry = ttk.Entry(cell, textvariable=self.vars[name], width=9)
@@ -220,6 +227,25 @@ class App:
         self._check(box, "Observation seulement : aucun clic, aucune touche", "observe").grid(
             row=row + 2, column=0, columnspan=3, sticky="w", pady=(2, 0))
         return box
+
+    def _dungeon_select(self, cell: ttk.Frame) -> None:
+        """Liste des donjons connus (config/donjons_entree.yaml), par leur nom ; le choix garde leur clé (--donjon)."""
+        self.dungeons = known_dungeons()
+        names = {name: key for key, (name, _) in self.dungeons.items()}
+        shown = tk.StringVar(value=self.dungeons.get(self.vars["donjon"].get(), ("",))[0])
+        select = ttk.Combobox(cell, textvariable=shown, values=list(names), state="readonly", width=22)
+        select.bind("<<ComboboxSelected>>", lambda _: self._pick_dungeon(names.get(shown.get(), "")))
+        select.pack(side="left", padx=(8, 0))
+        Infobulle(select, HELP["donjon"])
+        self.entries["donjon"] = ("donjon", select)
+
+    def _pick_dungeon(self, key: str) -> None:
+        """Donjon choisi : son monde coché aussi (Monde), le farm de donjon en mode équipe."""
+        self.vars["donjon"].set(key)
+        if key in self.dungeons:
+            self.vars["monde"].set(self.dungeons[key][1])
+            self.vars["mode"].set("donjon")
+            self.vars["team"].set(True)
 
     def _build_world(self, parent: tk.Widget) -> ttk.LabelFrame:
         box = ttk.LabelFrame(parent, text="Monde", padding=8)
@@ -416,7 +442,8 @@ class App:
         choices = self.choices()
         self.command.set(display_command(build_args(choices, self.settings)))
         self.problems.configure(text="\n".join(validate(choices, self.settings, self.titles, self.options,
-                                                         len(self.screens) - 1 if self.screens else None)))
+                                                         len(self.screens) - 1 if self.screens else None,
+                                                         self.dungeons)))
         for mode, entry in self.entries.values():
             entry.state(["!disabled"] if choices.mode == mode else ["disabled"])
         self.combat_only.state(["!disabled"] if choices.mode in COMBAT_MODES else ["disabled"])
