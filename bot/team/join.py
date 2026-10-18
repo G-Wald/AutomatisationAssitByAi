@@ -20,6 +20,7 @@ vérifiée ensuite pour tous (wait_placement), et celui qui n'est pas entré en 
 
 import logging
 import math
+import random
 import time
 
 from bot.perception.join import JOIN_SPREAD, SWORD_SPREAD, Sword, find_fight_swords, find_join_entry
@@ -39,6 +40,12 @@ SWORDS_TRIED = 2
 JOIN_TRIES = 2
 HINT_MAX_AGE = 30.0  # dernier clic du personnage qui a lancé le combat : au-delà, il ne dit plus où est l'épée
 NEAR_HINT = 350  # px de référence autour du dernier clic du principal : là où chercher l'épée d'abord
+# Suiveurs suivants (18/10, utilisateur : position du clic sur l'épée un peu au hasard, sans jamais rater) : le 17/10,
+# les 7 clics droits tombaient à 3 px près du même point. Une fois sur deux le point qui a marché, sinon l'autre
+# partie haute visible de la même épée (pommeau ou poignée, au-dessus des têtes ; pas la garde, qu'un personnage
+# debout sur l'épée cache : 01/10, menu « Parler » d'un PNJ).
+QUICK_SAME_SPOT = 0.5
+SWORD_PARTS = 2
 
 
 def recent_click(member: Member) -> tuple[float, float] | None:
@@ -60,6 +67,8 @@ class Joiner:
     def __init__(self, timeout: float = 20.0) -> None:
         self.timeout = timeout  # par personnage
         self.known: tuple[float, float] | None = None  # point de l'épée qui a marché (repère de référence), ce combat
+        # Autres parties visibles de cette épée : (point, demi-étendue), repère de référence.
+        self.spots: list[tuple[tuple[float, float], tuple[float, float]]] = []
         self.quick: dict[str, float] = {}  # personnage -> heure du clic parti sans vérification (ask rapide)
         # Épée introuvable pour un suiveur, ce combat : les suivants ne l'attendent plus. 16/10, Incarnam 6,2 : 7 suiveurs
         # x 2 recherches de 4 s, le principal 1 min 30 au placement avant son premier tour.
@@ -67,6 +76,7 @@ class Joiner:
 
     def new_fight(self) -> None:
         self.known = None
+        self.spots = []
         self.quick = {}
         self.sword_missing = False
 
@@ -92,14 +102,15 @@ class Joiner:
             if member.popups.describe(frame) is None or not member.popups.handle(frame, 0):
                 break
             frame = game.look(park=False)
-        if self.known is not None:  # même épée, même endroit que pour le suiveur précédent
-            point = frame.layout.point(*self.known)
+        if self.known is not None:  # même épée que pour le suiveur précédent
+            spot, spread = self._spot()
+            point, spread = frame.layout.point(*spot), frame.layout.spread(*spread)
             if quick:
-                if game.click(point, frame.layout.spread(3, 3), button="right"):
+                if game.click(point, spread, button="right"):
                     self.quick[member.name] = time.monotonic()
                     log.info("Je rejoins le combat (clic droit sur l'épée en %s, comme le précédent)", point)
                     return True
-            elif self._try(game, point, frame.layout.spread(3, 3)):
+            elif self._try(game, point, spread):
                 return True
         end = time.monotonic() + (0 if self.sword_missing else SWORD_WAIT)
         while True:
@@ -129,10 +140,19 @@ class Joiner:
             for point, spread in sword.points or ((sword.click, frame.layout.spread(*SWORD_SPREAD)),):
                 if self._try(game, point, spread):
                     self.known = to_reference(frame.layout, point)
+                    scale = frame.layout.scale
+                    self.spots = [(to_reference(frame.layout, p), (s[0] / scale, s[1] / scale))
+                                  for p, s in sword.points[:SWORD_PARTS] if p != point]
                     return True
         path = game.recorder.save(game.look(park=False).image, "menu_rejoindre_absent", lossless=True)
         log.info("Pas de menu « Rejoindre » après le clic sur l'épée (capture : %s)", path)
         return False
+
+    def _spot(self) -> tuple[tuple[float, float], tuple[float, float]]:
+        """Où le suiveur suivant clique (repère de référence) : le point qui a marché, ou une autre partie visible."""
+        if not self.spots or random.random() < QUICK_SAME_SPOT:
+            return self.known, (3, 3)
+        return random.choice(self.spots)
 
     def _find(self, frame, hint: tuple[float, float] | None) -> list[Sword]:
         """Épées près du groupe attaqué d'abord (recherche 4 à 5 fois plus courte), sinon sur toute la carte."""

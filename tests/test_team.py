@@ -361,7 +361,8 @@ def test_follower_joins_through_the_sword_and_its_menu():
     assert abs(join_click[0] - 1112) <= 2 and abs(join_click[1] - 469) <= 2  # « Rejoindre »
 
 
-def test_next_followers_click_the_same_sword_at_once_and_are_checked_after():
+def test_next_followers_click_the_same_sword_at_once_and_are_checked_after(monkeypatch):
+    monkeypatch.setattr("bot.team.join.QUICK_SAME_SPOT", 1.0)  # le point qui a marché (sinon : autre partie haute)
     # 15/10, équipe de 8 : 0,7 s par suiveur entre deux clics sur l'épée (clic, attente, regard). Le premier la trouve ;
     # les suivants cliquent au même endroit sans attendre, leur entrée est vérifiée ensuite.
     screen = Screen()
@@ -1309,7 +1310,9 @@ def test_without_placement_everybody_joins_and_is_ready_at_once(monkeypatch):
     bot._claim_cell = lambda m, taken: pytest.fail("aucun suiveur ne choisit sa case")
     assert bot._placement(a) == [a, b, c]
     assert events(screen, "click") == [] and ("A", "placement") not in screen.events  # aucun déplacement
-    assert [(e[0], e[2]) for e in events(screen, "press")] == [("B", "f1"), ("C", "f1"), ("A", "f1")]
+    presses = [(e[0], e[2]) for e in events(screen, "press")]
+    # 18/10 : ordre des suiveurs mélangé, le lanceur du combat toujours en dernier.
+    assert sorted(presses[:2]) == [("B", "f1"), ("C", "f1")] and presses[2] == ("A", "f1")
     assert bot._cells == {}  # cases inconnues : repérées au premier tour
 
 
@@ -1393,3 +1396,31 @@ def test_sword_found_with_a_wider_handle_in_a_taller_window():
     # 7 suiveurs ne l'ont pas vue et Koalaloupour, seul, est mort.
     (sword,) = find_fight_swords(load_frame("epee_champs_1057"))
     assert abs(sword.center[0] - 1064) <= 6 and abs(sword.center[1] - 274) <= 6
+
+
+def test_followers_click_other_upper_parts_of_the_sword_never_the_guard(monkeypatch):
+    # 18/10 : les suiveurs suivants ne cliquent plus tous au même pixel ; une fois sur deux le point qui a marché,
+    # sinon l'autre partie haute de la même épée (pommeau ou poignée), jamais la garde (cachée par qui est dessus).
+    from bot.team.join import SWORD_PARTS
+
+    joiner = Joiner()
+    joiner.known = (900.0, 300.0)
+    joiner.spots = [((901.0, 316.0), (1.0, 4.0))]
+    monkeypatch.setattr("bot.team.join.random.random", lambda: 0.9)
+    assert joiner._spot() == ((901.0, 316.0), (1.0, 4.0))
+    monkeypatch.setattr("bot.team.join.random.random", lambda: 0.1)
+    assert joiner._spot() == ((900.0, 300.0), (3, 3))
+    joiner.spots = []
+    monkeypatch.setattr("bot.team.join.random.random", lambda: 0.9)
+    assert joiner._spot() == ((900.0, 300.0), (3, 3))
+    assert SWORD_PARTS == 2  # pommeau et poignée seulement
+
+
+def test_sword_spots_remembered_after_the_first_join():
+    screen = Screen()
+    sword = with_sword("hors_combat", at=(900, 300))
+    follower = member("Second", screen, sword, load_frame("preparation"))
+    joiner = Joiner(timeout=5)
+    assert joiner.join(follower, hint=None)
+    assert joiner.known is not None and len(joiner.spots) <= 1
+    assert all(spot != joiner.known for spot, _ in joiner.spots)

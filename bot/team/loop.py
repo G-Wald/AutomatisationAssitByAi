@@ -89,6 +89,7 @@ START_CONFIRM = 2 * SETTLE_AFTER_READY
 REPLAY_GUARD = 1.5
 STUCK_TURNS = 3  # tours d'affilée où la main ne passe pas : ce personnage n'est plus cru en train de jouer...
 STUCK_PAUSE = 30.0  # ... pendant ce temps (16/10 : 79 « La main ne semble pas être passée » de Dinarpepe, 14 min)
+READY_GAP = (0.05, 0.6)  # s ajoutées au hasard après chaque Prêt (en plus de son geste) : 8 Prêt en ~3 à 5 s
 OVERTIME = 300.0  # s au-delà de la durée de la session : arrêt même en plein combat (16/10 : 30 min prévues, 43 min)
 # Pendant le tour d'un personnage, ni son timer ni son portrait encadré : revu sur une 2e capture avant de conclure
 # que son tour est fini (11/10, idée validée par l'utilisateur).
@@ -745,9 +746,12 @@ class TeamBot:
         if self.team.place:
             ready = self._seat_team(host, [host] + joined)
         if self.auto_ready:
-            for member in joined + [host]:
+            # 18/10 (utilisateur : un peu d'aléatoire, mais rapide) : le 17/10, les 8 Prêt tombaient toutes les 0,31 s,
+            # toujours dans le même ordre. Ordre mélangé, écart tiré au hasard ; le lanceur du combat toujours en dernier.
+            for member in random.sample(joined, len(joined)) + [host]:
                 if member.name not in ready:
                     self._ready(member)
+                    member.game.sleep(random.uniform(*READY_GAP))
         return [host] + joined if self._wait_combat(host) else []
 
     def _placement_frame(self, host: Member) -> Frame | None:
