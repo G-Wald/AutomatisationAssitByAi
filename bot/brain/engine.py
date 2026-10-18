@@ -528,6 +528,8 @@ class _Planner:
                         continue
                 if at_start and (spell.spell_id, target) in self.use.refused:
                     continue  # refusé d'ici (combat.py les oublie après un déplacement) : d'une autre case, on verra
+                if at_start and spell.spell_id in self.use.empty_refused and target not in self.enemies:
+                    continue  # déjà refusé d'ici sur une case vide : pas une autre case vide (tactics.SpellUse)
                 if at_start and gap >= self.use.beyond.get(spell.spell_id, gap + 1):
                     continue  # refusé d'ici à cette distance, dans la marge du relief : plus loin, pas mieux
                 if zone_hits(shape, size, origin, target, self.ally_cells, safe=True):

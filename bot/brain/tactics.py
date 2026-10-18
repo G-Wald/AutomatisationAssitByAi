@@ -87,6 +87,10 @@ class SpellUse:
     # Sort refusé au-delà de sa portée (marge d'une carte à relief) : distance d'ici à partir de laquelle il ne part
     # plus, pour lui et les sorts qui portent moins loin (refused_beyond). Oublié après un déplacement.
     beyond: dict[str, int] = field(default_factory=dict)
+    # Sort de zone refusé d'ici sur une case vide : plus d'autre case vide pour lui d'ici (18/10, Champs 4,3 : Flèche
+    # Enflammée refusée sur 3 cases vides alignées vers un ennemi caché par un bloc, puis de nouveau après un pas, 6
+    # refus et ~20 s pour Vertdepomme, autant pour Vieenjaune). Oublié après un déplacement, comme `refused`.
+    empty_refused: set = field(default_factory=set)
     unavailable: set = field(default_factory=set)  # sorts non sélectionnables ce tour
     greyed: set = field(default_factory=set)  # sorts grisés dans la barre sur la dernière capture
     measured: dict[str, tuple[int, int]] = field(default_factory=dict)  # portée affichée ce tour
@@ -105,6 +109,7 @@ class SpellUse:
         self.casts_on_target.clear()
         self.refused.clear()
         self.beyond.clear()
+        self.empty_refused.clear()
         self.unavailable.clear()
         self.greyed.clear()
         self.measured.clear()

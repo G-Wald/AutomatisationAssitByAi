@@ -138,6 +138,18 @@ def test_pushing_an_enemy_i_walked_up_to_is_no_danger_removed():
     assert kinds(turn) == [MOVE, CAST] and turn.steps[0].pm == 2 and distance(turn.steps[0].cell, (6, 6)) == 4
 
 
+def test_zone_refused_on_an_empty_cell_tries_no_other_empty_cell_from_here():
+    # 18/10, Champs 4,3 : Flèche Enflammée refusée sur 3 cases vides alignées vers un ennemi caché par un bloc, ~20 s.
+    poussiere = solomonk_spell("96")  # cercle de 2 : vise une case vide entre les ennemis
+    enemies = [(3, 1), (5, 1), (4, 4)]
+    first = plan((0, 0), 0, enemies, [poussiere]).first
+    assert first.cell not in enemies
+    use = new_use(6)
+    use.empty_refused.add(poussiere.spell_id)
+    again = plan((0, 0), 0, enemies, [poussiere], use=use).first
+    assert again is None or again.cell in enemies  # plus de case vide d'ici ; un ennemi visé reste possible
+
+
 def test_ally_is_never_targeted_nor_caught_in_a_zone():
     # Allié juste derrière l'ennemi : la ligne de la Flèche Enflammée le prendrait -> Flèche Magique.
     turn = plan((0, 0), 0, [(2, 2)], [MAGIQUE, ENFLAMMEE], pa=4, allies=[(3, 3)])

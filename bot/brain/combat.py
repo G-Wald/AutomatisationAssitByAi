@@ -614,6 +614,7 @@ class CombatAI:
                 pm_used += steps
                 self._use.refused.clear()  # nouvelle case : la ligne de vue a pu se dégager
                 self._use.beyond.clear()
+                self._use.empty_refused.clear()
                 committed = committed or step.kind == MOVE
                 placed = placed or (step.kind != MOVE and steps == step.pm)
                 continue
@@ -647,6 +648,8 @@ class CombatAI:
                 self._use.unavailable.add(spell.spell_id)  # plus assez de PA pour lui, relance... : un autre
             elif result is Cast.OUT_OF_REACH:
                 self._use.refused |= refusals(spell, step.cell, self.spells, self._use)
+                if all(e.cell != step.cell for e in enemies):
+                    self._use.empty_refused.add(spell.spell_id)  # zone sur une case vide : pas une autre d'ici
                 self._use.beyond.update(refused_beyond(spell, distance(me.cell, step.cell), self.spells, self._use))
             else:
                 break
