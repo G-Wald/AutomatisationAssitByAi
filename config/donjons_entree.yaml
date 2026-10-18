@@ -1,0 +1,16 @@
+# Chemin d'entrée des donjons, case par case, lu par bot/team/dungeon.py (cases de la grille de combat, comme les
+# soleils des cartes). Recherche sur les donjons candidats au farm (sources, données du client) : config/donjons.yaml.
+# Incarnam (18/10, captures et explications de l'utilisateur) : la grotte sur la carte 6,5 (sous-zone Divers) mène à
+# « Incarnam (Donjon) » aux mêmes coordonnées. Une dalle à fouler (un seul personnage suffit) déplace la pierre qui
+# bloquait le soleil de la salle suivante ; là, Ma'ster Donge prend la clef de chaque personnage (chacun en a une sur
+# lui) et le fait entrer.
+incarnam:
+  nom: Donjon d'Incarnam
+  monde: incarnam
+  carte: [6, 5]           # carte extérieure où est l'entrée
+  entree: [16, 14]        # soleil de la grotte (config/monde/incarnam.json : « autres » de 6,5)
+  dalle: [18, 20]         # première dalle de la salle d'entrée
+  soleil: [23, 5]         # soleil libéré par la pierre (en haut à droite), vers la salle de Ma'ster Donge ;
+                          # (13, 7), en haut à gauche dans le rayon de lumière, ramène dehors
+  pnj: [20, 14]           # Ma'ster Donge, devant la porte (ses pieds ; son corps 35 px au-dessus)
+  reponse: clef de la porte   # « Voici la clef de la porte. »

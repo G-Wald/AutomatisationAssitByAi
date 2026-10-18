@@ -77,6 +77,55 @@ def ocr_lines(image: np.ndarray) -> list[str] | None:
     return asyncio.run(recognize())
 
 
+def ocr_boxes(image: np.ndarray) -> list[tuple[str, tuple[float, float, float, float]]] | None:
+    """Lignes lues par l'OCR de Windows avec leur cadre (x0, y0, x1, y1) en pixels de `image` ; None sans OCR. Pour
+    cliquer sur un texte (entrée « Parler » d'un menu, réponse dans la bulle d'un PNJ)."""
+    try:
+        from winrt.windows.globalization import Language
+        from winrt.windows.graphics.imaging import BitmapPixelFormat, SoftwareBitmap
+        from winrt.windows.media.ocr import OcrEngine
+        from winrt.windows.storage.streams import DataWriter
+    except ImportError:
+        return None
+
+    async def recognize():
+        bgra = cv2.cvtColor(image, cv2.COLOR_BGR2BGRA)
+        writer = DataWriter()
+        writer.write_bytes(bgra.tobytes())
+        bitmap = SoftwareBitmap.create_copy_from_buffer(writer.detach_buffer(), BitmapPixelFormat.BGRA8,
+                                                        bgra.shape[1], bgra.shape[0])
+        engine = OcrEngine.try_create_from_language(Language("fr")) or OcrEngine.try_create_from_user_profile_languages()
+        if engine is None:
+            return None
+        result = await engine.recognize_async(bitmap)
+        lines = []
+        for line in result.lines:
+            rects = [word.bounding_rect for word in line.words]
+            if not rects:
+                continue
+            x0, y0 = min(r.x for r in rects), min(r.y for r in rects)
+            x1, y1 = max(r.x + r.width for r in rects), max(r.y + r.height for r in rects)
+            lines.append((line.text, (x0, y0, x1, y1)))
+        return lines
+
+    return asyncio.run(recognize())
+
+
+def find_text(frame: Frame, box: tuple[int, int, int, int], wanted: str, zoom: float = 2) -> Point | None:
+    """Centre (pixels de la fenêtre) de la première ligne lue dans `box` qui contient `wanted` (accents, majuscules
+    indifférents) ; None si elle n'y est pas ou sans OCR."""
+    x0, y0, x1, y1 = (max(0, round(v)) for v in box)
+    crop = frame.image[y0:y1, x0:x1]
+    if crop.size == 0:
+        return None
+    lines = ocr_boxes(cv2.resize(crop, None, fx=zoom, fy=zoom, interpolation=cv2.INTER_CUBIC)) or []
+    target = _plain(wanted)
+    for text, (a, b, c, d) in lines:
+        if target in _plain(text):
+            return round(x0 + (a + c) / 2 / zoom), round(y0 + (b + d) / 2 / zoom)
+    return None
+
+
 def parse_position(lines: list[str], name: str | None = None) -> tuple[int, int] | None:
     """Coordonnées de la dernière ligne « (Groupe) Nom : [x,y] » (de `name` s'il est donné)."""
     for line in reversed(lines):
