@@ -111,17 +111,21 @@ def ocr_boxes(image: np.ndarray) -> list[tuple[str, tuple[float, float, float, f
     return asyncio.run(recognize())
 
 
-def find_text(frame: Frame, box: tuple[int, int, int, int], wanted: str, zoom: float = 2) -> Point | None:
+def find_text(frame: Frame, box: tuple[int, int, int, int], wanted: str, zoom: float = 2,
+              exact: bool = False) -> Point | None:
     """Centre (pixels de la fenêtre) de la première ligne lue dans `box` qui contient `wanted` (accents, majuscules
-    indifférents) ; None si elle n'y est pas ou sans OCR."""
+    indifférents) ; `exact` : la ligne entière, sans puce ni point final (une réponse dans la bulle d'un PNJ : sa
+    question peut contenir les mêmes mots, « je vous téléporte à la sortie ou à l'auberge ») ; None si elle n'y est
+    pas ou sans OCR."""
     x0, y0, x1, y1 = (max(0, round(v)) for v in box)
     crop = frame.image[y0:y1, x0:x1]
     if crop.size == 0:
         return None
     lines = ocr_boxes(cv2.resize(crop, None, fx=zoom, fy=zoom, interpolation=cv2.INTER_CUBIC)) or []
-    target = _plain(wanted)
+    target = _plain(wanted).strip(" .•")
     for text, (a, b, c, d) in lines:
-        if target in _plain(text):
+        line = _plain(text).strip(" .•")
+        if line == target if exact else target in line:
             return round(x0 + (a + c) / 2 / zoom), round(y0 + (b + d) / 2 / zoom)
     return None
 

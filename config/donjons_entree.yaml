@@ -13,4 +13,10 @@ incarnam:
   soleil: [23, 5]         # soleil libéré par la pierre (en haut à droite), vers la salle de Ma'ster Donge ;
                           # (13, 7), en haut à gauche dans le rayon de lumière, ramène dehors
   pnj: [20, 14]           # Ma'ster Donge, devant la porte (ses pieds ; son corps 35 px au-dessus)
-  reponse: clef de la porte   # « Voici la clef de la porte. »
+  reponse: Voici la clef de la porte   # sa réponse, ligne entière
+  salles: 4               # salles à combattre, la dernière celle du boss Milimilou (18/10 : 4 combats)
+  # Salle de fin (après le boss Milimilou) : Ma'ster Donge de nouveau ; clic droit, « A la sortie. » ramène dehors
+  # en 6,5, devant la grotte (« A l'auberge. » : ailleurs).
+  pnj_fin: [21, 11]
+  reponse_fin: A la sortie
+  clic_fin: droit

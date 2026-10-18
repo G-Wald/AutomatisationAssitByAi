@@ -15,7 +15,7 @@ import cv2
 import numpy as np
 
 from bot.perception.blobs import find_blobs
-from bot.perception.colors import UI_BEIGE, near
+from bot.perception.colors import UI_BEIGE, UI_BEIGE_DARK, near
 from bot.perception.frame import Frame
 from bot.perception.layout import REF_HEIGHT, Box, Point
 from bot.perception.templates import ASSETS_DIR, load_template, match_template
@@ -231,7 +231,8 @@ def _beige_windows(frame: Frame, min_fill: float) -> list[Box]:
     box = layout.map_box
     small = cv2.resize(frame.crop(box), None, fx=0.25, fy=0.25, interpolation=cv2.INTER_AREA)  # 16 fois moins de pixels
     found = []
-    for blob in find_blobs(near(small, UI_BEIGE, 10), close=2):
+    beige = near(small, UI_BEIGE, 10) | near(small, UI_BEIGE_DARK, 10)  # « Options » : le fond plus sombre
+    for blob in find_blobs(beige, close=2):
         if 4 * blob.w >= layout.length(250) and 4 * blob.h >= layout.length(120) and blob.fill >= min_fill:
             x, y = box[0] + 4 * blob.x, box[1] + 4 * blob.y
             found.append((blob.w * blob.h, (x, y, x + 4 * blob.w, y + 4 * blob.h)))

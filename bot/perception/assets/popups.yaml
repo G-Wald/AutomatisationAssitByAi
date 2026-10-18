@@ -27,3 +27,7 @@ popups:
     detect: challenge_en_cours_titre.png  # « Challenge en cours » (16/10, en combat, Incarnam 6,2) : cachait la carte de
                                           # Dinarpepe, ni ennemi ni personnage vus, l'équipe bloquée 14 min
     close: challenge_fermer_x.png         # croix orange en haut à droite de la fenêtre
+  - name: options
+    detect: options_titre.png           # « Options » du jeu : ouverte par l'entrée « Options » du menu de Flash (18/10,
+                                        # clic droit du donjon sur une case sans PNJ, le milieu du menu cliqué)
+    close: fin_de_combat_fermer.png     # bouton « Fermer » sous la fenêtre

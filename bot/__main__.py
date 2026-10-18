@@ -60,7 +60,7 @@ from bot.connection.manager import Watcher, connect_at_start
 from bot.connection.settings import ConnectionSettings
 from bot.debug.bilans import archive, archive_missing
 from bot.debug.recorder import Recorder, prune_sessions
-from bot.team.dungeon import DungeonEntry, load_dungeons
+from bot.team.dungeon import DungeonFarm, load_dungeons
 from bot.team.loop import TeamBot
 from bot.team.member import Focus, make_member, tag_logs
 from bot.team.roster import TeamSettings, pick_team
@@ -234,8 +234,11 @@ def main() -> int:
                         help="coordonnées de la carte de départ (en haut à gauche du jeu), pour les modes qui changent de carte")
     parser.add_argument("--title", help="partie du titre de la fenêtre (défaut : config/settings.yaml)")
     parser.add_argument("--donjon", metavar="NOM",
-                        help="mode équipe : entrer dans le donjon NOM (config/donjons_entree.yaml), l'équipe devant l'entrée ; "
-                             "NOM:ETAPE pour reprendre à une étape (entree, dalle, soleil, pnj)")
+                        help="mode équipe : faire le donjon NOM (config/donjons_entree.yaml), l'équipe devant l'entrée ; "
+                             "NOM:ETAPE pour reprendre à une étape (entree, dalle, soleil, pnj, salles), NOM:pnj:NOMS pour "
+                             "ces seuls personnages (les autres déjà passés), NOM:salles:N en salle N")
+    parser.add_argument("--passages", type=int, default=1, metavar="N",
+                        help="avec --donjon : N passages complets (entrée, combats de salle en salle, sortie)")
     parser.add_argument("--equipe", action="store_true",
                         help="mode équipe : toutes les fenêtres du jeu (ou celles de team.members), un personnage chacune")
     parser.add_argument("--principal", metavar="NOM",
@@ -464,12 +467,15 @@ def run_team(args: argparse.Namespace, settings: dict, team: TeamSettings, title
             log.info("Reconnexion automatique : serveur %s", connection.server)
             bot.connection = Watcher(connection, players)
         if args.donjon:
-            name, _, step = args.donjon.partition(":")
+            name, _, rest = args.donjon.partition(":")
+            step, _, who = rest.partition(":")
+            room = int(who) if step == "salles" and who.isdigit() else 1  # « salles:2 » : reprise en salle 2
+            only = None if step == "salles" else {n.strip().lower() for n in who.split(",") if n.strip()} or None
             spec = load_dungeons().get(name)
             if spec is None:
                 log.error("Donjon inconnu : %s (config/donjons_entree.yaml)", args.donjon)
                 return 1
-            return 0 if DungeonEntry(members, spec).enter(step or "entree") else 1
+            return 0 if DungeonFarm(bot, spec, args.passages).run(step or "entree", only, room) == args.passages else 1
         bot.run()
     except BotStopped as stop:
         log.info("Bot arrêté (%s)", stop)

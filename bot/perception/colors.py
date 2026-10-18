@@ -7,6 +7,7 @@ TEAMS = (RED, BLUE)
 
 RANGE_BLUE = (171, 109, 47)  # case à portée du sort sélectionné (carte en mode tactique)
 UI_BEIGE = (170, 207, 213)  # fond des fenêtres, menus et panneaux
+UI_BEIGE_DARK = (157, 191, 201)  # fond plus sombre de certaines fenêtres (« Options », 18/10)
 
 
 def _channels(image: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:

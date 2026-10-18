@@ -276,6 +276,7 @@ class Engager:
         self.settings = settings
         self.missed = False  # dernier échec : des groupes restent à essayer (on refait une recherche tout de suite)
         self.none_found = False  # dernière recherche : aucun groupe attaquable sur la carte (ou tous ratés)
+        self.groups_seen = 0  # dernière recherche : groupes vus sur la carte, ratés compris (salle de donjon finie : 0)
         self._skipped: list[_Skip] = []
         self._no_menu: list[tuple[GroupTooltip, float]] = []  # (infobulle, quand) : clics sans menu « Attaquer »
         self._z_until = float("-inf")  # jusqu'à quand les infobulles de Z peuvent rester affichées (game.now)
@@ -386,7 +387,9 @@ class Engager:
         frame = self._show_groups()
         if read_scene(frame).phase is not Phase.OUT_OF_COMBAT:
             return False  # un combat a commencé entre-temps (agression, lancement tardif)
-        tooltips = [t for t in find_group_tooltips(frame) if t.monsters <= self.settings.max_monsters]
+        seen = find_group_tooltips(frame)
+        self.groups_seen = len(seen)
+        tooltips = [t for t in seen if t.monsters <= self.settings.max_monsters]
         self.game.recorder.save(frame.image, "groupes_z", quality=92)  # capture brute, pour réanalyse
         firsts = [points[0] for points in (hover_points(t, frame) for t in tooltips) if points]  # 1er survol prévu
         self.game.recorder.save(
