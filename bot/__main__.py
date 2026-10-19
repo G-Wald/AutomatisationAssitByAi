@@ -235,8 +235,8 @@ def main() -> int:
     parser.add_argument("--title", help="partie du titre de la fenêtre (défaut : config/settings.yaml)")
     parser.add_argument("--donjon", metavar="NOM",
                         help="mode équipe : faire le donjon NOM (config/donjons_entree.yaml), l'équipe devant l'entrée ; "
-                             "NOM:ETAPE pour reprendre à une étape (entree, dalle, soleil, pnj, salles), NOM:pnj:NOMS pour "
-                             "ces seuls personnages (les autres déjà passés), NOM:salles:N en salle N")
+                             "NOM:ETAPE pour reprendre à une étape (entree, dalle, soleil, pnj, salles), NOM:ETAPE:NOMS "
+                             "pour ces seuls personnages à cette étape (les autres l'ont faite), NOM:salles:N en salle N")
     parser.add_argument("--passages", type=int, default=1, metavar="N",
                         help="avec --donjon : N passages complets (entrée, combats de salle en salle, sortie)")
     parser.add_argument("--equipe", action="store_true",
@@ -475,7 +475,7 @@ def run_team(args: argparse.Namespace, settings: dict, team: TeamSettings, title
             if spec is None:
                 log.error("Donjon inconnu : %s (config/donjons_entree.yaml)", args.donjon)
                 return 1
-            return 0 if DungeonFarm(bot, spec, args.passages).run(step or "entree", only, room) == args.passages else 1
+            return 0 if DungeonFarm(bot, spec, args.passages).run(step or None, only, room) == args.passages else 1
         bot.run()
     except BotStopped as stop:
         log.info("Bot arrêté (%s)", stop)

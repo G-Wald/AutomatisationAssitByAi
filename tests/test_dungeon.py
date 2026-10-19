@@ -37,6 +37,8 @@ def test_whole_team_takes_the_cave_sun_and_each_decor_changes():
     clicks = [e[2] for e in events(screen, "click")]
     x, y = outside.grid.center((16, 14))
     assert len(clicks) == 2 and all(abs(cx - x) <= 25 and abs(cy - y) <= 15 for cx, cy in clicks)
+    # Les autres joueurs cachés (touche E tenue) pendant chaque clic : 19/10, un marchand sous le soleil.
+    assert [e[2] for e in events(screen, "hold")] == ["e", "e"]
 
 
 def test_member_still_outside_clicks_the_sun_again_then_gives_up():
@@ -205,3 +207,81 @@ def test_end_room_only_after_the_last_room_fight():
     bot = FakeBot([member("A", screen, load_frame("donjon_incarnam_salle_fin"))])
     assert DungeonFarm(bot, incarnam(), 1)._fight_rooms(first=2)
     assert bot.steps == 7 and bot.fights == 3
+
+
+def test_late_member_takes_the_entrance_then_the_whole_team_goes_on(monkeypatch):
+    # 19/10 : Pesopepe resté dehors, les 7 autres dans la salle des dalles : « incarnam:entree:Pesopepe ».
+    class Named(str):
+        name = property(lambda self: str(self))
+
+    entry = DungeonEntry([Named("Koalaloupour"), Named("Pesopepe")], incarnam())
+    taken, plates, keys = [], [], []
+    monkeypatch.setattr(entry, "_all_take", lambda members, cell, what: taken.append((list(members), cell)) or True)
+    monkeypatch.setattr(entry, "_step_on_plate", plates.append)
+    monkeypatch.setattr(entry, "_give_key", lambda m: keys.append(m) or True)
+    assert entry.enter("entree", {"pesopepe"})
+    assert taken == [(["Pesopepe"], (16, 14)), (entry.members, (23, 5))]
+    assert plates == ["Koalaloupour"] and keys == entry.members
+
+
+def test_trophy_rewards_card_closed_by_its_cross():
+    # 19/10 : carte « récompenses de trophées » posée sur la carte de Pesopepe à la connexion ; fermée par sa croix.
+    from bot.perception.popups import find_trophy_cross
+    from bot.team.dungeon import DungeonFarm
+
+    class FakeBot:
+        def __init__(self, team):
+            self.members = team
+
+    screen = Screen()
+    card, outside = load_frame("recompenses_trophees"), load_frame(OUTSIDE)
+    assert find_trophy_cross(outside) is None
+    DungeonFarm(FakeBot([member("A", screen, card, outside)]), incarnam(), 1)._close_windows()
+    (close,) = [e[2] for e in events(screen, "click")]
+    assert abs(close[0] - 1323) <= 4 and abs(close[1] - 709) <= 4
+
+
+def test_each_member_located_by_its_decor():
+    screen = Screen()
+    outside, plates, npc_room, end = (load_frame(n) for n in (OUTSIDE, PLATES, NPC_ROOM, "donjon_incarnam_salle_fin"))
+    entry = DungeonEntry([], incarnam())
+    assert entry.locate(member("A", screen, outside)) == "entree"
+    assert entry.locate(member("B", screen, load_frame("recompenses_trophees"))) == "entree"  # marchands, trophées
+    assert entry.locate(member("C", screen, plates)) == "dalle"
+    assert entry.locate(member("D", screen, npc_room)) == "pnj"
+    assert entry.locate(member("E", screen, end)) is None  # déjà dans les salles
+
+
+def test_team_split_is_brought_together(monkeypatch):
+    # Utilisateur, 19/10 : le bot ramène tout le monde au même endroit. Pesopepe dehors, Koalaloupour dans la salle des
+    # dalles : Pesopepe seul prend la grotte, puis la dalle (le principal), le soleil et le PNJ pour les deux.
+    screen = Screen()
+    leader = member("Koalaloupour", screen, load_frame(PLATES))
+    late = member("Pesopepe", screen, load_frame(OUTSIDE))
+    entry = DungeonEntry([leader, late], incarnam())
+    taken, plates, keys = [], [], []
+    monkeypatch.setattr(entry, "_all_take", lambda members, cell, what: taken.append(([m.name for m in members], cell))
+                        or True)
+    monkeypatch.setattr(entry, "_step_on_plate", lambda m: plates.append(m.name))
+    monkeypatch.setattr(entry, "_give_key", lambda m: keys.append(m.name) or True)
+    assert entry.enter()
+    assert taken == [(["Pesopepe"], (16, 14)), (["Koalaloupour", "Pesopepe"], (23, 5))]
+    assert plates == ["Koalaloupour"] and keys == ["Koalaloupour", "Pesopepe"]
+
+
+def test_member_elsewhere_stops_the_entry():
+    screen = Screen()
+    team = [member("A", screen, load_frame(OUTSIDE)), member("B", screen, load_frame("donjon_incarnam_salle_fin"))]
+    assert not DungeonEntry(team, incarnam()).enter()
+    assert not events(screen, "click")
+
+
+def test_every_member_left_outside_is_retried_and_named(caplog):
+    # 19/10 : Pesopepe et Pombro restés dehors ; seul Pesopepe signalé, le bot arrêté sans retenter Pombro.
+    screen = Screen()
+    outside = load_frame(OUTSIDE)
+    team = [member("Pesopepe", screen, outside), member("Pombro", screen, outside)]
+    with caplog.at_level("WARNING"):
+        assert not DungeonEntry(team, incarnam())._all_take(team, (16, 14), "l'entrée")
+    assert len(events(screen, "click")) == 4  # deux clics chacun
+    assert "Pesopepe, Pombro pas passé(s) par l'entrée" in caplog.text

@@ -15,16 +15,18 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 
+import cv2
+import numpy as np
 import yaml
 
 from bot.brain.popups import close_flash_menu
-from bot.brain.travel import _click_spot, same_map
+from bot.brain.travel import _click_spot, _gap, _scene, same_map
 from bot.config import ROOT
 from bot.perception.chat import find_text
 from bot.perception.frame import Frame
 from bot.perception.grid import Cell
 from bot.perception.popups import (find_context_menu, find_flash_menu, find_known_popup, find_npc_dialog,
-                                   find_small_menu)
+                                   find_small_menu, find_trophy_cross)
 from bot.state.scene import Phase, read_scene
 from bot.team.member import Member
 
@@ -41,6 +43,9 @@ TALK_READS = 3  # lectures de « Parler » dans le menu du PNJ, 0,3 s d'écart
 REPLY_READS = 5  # lectures de la réponse dans la bulle, 0,3 s d'écart (son texte s'écrit après le cadre)
 EMPTY_ROOM = 2  # recherches de groupe vides d'affilée : salle de fin (une seule peut tomber pendant un affichage)
 BUTTONS = {"gauche": "left", "droit": "right"}
+PLACES_DIR = Path(__file__).resolve().parents[1] / "perception" / "assets" / "donjons"  # décors de référence
+PLACES = {"entree": "dehors, devant l'entrée", "dalle": "salle des dalles", "pnj": "salle du PNJ"}  # étapes situables
+SAME_PLACE = 12.0  # écart de décor (_gap de travel.py) sous lequel c'est la même salle (même : < 3, autre : > 30)
 
 
 @dataclass(frozen=True)
@@ -71,25 +76,70 @@ def load_dungeons(path: Path = DUNGEONS_FILE) -> dict[str, DungeonSpec]:
 
 
 class DungeonEntry:
-    def __init__(self, members: list[Member], spec: DungeonSpec) -> None:
+    def __init__(self, members: list[Member], spec: DungeonSpec, hide_key: str = "e") -> None:
         self.members = members  # le principal d'abord
         self.spec = spec
+        self.hide_key = hide_key  # touche qui cache les autres joueurs (travel.hide_players_key), tenue sur la carte
+        self._place_scenes: dict[str, np.ndarray] | None = None  # décors de référence (locate), lus une fois
 
-    def enter(self, start: str = "entree", only: set[str] | None = None) -> bool:
-        """True si toute l'équipe a donné sa clef et passé la porte. `start` : étape où reprendre (STEPS), l'équipe
-        déjà là (test d'une étape : « --donjon incarnam:pnj ») ; `only` : les seuls personnages concernés (noms en
-        minuscules), les autres déjà passés (« --donjon incarnam:pnj:Dinarpepe,Vieenjaune »)."""
+    def enter(self, start: str | None = None, only: set[str] | None = None) -> bool:
+        """True si toute l'équipe a donné sa clef et passé la porte. Sans `start` : chacun est d'abord situé (locate) et
+        ne fait que les étapes qui lui manquent (utilisateur, 19/10 : le bot doit ramener tout le monde au même endroit ;
+        Pesopepe resté dehors, les autres dans la salle des dalles). `start` : étape où reprendre (STEPS) ; `only` :
+        les seuls personnages qui font cette étape (noms en minuscules), les autres l'ayant déjà faite
+        (« --donjon incarnam:entree:Pesopepe »)."""
+        if start is None:
+            where = {m.name: self.locate(m) for m in self.members}
+            groups: dict[str | None, list[str]] = {}
+            for name, place in where.items():
+                groups.setdefault(place, []).append(name)
+            log.info("Donjon : où est chacun : %s", " ; ".join(f"{PLACES.get(place, 'ailleurs')} : {', '.join(names)}"
+                                                           for place, names in groups.items()))
+            if None in groups:
+                log.warning("Donjon : %s ni devant l'entrée ni dans les premières salles : je ne sais pas les ramener",
+                            ", ".join(groups[None]))
+                return False
+            stages = {m.name: STEPS.index(where[m.name]) for m in self.members}
+        else:
+            first = STEPS.index(start)
+            stages = {m.name: first if not only or m.name.lower() in only else first + 1 for m in self.members}
+        return self._enter(stages)
+
+    def locate(self, member: Member) -> str | None:
+        """Où en est ce personnage dans l'entrée : « entree » (dehors, devant), « dalle » (salle des dalles), « pnj »
+        (devant le PNJ), d'après son décor comparé à ceux de référence (assets/donjons/<donjon>_<étape>.jpg ; même
+        salle : écart < 3, autre salle : > 30) ; None ailleurs (déjà dans les salles, autre carte)."""
+        self._close_bubble(member)
+        scene = _scene(member.game.look(park=False))
+        gaps = {step: _gap(scene, ref) for step, ref in self._places().items()}
+        step = min(gaps, key=gaps.get, default=None)
+        return step if step is not None and gaps[step] < SAME_PLACE else None
+
+    def _places(self) -> dict[str, np.ndarray]:
+        if self._place_scenes is None:
+            self._place_scenes = {}
+            for step in PLACES:
+                image = cv2.imread(str(PLACES_DIR / f"{self.spec.key}_{step}.jpg"))
+                if image is not None:
+                    self._place_scenes[step] = _scene(Frame.of(image))
+        return self._place_scenes
+
+    def _enter(self, stages: dict[str, int]) -> bool:
+        """Les étapes de l'entrée, chacun à partir de la sienne (`stages` : nom -> indice dans STEPS de la première
+        étape qui lui manque)."""
         spec = self.spec
-        members = [m for m in self.members if not only or m.name.lower() in only]
-        steps = STEPS[STEPS.index(start):]
-        log.info("Donjon : %s, entrée de %s (étapes : %s)", spec.name, ", ".join(m.name for m in members),
-                 ", ".join(steps))
-        if "entree" in steps and not self._all_take(members, spec.entrance, "l'entrée"):
+        need = lambda step: [m for m in self.members if stages[m.name] <= STEPS.index(step)]  # noqa: E731
+        log.info("Donjon : %s, entrée de l'équipe (%s)", spec.name,
+                 ", ".join(f"{m.name} : {STEPS[min(stages[m.name], len(STEPS) - 1)]}" for m in self.members))
+        late = need("entree")
+        if late and not self._all_take(late, spec.entrance, "l'entrée"):
             return False
-        if "dalle" in steps and spec.plate is not None:
-            self._step_on_plate(members[0])
-        if "soleil" in steps and spec.sun is not None                 and not self._all_take(members, spec.sun, "le soleil libéré par la dalle"):
+        if need("dalle") and spec.plate is not None:
+            self._step_on_plate(need("dalle")[0])
+        late = need("soleil")
+        if late and spec.sun is not None and not self._all_take(late, spec.sun, "le soleil libéré par la dalle"):
             return False
+        members = need("pnj")
         refused = [m for m in members if not self._give_key(m)]
         for member in list(refused):  # une seconde fois, la bulle refermée
             log.info("Donjon : %s n'a pas passé la porte, je lui reparle", member.name)
@@ -120,24 +170,28 @@ class DungeonEntry:
 
     def _all_take(self, members: list[Member], cell: Cell, what: str) -> bool:
         """Chacun clique le soleil de `cell` (le principal d'abord), puis on vérifie que le décor de chacun a changé ;
-        un second clic pour qui n'est pas passé (case cachée par un autre personnage : un autre endroit du soleil)."""
-        log.info("Donjon : toute l'équipe prend %s (case %d,%d)", what, *cell)
+        un second clic pour qui n'est pas passé (case cachée par un autre personnage : un autre endroit du soleil).
+        Tous les retardataires sont retentés et nommés (19/10 : seul Pesopepe signalé, Pombro aussi resté dehors)."""
+        log.info("Donjon : %s prend %s (case %d,%d)", ", ".join(m.name for m in members), what, *cell)
         before = {m.name: self._click_sun(m, cell, 0) for m in members}
         late = [m for m in members if not self._changed(m, before[m.name])]
+        stuck = []
         for member in late:
             log.info("Donjon : %s n'est pas passé, je reclique sur %s", member.name, what)
             frame = self._click_sun(member, cell, 1)
             if not self._changed(member, frame):
                 path = member.game.recorder.save(member.game.look(park=False).image, "donjon_pas_passe", lossless=True)
                 log.warning("Donjon : %s ne passe pas par %s (capture : %s)", member.name, what, path)
-                return False
-        return True
+                stuck.append(member.name)
+        if stuck:
+            log.warning("Donjon : %s pas passé(s) par %s", ", ".join(stuck), what)
+        return not stuck
 
     def _step_on_plate(self, member: Member) -> None:
         game = member.game
         frame = game.look(park=False)
         log.info("Donjon : %s marche sur la dalle (case %d,%d) pour libérer le passage", member.name, *self.spec.plate)
-        game.click(frame.grid.center(self.spec.plate), frame.grid.click_spread())
+        self._hidden_click(member, frame.grid.center(self.spec.plate), frame.grid.click_spread())
         game.sleep(PLATE_WALK)
 
     def _give_key(self, member: Member) -> bool:
@@ -220,8 +274,17 @@ class DungeonEntry:
     def _click_sun(self, member: Member, cell: Cell, spot: int) -> Frame:
         frame = member.game.look(park=False)
         point, spread = _click_spot(frame, cell, spot)
-        member.game.click(point, spread)
+        self._hidden_click(member, point, spread)
         return frame
+
+    def _hidden_click(self, member: Member, point, spread) -> None:
+        """Clic sur la carte, les autres joueurs cachés (touche E tenue, comme pour les soleils des cartes ; rappel de
+        l'utilisateur, 19/10) : devant la grotte, des marchands debout près du soleil, Pesopepe resté dehors."""
+        if not self.hide_key:
+            member.game.click(point, spread)
+            return
+        with member.game.holding(self.hide_key):
+            member.game.click(point, spread)
 
     def _changed(self, member: Member, before: Frame) -> bool:
         """Le décor de ce personnage a changé (autre salle) dans les CHANGE_WAIT secondes."""
@@ -245,11 +308,12 @@ class DungeonFarm:
         self.bot = bot
         self.spec = spec
         self.runs = runs
-        self.entry = DungeonEntry(bot.members, spec)
+        travel = getattr(bot, "travel_settings", None)
+        self.entry = DungeonEntry(bot.members, spec, getattr(travel, "hide_players_key", "e"))
 
-    def run(self, start: str = "entree", only: set[str] | None = None, room: int = 1) -> int:
+    def run(self, start: str | None = None, only: set[str] | None = None, room: int = 1) -> int:
         """Nombre de passages complets (entrée, salles, sortie). `start` : étape de l'entrée où reprendre (STEPS), ou
-        « salles » pour l'équipe déjà passée, aux combats de la salle `room`."""
+        « salles » pour l'équipe déjà passée, aux combats de la salle `room` ; sans : chacun situé (DungeonEntry.enter)."""
         done = 0
         for run in range(1, self.runs + 1):
             log.info("Donjon : passage %d/%d", run, self.runs)
@@ -270,9 +334,16 @@ class DungeonFarm:
 
     def _close_windows(self) -> None:
         """Fenêtre connue restée ouverte chez un personnage (18/10 : « Options », ouverte par un clic dans le menu de
-        Flash) : fermée avant les soleils et les PNJ, qui se cliquent sur la carte qu'elle cache."""
+        Flash) : fermée avant les soleils et les PNJ, qui se cliquent sur la carte qu'elle cache. De même la carte des
+        récompenses de trophées (19/10), par sa croix."""
         for member in self.bot.members:
             frame = member.game.look(park=False)
+            cross = find_trophy_cross(frame)
+            if cross is not None:
+                log.info("Donjon : %s : récompenses de trophées affichées, je les ferme (croix)", member.name)
+                member.game.click(cross, frame.layout.spread(2, 2))
+                member.game.sleep(0.5)
+                frame = member.game.look(park=False)
             if find_known_popup(frame, member.popups.specs) is not None:
                 member.popups.handle(frame, None)
                 member.game.sleep(0.5)

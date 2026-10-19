@@ -192,6 +192,19 @@ NPC_BUBBLE_MIN = (300, 120)  # px de référence : bulle de Matu Vuh 610 x 210 e
 NPC_CROSS_ZONE = 50  # px de référence : coin haut droit de la bulle où chercher la croix noire
 
 
+TROPHY_CROSS = (21.5, -30.5)  # px de référence : croix de la carte des récompenses de trophées, depuis son icône
+
+
+def find_trophy_cross(frame: Frame) -> Point | None:
+    """Carte « récompenses de trophées » (coffre orange sur fond blanc, croix en haut à droite), posée sur la carte à
+    la connexion (19/10, Pesopepe ; elle se ferme par sa croix) : centre de sa croix, None sans elle."""
+    found = match_template(frame, "trophees_icone.png", box=frame.layout.map_box, threshold=0.85)
+    if found is None:
+        return None
+    (x, y), _ = found
+    return round(x + frame.layout.length(TROPHY_CROSS[0])), round(y + frame.layout.length(TROPHY_CROSS[1]))
+
+
 def find_npc_dialog(frame: Frame) -> Point | None:
     """Bulle de dialogue d'un PNJ (nom, texte, croix « × » en haut à droite), ouverte par un clic droit sur lui. 17/10
     (journal 175051) : clic de sonde sur Matu Vuh, debout près d'un groupe ; la bulle cachait le décor (les 7 suiveurs
