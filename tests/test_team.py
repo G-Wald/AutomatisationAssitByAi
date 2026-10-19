@@ -1425,3 +1425,21 @@ def test_sword_spots_remembered_after_the_first_join():
     assert joiner.join(follower, hint=None)
     assert joiner.known is not None and len(joiner.spots) <= 1
     assert all(spot != joiner.known for spot, _ in joiner.spots)
+
+
+def test_a_guessed_cell_is_not_kept_for_the_team():
+    # 19/10 : la case d'un Crâ, devinée, gardée d'un tour à l'autre et ôtée aux autres : 8 déplacements ratés de plus.
+    # Seule une case prouvée par l'IA (me_sure) est retenue ; une case douteuse est oubliée.
+    screen = Screen()
+    frame = load_frame("combat_mon_tour")
+    a, b = member("A", screen, frame), member("B", screen, frame)
+    bot = team_bot(a, b)
+    bot._cells = {"A": (10, 10), "B": (14, 14)}
+    a.ai.me_sure = False
+    a.ai.on_turn = lambda: setattr(a.ai, "_me_cell", (12, 12))  # supposée : arrêté en route, pas revérifiée
+    bot._play(a, read_scene(frame))
+    assert "A" not in bot._cells and bot._cells["B"] == (14, 14)
+    b.ai.me_sure = True
+    b.ai.on_turn = lambda: setattr(b.ai, "_me_cell", (16, 14))  # arrivée vue
+    bot._play(b, read_scene(frame))
+    assert bot._cells["B"] == (16, 14)

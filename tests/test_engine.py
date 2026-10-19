@@ -515,7 +515,10 @@ def test_real_case_sadida_turn_uses_all_its_pm_and_says_why(caplog):
     ai = CombatAI(game, CombatSettings())
     ai._spells = SADIDA
     ai.play_turn(RED, is_mine=lambda f: f is not end, me_cell=(8, 26), team_cells=lambda: dict(TOUR_1))
-    assert presses(game) == []
+    # Aucun sort sélectionné avant le placement. Après, la fausse partie ne montre pas le personnage arrivé : déplacement
+    # raté depuis une case héritée, le bot revérifie où il est par la portée d'un sort (19/10).
+    click = next(i for i, action in enumerate(game.actions) if action[0] == "click")
+    assert [a for a in game.actions[:click] if a[0] == "press"] == []
     first = frame.grid.cell_at(*clicks(game)[0])
     assert distance(first, (8, 26)) == 3 and all(distance(first, ally) > 1 for ally in TOUR_1)
     line = next(r.getMessage() for r in caplog.records if r.getMessage().startswith("Placement pour le prochain tour"))

@@ -31,7 +31,7 @@ from bot.perception.placement import Placement, read_placement
 from bot.perception.spellbook import SpellEntry, read_spell_window
 from bot.perception.grid import distance
 from bot.brain.tactics import CombatSpell
-from bot.perception.sight import Terrain, range_center
+from bot.perception.sight import Terrain, locate_caster, range_center
 from bot.perception.toolbar import find_creature_button, find_tactical_button
 from bot.perception.popups import load_popup_specs
 from bot.perception.ui import PA_BUBBLE, default_slot_key, pa_changed, read_pa, region_changed, spell_slot_point
@@ -412,6 +412,7 @@ def test_my_own_team_mate_is_not_me_when_told_where_i_am():
     frame = load_frame("combat_cercles_colles")
     ai = CombatAI(FakeGame(frame), CombatSettings())
     ai._me_cell = (20, 18)
+    ai._me_sure = True  # case sûre (play_turn(me_cell=...))
     me, allies, enemies = ai._sides(frame, find_fighters(frame), BLUE)
     assert me.cell == (20, 18) and [a.cell for a in allies] == [(19, 17)] and [e.cell for e in enemies] == [(14, 20)]
 
@@ -1027,13 +1028,24 @@ def test_who_am_i_from_the_spell_range_when_nothing_else_says():
 
 def test_who_am_i_when_my_circle_is_hidden():
     # 03/10 : Jesuisleking sous la timeline, son cercle invisible : la portée affichée dit quand même où il est.
+    # 18/10, forêt d'Incarnam 3,4 : Vertdepomme juste au-dessus de la timeline, sa case comptée sous les portraits.
+    from test_perception import relief_frame
+
+    shown = relief_frame("portee_foret_plateau_lanceur_sur_la_timeline_incarnam_3_4", 470, 990)
+    fighters = [f for f in find_fighters(shown) if f.cell != (19, 29)]  # son cercle, sous les portraits : pas vu
+    found = locate_caster(shown, (1, 9), {f.cell for f in fighters if f.team == RED}, fighters)
+    assert found is not None and found.cell == (19, 29) and found.hidden
+
+
+def test_an_empty_cell_at_the_range_center_is_no_proof():
+    # 18/10 : Pelle Fantomatique attendue 0 à 6, affichée plus loin (bonus d'un allié) : centre sur une case vide, rien
+    # pour y cacher un cercle, pris pour « mon cercle est caché ». Ce n'est pas une preuve.
     shown = load_frame("combat_portee_sort")
     me, _ = me_and_enemy(shown)
     ally_cell = (me.cell[0] - 4, me.cell[1] - 2)
-    allies = [Fighter(RED, *shown.grid.center(ally_cell), ally_cell), Fighter(RED, 0, 0, (0, 30))]
+    allies = [Fighter(RED, *shown.grid.center(ally_cell), ally_cell)]  # mon cercle, bien visible, oublié exprès
     game = FakeGame(shown, load_frame("combat_mon_tour"))
-    found = CombatAI(game, CombatSettings())._locate_by_range(shown, allies, allies)
-    assert found is not None and found.cell == me.cell and found not in allies  # case virtuelle, pas un allié
+    assert CombatAI(game, CombatSettings())._locate_by_range(shown, allies, allies) is None
 
 
 def test_range_center_on_the_real_overlay():
@@ -1041,6 +1053,31 @@ def test_range_center_on_the_real_overlay():
     me, _ = me_and_enemy(shown)
     assert range_center(shown, (1, 7)) == me.cell
     assert range_center(load_frame("combat_mon_tour"), (1, 7)) is None  # pas de portée affichée
+
+
+def test_range_center_of_a_spell_cast_in_line():
+    # 19/10, donjon d'Incarnam : la portée de Flèche de Recul (1 à 5, en ligne) n'est qu'une croix ; cherchée comme un
+    # losange, aucun centre (117 repérages ratés) : le Crâ a pris un autre cercle pour le sien, 44 « n'a pas bougé ».
+    for name, cell in (("reperage_fleche_de_recul_en_ligne", (8, 20)), ("reperage_fleche_de_recul_au_bord", (2, 26))):
+        shown = load_frame(name)
+        assert range_center(shown, (1, 5)) is None
+        assert range_center(shown, (1, 5), in_line=True) == cell
+        assert any(f.cell == cell and f.team == RED for f in find_fighters(shown))  # un cercle de mon équipe
+
+
+def test_who_am_i_prefers_a_spell_whose_range_is_a_diamond():
+    # 19/10 : Flèche de Recul passée de 1-3 à 1-5, plus près de LOCATE_RANGE que Flèche Empoisonnée : choisie pour se
+    # repérer, sa croix ne disait rien. Un sort en ligne passe après les autres.
+    shown = load_frame("combat_portee_sort")  # portée 1 à 7 autour de moi
+    me, _ = me_and_enemy(shown)
+    decoy_cell = (me.cell[0] - 4, me.cell[1] - 2)
+    decoy = Fighter(RED, *shown.grid.center(decoy_cell), decoy_cell)
+    game = FakeGame(shown, load_frame("combat_mon_tour"))
+    ai = CombatAI(game, CombatSettings())
+    ai._spells = [CombatSpell(1, "fleche_de_recul", "Flèche de Recul", 4, (1, 6), in_line=True, damage=18),
+                  CombatSpell(3, "fleche_magique", "Flèche Magique", 4, (1, 7), damage=16)]
+    assert ai._locate_by_range(shown, [decoy, me], [decoy, me]) is me
+    assert presses(game) == ["3", "escape"]
 
 
 def test_ambiguous_placement_cell_goes_to_a_free_cell(monkeypatch):
@@ -1125,6 +1162,7 @@ def test_ally_with_a_hidden_circle_is_still_an_ally():
     ai = CombatAI(FakeGame(frame), CombatSettings())
     ai._team_cells = lambda: {hidden}
     ai._me_cell = me.cell
+    ai._me_sure = True  # case sûre (play_turn(me_cell=...))
     found, allies, _ = ai._sides(frame, fighters, RED)
     assert found == me and [a.cell for a in allies] == [hidden]
 

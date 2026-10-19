@@ -22,6 +22,9 @@ from bot.perception.frame import Frame
 from bot.perception.layout import Layout
 
 SHEET_HP_ZONE = (1462, 852, 1600, 892)  # cœur et vie de la fiche (repère de référence), avant les PA et PM
+SHEET_NAME_ZONE = (1420, 785, 1800, 830)  # nom du combattant, en haut de la fiche (sans « Niveau 22 » dessous)
+NAME_ZOOM = 2  # agrandissement avant l'OCR
+NAME_MATCH = 0.85  # ressemblance minimale du nom lu (difflib) : une lettre fausse sur 8 à 12
 SHEET_LIGHT = 0.6  # part de fond clair dans la zone : 0,75 à 0,80 sur une fiche, 0,2 sur la barre de sorts (03/10)
 DIGIT_MIN = 0.7  # ressemblance minimale d'un chiffre à son modèle
 DIGIT_MARGIN = 0.1  # avance sur le meilleur autre chiffre
@@ -95,3 +98,32 @@ def read_hovered_hp(frame: Frame) -> int | None:
             return None
         value += str(digit)
     return int(value)
+
+
+def read_hovered_name(frame: Frame) -> str | None:
+    """Nom du combattant survolé, écrit en haut de sa fiche (au-dessus de « Niveau 22 »), lu par l'OCR de Windows ;
+    None sans fiche, sans OCR ou sans texte. Lu « Walitcoin » et « Piou Rose » sur les captures du 03/10 et du 27/09
+    (combat_fiche_walitcoin_212pv.jpg, combat_infobulle.png)."""
+    from bot.perception.chat import ocr_lines  # import local : winrt n'est chargé que si on lit
+
+    if not sheet_visible(frame):
+        return None
+    region = frame.crop(frame.layout.box(*SHEET_NAME_ZONE))
+    if region.size == 0:
+        return None
+    lines = ocr_lines(cv2.resize(region, None, fx=NAME_ZOOM, fy=NAME_ZOOM, interpolation=cv2.INTER_CUBIC))
+    text = " ".join(line.strip() for line in lines or [] if line.strip())
+    return text or None
+
+
+def same_name(read: str | None, name: str) -> bool:
+    """Le nom lu sur la fiche est `name` : accents, majuscules et espaces indifférents, une lettre mal lue tolérée
+    (l / I, o / 0 de l'OCR) ; jamais un nom seulement contenu dans l'autre."""
+    import difflib
+
+    from bot.perception.chat import _plain
+
+    if not read or not name:
+        return False
+    a, b = _plain(read).replace(" ", ""), _plain(name).replace(" ", "")
+    return difflib.SequenceMatcher(None, a, b).ratio() >= NAME_MATCH

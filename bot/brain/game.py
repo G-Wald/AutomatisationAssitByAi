@@ -144,6 +144,15 @@ class Game:
     def move(self, point: tuple[float, float], spread: Spread = NO_SPREAD) -> Point:
         return self.input.move(point, spread)
 
+    def hover(self, point: tuple[float, float], spread: Spread = NO_SPREAD) -> None:
+        """Souris posée sur `point` sans clic, pour que le jeu affiche ce qu'elle survole (fiche d'un combattant).
+        Arrière-plan : un message « souris ici » (BackgroundInput.hover) ; pas encore vu montrer une fiche (08/10 :
+        aucune infobulle de groupe au survol envoyé), d'où la vérification de la fiche par l'appelant."""
+        if self.background:
+            self.input.hover(point, spread)
+        else:
+            self.input.move(point, spread)
+
     def click(self, point: tuple[float, float] | None = None, spread: Spread = NO_SPREAD, button: str = "left") -> bool:
         """False si le clic a été annulé (une autre fenêtre sous la souris)."""
         return self.input.click(point, spread, button) is not False
