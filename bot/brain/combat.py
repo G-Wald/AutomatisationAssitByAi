@@ -67,9 +67,9 @@ from bot.perception.chat import cast_announced, combat_lines
 from bot.perception.fighters import Fighter, clear_point, find_fighters
 from bot.perception.frame import Frame
 from bot.perception.grid import Cell, distance
-from bot.perception.hp import read_hovered_hp
+from bot.perception.hp import read_hovered_hp, read_hovered_name, same_name, sheet_visible
 from bot.perception.placement import read_placement, standing_cells
-from bot.perception.sight import (RangeView, Terrain, in_line_only, line_of_sight, range_center, read_blocks,
+from bot.perception.sight import (RangeView, Terrain, in_line_only, line_of_sight, locate_caster, read_blocks,
                                   read_range, read_terrain, sight_agreement)
 from bot.perception.spellbook import slot_greyed
 from bot.perception.timeline import timeline_portraits
@@ -96,6 +96,10 @@ log = logging.getLogger(__name__)
 
 CAST_ATTEMPTS = 3  # clics sur la cible au plus, quand le sort ne part pas
 LOCATE_RANGE = 6  # repérage par la portée d'un sort : portée maximale visée (losange visible en entier, assez grand)
+LOCATE_SAVED = 12  # captures « reperage_portee » gardées par personnage et par session (mesure du repérage)
+LOCATE_TRIES = 2  # repérage par la portée : sorts essayés au plus (le second si la portée du premier ne se lit pas)
+HOVER_SHEET = 0.35  # survol d'un cercle : attente avant de lire la fiche (nom) du combattant survolé
+HOVER_MISSES = 2  # survols sans aucune fiche, sans qu'une ait jamais paru : le survol ne sert plus de la session
 NOT_GONE_LIMIT = 2  # lancers de suite jamais partis sur un ennemi : sort écarté pour la session (03/10)
 SELF_CAST_METHODS = ("clic droit", "raccourci + clic sur moi")  # sort sur moi : une tentative de chaque
 # Bonus de portée qu'un allié peut m'avoir donné sans que je le sache (Tir Éloigné touche les alliés à 2 cases : +2 au
@@ -369,8 +373,10 @@ def _button_spread(frame: Frame, button: ToolbarButton) -> tuple[float, float]:
 
 
 class CombatAI:
-    def __init__(self, game: Game, settings: CombatSettings, spellbook: SpellBook | None = None) -> None:
+    def __init__(self, game: Game, settings: CombatSettings, spellbook: SpellBook | None = None,
+                 name: str | None = None) -> None:
         self.game = game
+        self.name = name  # nom du personnage (mode équipe) : lu sur sa fiche au survol, pour savoir lequel est moi
         self.settings = settings
         self.spellbook = spellbook
         self._keys: dict[int, str] = {settings.spell_slot: settings.resolved_spell_key}  # case -> raccourci ("" : clic)
@@ -391,6 +397,13 @@ class CombatAI:
         self._located = False  # repérage par la portée d'un sort fait ce tour
         self._locate_saved = 0
         self._me_cell: Cell | None = None  # ma case suivie pendant le tour (mode équipe)
+        # Ma case suivie est prouvée (portée d'un sort, nom au survol, arrivée vue, case sûre donnée par l'équipe) ;
+        # jamais devinée (19/10 : 4 Crâs sur le premier cercle rouge venu, 44 déplacements ratés, 15 tours sans tirer).
+        self._me_sure = False
+        self._proven_now = False  # ... prouvée pendant ce tour (pas seulement héritée du tour d'avant)
+        self._doubt = False  # déplacement raté ou arrêté en route : ma case est à revérifier avant d'agir
+        self._hover_seen = False  # une fiche est déjà apparue au survol pendant cette session
+        self._hover_misses = 0  # survols sans fiche : au-delà de HOVER_MISSES, le survol ne sert plus (arrière-plan)
         self._expected_plan = ""  # ce qu'il restait du dernier plan journalisé
         self._expected_step = None  # étape suivante du dernier plan (sort prévu : on dit pourquoi s'il disparaît)
         self._board = None  # terrain du dernier plan (pour le dire)
@@ -513,6 +526,8 @@ class CombatAI:
         """
         log.info("Mon tour")
         self._is_mine, self._find_me, self._me_cell = is_mine, find_me, me_cell
+        self._me_sure, self._proven_now, self._doubt = me_cell is not None, False, False  # me_cell : case sûre
+        self._warned_who = False  # « rien ne prouve lequel est moi » : une fois par tour
         self._team_cells = team_cells
         self._located = False  # repérage par la portée d'un sort fait ce tour (_locate_by_range)
         self._expected_plan = ""
@@ -664,29 +679,11 @@ class CombatAI:
 
     def _sides(self, frame: Frame, fighters: list[Fighter],
                my_team: str) -> tuple[Fighter | None, list[Fighter], list[Fighter]]:
-        """Moi, mes alliés (les autres cercles de ma couleur) et les ennemis."""
+        """Moi, mes alliés (les autres cercles de ma couleur) et les ennemis. Moi : None en mode équipe si rien ne
+        prouve lequel des cercles de ma couleur est le mien (le tour se termine sans rien faire, voir _whoami)."""
         mine = [f for f in fighters if f.team == my_team]
         enemies = [f for f in fighters if f.team != my_team]
-        me = None
-        if mine and self._find_me is not None:
-            me = self._find_me(frame, mine)
-        if me is None and self._me_cell is not None:
-            me = next((f for f in mine if f.cell == self._me_cell), None)  # un cercle sur ma case suivie : moi
-        if me is None and len(mine) > 1 and not self._located:
-            # Pas de cercle sur ma case suivie (ou case inconnue) : repérage par la portée d'un sort, une fois par tour
-            # (03/10 : case suivie périmée, un monstre m'avait poussé : 3 déplacements ratés de suite).
-            self._located = True
-            me = self._locate_by_range(frame, mine, fighters)
-        if me is None and self._me_cell is not None and (mine or my_team):
-            # Case suivie, déjà vérifiée ce tour : mon cercle est caché (corps d'un allié devant, timeline).
-            me = next((f for f in mine if f.cell == self._me_cell), None) or \
-                Fighter(my_team, *frame.grid.center(self._me_cell), self._me_cell)
-        if me is None and mine:
-            me = mine[0]
-            if len(mine) > 1 and not self._warned_who:
-                self._warned_who = True
-                log.warning("%d cercles de ma couleur et rien ne dit lequel est moi : je prends celui en %s (mode "
-                            "équipe : play_turn(me_cell=...) ou find_me)", len(mine), me.cell)
+        me = self._whoami(frame, mine, fighters, my_team)
         if me is not None and (self._find_me is not None or self._me_cell is not None):
             self._me_cell = me.cell
         allies = [f for f in mine if f is not me]
@@ -700,12 +697,57 @@ class CombatAI:
                 allies.append(Fighter(my_team, *frame.grid.center(cell), cell))
         return me, allies, enemies
 
+    def _whoami(self, frame: Frame, mine: list[Fighter], fighters: list[Fighter], my_team: str) -> Fighter | None:
+        """Moi parmi les cercles de ma couleur, toujours sur une preuve (19/10, donjon d'Incarnam : le premier cercle
+        rouge pris faute de mieux, 4 Crâs sur la même case supposée, 44 déplacements ratés et 15 tours sans tirer) :
+        1. ma case sûre (donnée par l'équipe, ou prouvée plus tôt) avec un cercle dessus, ou find_me (mode équipe) ;
+        2. sinon, ou si un déplacement raté la rend douteuse : la portée d'un sort, affichée autour de MA case ;
+        3. sinon : mon nom sur la fiche du cercle survolé ;
+        4. sinon : ma case prouvée ce tour, mon cercle caché (corps d'un allié devant, timeline).
+        Rien de tout ça en mode équipe : None, on ne joue pas sur une supposition. Joueur seul : son cercle."""
+        team = self._find_me is not None or self._me_cell is not None or self.name is not None
+        if not team and len(mine) <= 1:
+            return mine[0] if mine else None
+        if not self._doubt and (self._me_sure or self._me_cell is None):
+            me = self._find_me(frame, mine) if mine and self._find_me is not None else None
+            if me is None and self._me_cell is not None:
+                me = next((f for f in mine if f.cell == self._me_cell), None)  # un cercle sur ma case sûre : moi
+            if me is not None:
+                self._me_sure = True
+                return me
+        if mine and (self._doubt or not self._located):
+            # Pas de cercle sur ma case sûre (case inconnue, périmée : 03/10, un monstre m'avait poussé, 3 déplacements
+            # ratés de suite) ou case douteuse : repérage, une fois par tour et après chaque déplacement raté.
+            self._located, self._doubt = True, False
+            me = self._locate_by_range(frame, mine, fighters) or self._locate_by_hover(mine)
+            if me is not None:
+                self._me_sure = self._proven_now = True
+                return me
+            self._me_sure = self._me_sure and self._proven_now  # case prouvée ce tour : toujours valable
+        if self._me_cell is not None and self._me_sure and (mine or my_team):
+            return next((f for f in mine if f.cell == self._me_cell), None) or \
+                Fighter(my_team, *frame.grid.center(self._me_cell), self._me_cell)
+        if not team:
+            # Joueur seul avec plusieurs cercles de sa couleur (invocations) : le premier, comme avant.
+            if mine and not self._warned_who:
+                self._warned_who = True
+                log.warning("%d cercles de ma couleur et rien ne dit lequel est moi : je prends celui en %s",
+                            len(mine), mine[0].cell)
+            return mine[0] if mine else None
+        if mine and not self._warned_who:
+            self._warned_who = True  # une fois par tour (remis à zéro dans _play_turn)
+            path = self.game.recorder.save(frame.image, "qui_est_moi", lossless=True)
+            log.warning("%d cercles de ma couleur et rien ne prouve lequel est moi (ni la portée d'un sort, ni mon nom "
+                        "au survol) : je ne joue pas sur une supposition (capture : %s)", len(mine), path)
+        return None
+
     def _locate_by_range(self, frame: Frame, mine: list[Fighter], fighters: list[Fighter]) -> Fighter | None:
         """Moi parmi plusieurs cercles de ma couleur quand rien d'autre ne le dit (combat repris sans connaître les
         cases : 03/10, le bot s'est pris pour un allié, déplacements et sorts faux) : la portée d'un sort s'affiche
-        autour de MA case. Sa case est le centre du losange coloré (sight.range_center), cherché parmi toutes les
-        cases : mon cercle peut être caché (sous la timeline, 03/10). Un sort sélectionné puis Échap (~0,5 s). None si
-        la portée ne se lit pas, ou sans mode tactique."""
+        autour de MA case. Sa case est le centre du losange coloré (sight.locate_caster), cherché parmi toutes les
+        cases : mon cercle peut être caché (sous la timeline, 03/10). Un sort sélectionné puis Échap (~1,2 s) ; un
+        second sort si la portée du premier ne dit rien (LOCATE_TRIES). None si aucune portée ne se lit, ou sans mode
+        tactique."""
         known = {s.spell_id for s in self.spells}
         others = [s for s in getattr(self.spellbook, "bar_spells", lambda: [])() if s.spell_id not in known]
         # 11/10 : l'Iop n'avait aucune attaque à 2 cases de portée ; un sort hors tactique de la barre (Bond, 1 à 4)
@@ -714,27 +756,71 @@ class CombatAI:
         if not spells or not tactical_mode(frame):
             return None
         # Portée moyenne : un losange trop grand déborde de la carte et son centre se décale (03/10 : Lancer de Pièces,
-        # portée 12, centre trouvé 2 cases à côté) ; trop petit, peu de cases.
-        spell = min(spells, key=lambda s: abs(s.spell_range[1] - LOCATE_RANGE))
+        # portée 12, centre trouvé 2 cases à côté) ; trop petit, peu de cases. Un sort « en ligne » ne colore qu'une
+        # croix : en dernier (19/10 : Flèche de Recul passée de 1-3 à 1-5, préférée à Flèche Empoisonnée, 117 repérages
+        # ratés chez les Crâs, 44 « n'a pas bougé » sur 54).
+        ranked = sorted(spells, key=lambda s: (s.in_line, abs(s.spell_range[1] - LOCATE_RANGE)))
         self._learn_blocks(frame, fighters)  # trous et blocs connus : jamais colorés, exclus du losange attendu
-        shown = self._select_spell(frame, spell)
-        if shown is None:
-            return None
-        center = range_center(shown, spell_range(spell, self._use), exclude=self.map.unwalkable)
-        if self._locate_saved < 6:  # quelques captures pour vérifier le repérage
-            self._locate_saved += 1
-            self.game.recorder.save(annotate(shown, marks=[(shown.grid.center(center), "moi")] if center else []),
-                                    "reperage_portee")
-        self._cancel_spell()
-        if center is None:
-            log.info("Qui est moi parmi %d cercles de ma couleur ? La portée de %s ne le dit pas", len(mine), spell.name)
-            return None
-        circle = min(mine, key=lambda f: distance(f.cell, center))
-        if distance(circle.cell, center) <= 1:
-            log.info("Moi : le cercle en %s (au centre de la portée de %s)", circle.cell, spell.name)
+        for spell in ranked[:LOCATE_TRIES]:
+            shown = self._select_spell(frame, spell)
+            if shown is None:
+                continue
+            expected = spell_range(spell, self._use)
+            found = locate_caster(shown, expected, {f.cell for f in mine}, fighters, exclude=self.map.unwalkable,
+                                  in_line=spell.in_line, modifiable=spell.range_modifiable)
+            if self._locate_saved < LOCATE_SAVED:  # captures pour vérifier le repérage (sans repère dessiné dessus)
+                self._locate_saved += 1
+                self.game.recorder.save(shown.image, "reperage_portee")
+            self._cancel_spell()
+            if found is None:
+                log.info("Qui est moi parmi %d cercles de ma couleur ? La portée de %s ne le dit pas", len(mine),
+                         spell.name)
+                continue
+            shown_range = "" if found.spell_range == expected else                 f", affichée {found.spell_range[0]} à {found.spell_range[1]} au lieu de {expected[0]} à {expected[1]}"
+            if found.hidden:
+                log.info("Moi : en %s, au centre de la portée de %s%s ; mon cercle est caché", found.cell, spell.name,
+                         shown_range)
+                return Fighter(mine[0].team, *frame.grid.center(found.cell), found.cell)
+            circle = min(mine, key=lambda f: distance(f.cell, found.cell))
+            log.info("Moi : le cercle en %s (au centre de la portée de %s%s)", circle.cell, spell.name, shown_range)
             return circle
-        log.info("Moi : en %s, au centre de la portée de %s ; mon cercle est caché", center, spell.name)
-        return Fighter(circle.team, *frame.grid.center(center), center)
+        return None
+
+    def _locate_by_hover(self, mine: list[Fighter]) -> Fighter | None:
+        """Moi parmi les cercles de ma couleur : celui dont la fiche, au survol, porte mon nom (perception/hp.py,
+        read_hovered_name). Le plus proche de ma dernière case connue d'abord. En arrière-plan, le survol n'a encore
+        jamais montré de fiche (08/10 : ni infobulle de groupe, ni effet sur un bouton) : après HOVER_MISSES survols
+        sans fiche, sans qu'une ait jamais paru, il ne sert plus de la session. None si aucun nom lu n'est le mien."""
+        hover = getattr(self.game, "hover", None)
+        if not self.name or hover is None or not mine or (not self._hover_seen and self._hover_misses >= HOVER_MISSES):
+            return None
+        last = self._me_cell
+        found = None
+        for circle in sorted(mine, key=lambda f: distance(f.cell, last) if last is not None else 0):
+            hover((circle.x, circle.y))
+            self.game.sleep(HOVER_SHEET)
+            shown = self.game.look(park=False)
+            if not sheet_visible(shown):
+                self._hover_misses += 1
+                if not self._hover_seen:
+                    if self._hover_misses >= HOVER_MISSES:
+                        path = self.game.recorder.save(shown.image, "survol_sans_fiche", lossless=True)
+                        log.info("Survol d'un cercle : aucune fiche affichée (capture : %s) ; je ne me repère plus au "
+                                 "survol pendant cette session", path)
+                    break  # pas de fiche pour celui-ci : pas pour les autres non plus
+                continue
+            self._hover_seen = True
+            read = read_hovered_name(shown)
+            if same_name(read, self.name):
+                log.info("Moi : le cercle en %s (mon nom sur sa fiche, au survol)", circle.cell)
+                found = circle
+                break
+            log.debug("Cercle en %s : fiche de %s", circle.cell, read or "?")
+        self._mouse_away()
+        if found is None:
+            log.info("Qui est moi parmi %d cercles de ma couleur ? Mon nom n'est sur aucune fiche lue au survol",
+                     len(mine))
+        return found
 
     def _explain_dropped(self, plan: TurnPlan, me: Fighter, enemies: list[Fighter], allies: list[Fighter]) -> None:
         """Le sort que le plan d'avant prévoyait ensuite n'y est plus : pourquoi, d'après ce qui est connu (11/10 :
@@ -1523,7 +1609,8 @@ class CombatAI:
         arrived, frame = self._wait_arrival(me, best, steps)
         if arrived:
             if tracking:
-                self._me_cell = best
+                # Un cercle de ma couleur est apparu sur la case libre visée : c'est moi, preuve faite.
+                self._me_cell, self._me_sure, self._proven_now = best, True, True
             return steps  # arrivé
         mine = [f.cell for f in find_fighters(frame) if f.team == me.team]
         if me.cell not in mine:
@@ -1534,7 +1621,9 @@ class CombatAI:
             allies = {f.cell for f in fighters if f.team == me.team and f.cell != me.cell}
             now = min((c for c in mine if c not in allies), key=lambda c: distance(c, best), default=best)
             if tracking:
-                self._me_cell = now
+                # Case supposée, pas prouvée : revérifiée (portée, survol) avant d'agir encore, et jamais transmise
+                # à l'équipe telle quelle.
+                self._me_cell, self._me_sure, self._doubt = now, False, True
             if now != best:
                 used = min(steps, distance(me.cell, now))
                 log.info("Arrêté en %s au lieu de %s (%d PM dépensés sur %d) : chemin bloqué", now, best, used, steps)
@@ -1549,6 +1638,11 @@ class CombatAI:
         stats.stuck_moves += 1
         path = self.game.recorder.save(frame.image, "deplacement_rate", lossless=True)
         log.warning("Mon personnage n'a pas bougé (capture : %s)", path)
+        if tracking and not self._proven_now:
+            # Ma case n'était prouvée que par le tour d'avant (case sûre de l'équipe) : peut-être plus la bonne
+            # (poussé, cercle d'un allié venu dessus). Revérifiée avant de lancer d'ici ou de bouger encore.
+            log.info("Je vérifie où je suis avant de continuer")
+            self._me_sure, self._doubt = False, True
         return 0
 
     def _wait_arrival(self, me: Fighter, best: Cell, steps: int) -> tuple[bool, Frame]:
@@ -1575,6 +1669,11 @@ class CombatAI:
     def wanted_range(self) -> tuple[int, int]:
         """Portée à viser au placement : celle du sort de dégâts qui porte le plus loin."""
         return reach_range(self.spells, self._use) or self.settings.spell_range
+
+    @property
+    def me_sure(self) -> bool:
+        """Ma case suivie (_me_cell) est prouvée : l'équipe la retient (TeamBot._cells) ; sinon elle l'oublie."""
+        return self._me_sure
 
     @property
     def move_points(self) -> int:

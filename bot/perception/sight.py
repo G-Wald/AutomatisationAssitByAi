@@ -30,6 +30,7 @@ VOID_IN_RANGE = (45, 30, 10)  # BGR, bleu nuit : le vide autour de la carte, tei
 # 18/10, forêt d'Incarnam, la case dessous lue bloc coupait une ligne de vue sur deux captures.
 FIGHT_BUTTONS = (1756, 664, 1918, 707)
 HIDDEN_CENTER_MARGIN = 0.1  # range_center : avance (indice de Jaccard) qu'il faut à une case cachée sur une case vue
+RANGE_SCAN = (2, 6)  # locate_caster : portées essayées sous et au-dessus de l'attendue (malus, bonus d'un allié)
 
 
 @dataclass(frozen=True)
@@ -55,14 +56,24 @@ def _hidden_by_sprites(frame: Frame, fighters: list[Fighter]) -> set[Cell]:
 
 
 def range_center(frame: Frame, spell_range: tuple[int, int], min_match: float = 0.5,
-                 exclude: set[Cell] | frozenset[Cell] = frozenset()) -> Cell | None:
+                 exclude: set[Cell] | frozenset[Cell] = frozenset(), in_line: bool = False) -> Cell | None:
     """Case du lanceur d'après la portée affichée : celle dont le losange de portée (`spell_range`) recouvre le mieux
     les cases colorées (indice de Jaccard), même si son cercle est caché (03/10 : sous la timeline). `exclude` : cases
     jamais colorées (trous, blocs, vide autour de la carte), retirées du losange attendu : sinon un losange coupé par
-    un bord décale le centre. None si aucune ne colle à `min_match` près."""
+    un bord décale le centre. `in_line` : sort « en ligne », seules les deux diagonales de l'écran sont colorées (une
+    croix, pas un losange : 19/10, Flèche de Recul des Crâs, 117 repérages ratés). None si aucune ne colle à
+    `min_match` près."""
+    best, score = range_fit(frame, spell_range, exclude, in_line)
+    return best if score >= min_match else None
+
+
+def range_fit(frame: Frame, spell_range: tuple[int, int], exclude: set[Cell] | frozenset[Cell] = frozenset(),
+              in_line: bool = False) -> tuple[Cell | None, float]:
+    """range_center sans seuil : (meilleur centre, son indice de Jaccard) ; (None, 0) sans portée affichée. Pour
+    comparer plusieurs portées possibles (bonus de portée d'un allié, inconnu du lanceur : 18/10, voir combat.py)."""
     view = read_range(frame, Fighter("", -1e4, -1e4, (-10_000, -10_000)), [])
     if not (view.castable | view.no_sight):
-        return None
+        return None, 0.0
     # 16/10, Incarnam 6,1 : la portée de Lancer de Pièces débordait sur le vide (bleu nuit) et sous la timeline ; le
     # losange coupé de deux côtés plaçait le lanceur une case trop haut, au-dessus du vide : 7 tirs refusés, 43 s. Le
     # vide teinté fait partie du losange ; ce qui est caché en est retiré.
@@ -77,8 +88,11 @@ def range_center(frame: Frame, spell_range: tuple[int, int], min_match: float = 
     def best_of(candidates: np.ndarray) -> tuple[Cell | None, float]:
         best, score = None, 0.0
         for center in candidates[np.abs(candidates - mean).max(axis=1) <= high]:  # losange coupé : centre décalé
-            gap = np.abs(grid - center).max(axis=1)
+            delta = np.abs(grid - center)
+            gap = delta.max(axis=1)
             diamond = (gap >= low) & (gap <= high)
+            if in_line:
+                diamond &= delta[:, 0] == delta[:, 1]  # comme in_line_only
             match = (diamond & is_colored).sum() / (diamond | is_colored).sum()
             if match > score:
                 best, score = (int(center[0]), int(center[1])), float(match)
@@ -94,7 +108,52 @@ def range_center(frame: Frame, spell_range: tuple[int, int], min_match: float = 
         hidden_best, hidden_score = best_of(np.array(sorted(view.hidden)))
         if hidden_score >= score + HIDDEN_CENTER_MARGIN:
             best, score = hidden_best, hidden_score
-    return best if score >= min_match else None
+    return best, score
+
+
+@dataclass(frozen=True)
+class Located:
+    """Lanceur trouvé par sa portée affichée (locate_caster)."""
+
+    cell: Cell
+    spell_range: tuple[int, int]  # portée qui colle (bonus d'un allié compris)
+    hidden: bool  # aucun de mes cercles dessus : cercle caché (timeline, corps d'un combattant devant)
+
+
+def locate_caster(frame: Frame, spell_range: tuple[int, int], mine: set[Cell], fighters: list[Fighter],
+                  exclude: set[Cell] | frozenset[Cell] = frozenset(), in_line: bool = False,
+                  modifiable: bool = False, min_match: float = 0.5) -> Located | None:
+    """Ma case d'après la portée affichée de mon sort sélectionné, seulement si c'est une preuve (19/10) :
+    1. le centre pour la portée attendue est sur un de mes cercles (`mine`). Pas à une case près : 18/10, 5 centres
+       sur une case vide voisine du cercle d'un allié ; les 46 bons centres de 51 captures étaient pile sur le cercle ;
+    2. sinon, portée modifiable : un bonus ou un malus que le lanceur ignore (18/10 : Pelle Fantomatique attendue 0 à 6,
+       affichée 0 à 7 ou 8 ; 5 centres sur une case vide, sur 19 captures). Portées voisines (RANGE_SCAN), gardée
+       celle dont le centre est sur un de mes cercles et qui colle le mieux ;
+    3. sinon, le centre de la portée attendue, si un cercle peut s'y cacher : sous la timeline ou l'interface du bas
+       (03/10, 18/10), derrière le corps d'un combattant debout devant.
+    None sinon : un centre sur une case vide, où rien ne cache de cercle, n'est pas le lanceur."""
+    low, high = spell_range
+    center, score = range_fit(frame, spell_range, exclude, in_line)
+    if score < min_match:
+        center = None
+    if center is not None and center in mine:
+        return Located(center, spell_range, False)
+    if modifiable:
+        tries = []
+        for reach in range(max(low, high - RANGE_SCAN[0]), high + RANGE_SCAN[1] + 1):
+            if reach == high:
+                continue
+            cell, fit = range_fit(frame, (low, reach), exclude, in_line)
+            if fit >= min_match and cell in mine:
+                tries.append((fit, cell, reach))
+        if tries:
+            fit, cell, reach = max(tries)
+            return Located(cell, (low, reach), False)
+    if center is not None:
+        view = read_range(frame, Fighter("", -1e4, -1e4, (-10_000, -10_000)), [])
+        if center in view.hidden or center in _hidden_by_sprites(frame, fighters):
+            return Located(center, spell_range, True)
+    return None
 
 
 def _tinted_wall(bgr: np.ndarray) -> bool:

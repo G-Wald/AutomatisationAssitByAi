@@ -1147,8 +1147,12 @@ class TeamBot:
             log.warning("%s : %d tours d'affilée sans que la main passe, ce n'est sans doute pas son tour : je ne le fais "
                         "plus jouer pendant %.0f s (capture : %s)", member.name, STUCK_TURNS, STUCK_PAUSE, path)
         tracked = getattr(member.ai, "_me_cell", None)  # case où l'IA m'a vu en dernier (fin du tour)
-        if tracked is not None:
+        if tracked is not None and getattr(member.ai, "me_sure", True):
             self._cells[member.name] = tracked
+        elif getattr(member.ai, "me_sure", True) is False:
+            # Case pas prouvée (19/10 : un Crâ sur le cercle d'un autre, gardé d'un tour à l'autre, 8 déplacements ratés
+            # de plus) : oubliée plutôt que transmise ; elle n'écarte pas non plus ce cercle chez les autres (_find_me).
+            self._cells.pop(member.name, None)
 
     def _find_me(self, member: Member, mine: list[Fighter], frame: Frame | None = None) -> Fighter | None:
         """Moi parmi les cercles de ma couleur. Jamais un cercle posé sur la case d'un autre personnage. Le seul qui
@@ -1165,7 +1169,10 @@ class TeamBot:
             # Premier tour du combat (pas de placement choisi, team.place) : repéré par la portée d'un sort
             # (CombatAI._locate_by_range), même s'il ne reste qu'un cercle : le mien peut être caché.
             return None
-        if len(left) == 1 and distance(left[0].cell, tracked) <= 2:
+        known_all = all(m.name in self._cells for m in self.members if m.name != member.name)
+        if len(left) == 1 and distance(left[0].cell, tracked) <= 2 and known_all:
+            # Le seul cercle qui reste, quand la case de chacun des autres est connue (sûre) : moi, par élimination.
+            # Un autre à la case oubliée (pas prouvée, 19/10) pourrait être ce cercle-là : la portée tranchera.
             return left[0]
         # Pas de cercle sur ma case suivie : périmée (poussé par un monstre) ou cachée. L'IA de combat me repère par la
         # portée d'un sort (une fois par tour), puis se fie à ma case suivie.

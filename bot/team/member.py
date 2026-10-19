@@ -102,6 +102,10 @@ class MemberGame(Game):
         self.focus.to(self.window, settle=False)
         return super().move(point, spread)
 
+    def hover(self, point: tuple[float, float], spread: Spread = NO_SPREAD) -> None:
+        self.focus.to(self.window, settle=False)
+        super().hover(point, spread)
+
     def click(self, point: tuple[float, float] | None = None, spread: Spread = NO_SPREAD, button: str = "left") -> bool:
         self.focus.to(self.window, settle=False)
         done = super().click(point, spread, button) is not False
@@ -182,7 +186,7 @@ def make_member(name: str, window: GameWindow, settings: dict, focus: Focus, con
         name=name,
         game=game,
         spellbook=spellbook,
-        ai=CombatAI(game, CombatSettings.from_settings(settings), spellbook),
+        ai=CombatAI(game, CombatSettings.from_settings(settings), spellbook, name=name),  # nom : lu au survol
         popups=PopupCloser(game, load_popup_specs(), unknown_key=popups.get("unknown_window_key") or "",
                            unknown_delay=float(popups.get("unknown_window_delay", 20))),
     )
