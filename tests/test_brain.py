@@ -1038,14 +1038,29 @@ def test_who_am_i_when_my_circle_is_hidden():
 
 
 def test_an_empty_cell_at_the_range_center_is_no_proof():
-    # 18/10 : Pelle Fantomatique attendue 0 à 6, affichée plus loin (bonus d'un allié) : centre sur une case vide, rien
-    # pour y cacher un cercle, pris pour « mon cercle est caché ». Ce n'est pas une preuve.
-    shown = load_frame("combat_portee_sort")
-    me, _ = me_and_enemy(shown)
-    ally_cell = (me.cell[0] - 4, me.cell[1] - 2)
-    allies = [Fighter(RED, *shown.grid.center(ally_cell), ally_cell)]  # mon cercle, bien visible, oublié exprès
+    # 18/10 : Pelle Fantomatique attendue 0 à 6, affichée plus loin (bonus de portée d'un allié) : 5 centres sur une case
+    # vide, rien pour y cacher un cercle, pris pour « mon cercle est caché ». Ce n'est pas une preuve ; portée
+    # modifiable : la portée qui met le centre sur un de mes cercles est la bonne. 20/10, même cas : Flèche Empoisonnée
+    # attendue 2 à 5, affichée 2 à 7 (Tir Éloigné), Leproduitlatte en (10, 24).
+    shown = load_frame("reperage_cercle_absent_du_tour")
+    fighters = find_fighters(shown)
+    mine = {f.cell for f in fighters if f.team == RED}
+    assert range_center(shown, (2, 5), min_match=0) not in mine
+    assert locate_caster(shown, (2, 5), mine, fighters) is None
+    found = locate_caster(shown, (2, 5), mine, fighters, modifiable=True)
+    assert found.cell == (10, 24) and found.spell_range == (2, 7) and not found.hidden
+
+
+def test_my_circle_missing_on_the_turn_capture_is_read_on_the_range_capture():
+    # 20/10, Leproduitlatte : arrivé en (10, 24), souris restée dessus (case éclairée, cercle pas vu sur la capture du
+    # tour) ; la portée de Flèche Empoisonnée (2 à 5, +2 de Tir Éloigné) le montrait au centre, cercle bien visible.
+    shown = load_frame("reperage_cercle_absent_du_tour")
+    fighters = [f for f in find_fighters(shown) if f.cell != (10, 24)]  # la capture du tour, sans mon cercle
     game = FakeGame(shown, load_frame("combat_mon_tour"))
-    assert CombatAI(game, CombatSettings())._locate_by_range(shown, allies, allies) is None
+    ai = CombatAI(game, CombatSettings())
+    ai._spells = [CombatSpell(2, "fleche_empoisonnee", "Flèche Empoisonnée", 4, (2, 5), damage=6)]
+    found = ai._locate_by_range(shown, [f for f in fighters if f.team == RED], fighters)
+    assert found is not None and found.cell == (10, 24)
 
 
 def test_range_center_on_the_real_overlay():
