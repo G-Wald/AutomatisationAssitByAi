@@ -759,3 +759,23 @@ def test_spell_refused_right_after_a_cast_is_tried_again(monkeypatch):
     answers[:] = [None]
     ai._cast_at = float("-inf")  # pas de lancer récent : refusé pour de bon
     assert ai._cast(frame, me, enemy, [me, enemy], RED, MAGIQUE) is Cast.NO_SPELL
+
+
+def test_spell_refused_after_a_move_this_turn_is_tried_again(monkeypatch):
+    # 19/10 : touche de Pelle Fantomatique pressée 0,5 s après le clic d'un pas, pendant la marche : « non
+    # sélectionnable » avec 4 PA, la Pelle écartée du tour. Après un déplacement ce tour, la touche est retentée.
+    from bot.brain.combat import Cast
+    from bot.perception.fighters import Fighter
+
+    frame = load_frame("combat_mon_tour")
+    game = FakeGame(frame)
+    ai = CombatAI(game, CombatSettings())
+    answers = [None, frame]
+    monkeypatch.setattr(ai, "_select_spell", lambda before, spell: answers.pop(0))
+    monkeypatch.setattr(ai, "_range_frame", lambda watch=False: None)
+    for name, stub in (("_learn_range", lambda *a: None), ("_forbidden_target", lambda aim: False),
+                       ("_confirm_cast", lambda *a: None), ("_read_life", lambda *a: None)):
+        monkeypatch.setattr(ai, name, stub)
+    me, enemy = Fighter(RED, *frame.grid.center((8, 22)), (8, 22)), Fighter("blue", *frame.grid.center((12, 18)), (12, 18))
+    ai._turn_stats().moves = 1  # un pas vient d'être fait, aucun lancer récent
+    assert ai._cast(frame, me, enemy, [me, enemy], RED, MAGIQUE) is Cast.DONE and not answers

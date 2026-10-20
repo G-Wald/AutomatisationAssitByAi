@@ -148,6 +148,12 @@ BURST_RECHECK = 0.3  # cible plus vue après un lancer en rafale : second regard
 # pendant son animation : « non sélectionnable », Épée Céleste lancée à la place, l'ennemi à 25 PV resté debout) :
 # même touche une fois de plus, après une courte pause.
 RESELECT_AFTER_CAST, RESELECT_PAUSE = 1.5, 0.4
+# Sort enchaîné sur une cible (19/10, journal 204116, vérifié dans le chat de combat) : Pelle Fantomatique cliquée 1,3 à
+# 1,9 s après Lancer de Pièces, pendant son animation (pièce en vol) : le jeu ignore le clic, 3 partis sur 26 ; relancée
+# 4 à 6 s après : 8 sur 8. Les PA baissent ~0,5 s après le clic, bien avant la fin de l'animation : « parti » n'est pas
+# « prêt ». Le clic d'un sort attend CHAIN_GAP s après celui du dernier sort lancé sur une cible ce tour ; rien après
+# un sort sur moi (flèches après Tir Éloigné : 8 sur 8 à 1,3-2,2 s).
+CHAIN_GAP = 2.5
 PA_BUFF_MAX = 4  # PA en plus du maximum (bonus d'un allié) : au-delà, la bulle est mal lue (« 10 » lu « 16 » en JPEG)
 ARRIVAL_CHECKS, ARRIVAL_EVERY = 8, 0.2  # fixe : arrivée vérifiée 8 fois, toutes les 0,2 s, après per_cell_moved
 TURN_PASSED_EVERY = 0.25  # fixe : main passée vérifiée toutes les 0,25 s après la fin de tour
@@ -417,6 +423,7 @@ class CombatAI:
         self._sent: Frame | None = None  # capture qui a montré le dernier sort parti (_confirm_cast)
         self._aim: tuple[Cell, tuple[float, float], tuple[float, float]] | None = None  # (case, point, dispersion) visés
         self._cast_at = float("-inf")  # heure du dernier clic de lancer (sélection refusée juste après : animation)
+        self._target_cast_at = float("-inf")  # heure du clic du dernier sort lancé sur une cible ce tour (CHAIN_GAP)
         self._life_saved: set[str] = set()  # captures de fiche déjà gardées (vie lue, illisible : _read_life)
         self.new_combat()
 
@@ -531,6 +538,7 @@ class CombatAI:
         self._warned_who = False  # « rien ne prouve lequel est moi » : une fois par tour
         self._team_cells = team_cells
         self._located = False  # repérage par la portée d'un sort fait ce tour (_locate_by_range)
+        self._target_cast_at = float("-inf")
         self._expected_plan = ""
         self._expected_step = None
         frame = self.game.look()
@@ -642,8 +650,9 @@ class CombatAI:
             log.info("%s sur %s : %s", spell.name, "moi" if spell.on_self else _aim_label(target), step.reason)
             repeats = burst_length(plan) if self.settings.burst else 0
             # Dernière action du plan (le sort, et sa rafale) : fin de tour aussitôt après, sans attendre l'animation.
+            # Le sort lui-même est vérifié (PA dépensés, ~0,5 s) : 19/10, 15 derniers sorts jamais partis comptés lancés.
             final = self.settings.fast_end and not spell.on_self and len(plan.steps) == 1 + repeats
-            result = self._cast(frame, me, target, fighters, my_team, spell, confirm=not (final and repeats == 0))
+            result = self._cast(frame, me, target, fighters, my_team, spell)
             if result is Cast.DONE:
                 self._use.record(spell, step.cell)
                 self._wound(spell, step)
@@ -660,7 +669,7 @@ class CombatAI:
                     if stuck:
                         break
                 if final and done >= repeats:
-                    log.debug("Dernier sort du plan lancé : fin de tour sans attendre son animation")
+                    log.debug("Dernier sort du plan parti : fin de tour sans attendre son animation")
                     break
             elif result is Cast.NO_SPELL:
                 self._use.unavailable.add(spell.spell_id)  # plus assez de PA pour lui, relance... : un autre
@@ -1215,6 +1224,8 @@ class CombatAI:
         Condition : captures dès le clic, jusqu'à voir les PA ou l'icône changer ; after_cast + cast_confirm s au
         plus, la même fenêtre d'observation (un sort lent à se confirmer n'est pas relancé pour autant)."""
 
+        how = "PA ou fin du tour"
+
         def gone(frame: Frame) -> bool:
             return not self._my_turn(frame, my_team) or self._was_cast(before, frame, spell)
 
@@ -1243,7 +1254,7 @@ class CombatAI:
                         log.debug("%s : ni annoncé dans le chat ni PA dépensés en %.1f s : refusé", spell.name, elapsed)
                         break
                 if announced_at is not None and elapsed >= announced_at + CHAT_PA_GRACE:
-                    sent = True  # parti (chat) ; PA pas encore à jour : la capture d'après les montrera
+                    sent, how = True, "chat"  # parti ; PA pas encore à jour : la capture d'après les montrera
                     break
                 if check < checks - 1:
                     self.game.sleep(CONFIRM_EVERY)
@@ -1252,11 +1263,26 @@ class CombatAI:
         # pour régler l'attente (P13 du rapport des tests de combat).
         log.debug("%s : %s en %.1f s", spell.name, "parti" if sent else "pas parti", time.monotonic() - clicked)
         if sent:
+            log.debug("%s : vu parti par %s", spell.name, how)
+        if sent:
             stats.casts += 1
             self._sent = after
             return None
         stats.missed_clicks += 1
         return after
+
+    def _chain_wait(self, spell: CombatSpell) -> float | None:
+        """Avant le clic d'un sort, en arrière-plan : au moins CHAIN_GAP s après le clic du dernier sort lancé sur une
+        cible ce tour (son animation finie, sinon le jeu ignore le clic). Au premier plan, les clics pendant l'animation
+        passent (rafales du 04/10, 22 sur 22) : pas d'attente. Rend l'écart d'avant l'attente (None : premier sort)."""
+        gap = time.monotonic() - self._target_cast_at
+        if gap == float("inf"):
+            return None
+        if gap < CHAIN_GAP and self.game_background:
+            log.debug("%s : j'attends la fin de l'animation du sort précédent (%.1f s après son clic, %.1f s au moins)",
+                      spell.name, gap, CHAIN_GAP)
+            self.game.sleep(CHAIN_GAP - gap)
+        return gap
 
     def _forbidden_target(self, aim: tuple[float, float]) -> bool:
         """Curseur « interdit » sur la cible que la souris vient de survoler. Fixe : une capture après 0,25 s ;
@@ -1278,7 +1304,7 @@ class CombatAI:
         return forbidden_cursor_near(self._hovered, aim)
 
     def _cast(self, before: Frame, me: Fighter, target: Fighter, fighters: list[Fighter], my_team: str,
-              spell: CombatSpell | None = None, confirm: bool = True) -> Cast:
+              spell: CombatSpell | None = None) -> Cast:
         """`before` : capture avant de sélectionner le sort (référence des PA). `target` : moi pour un sort sur soi,
         un combattant d'équipe "" pour une zone qui vise une case vide."""
         spell = spell or self.spells[0]
@@ -1286,8 +1312,12 @@ class CombatAI:
         if spell.on_self:
             return self._cast_on_self(before, me, spell, my_team)
         shown = self._select_spell(before, spell)
-        if shown is None and time.monotonic() - self._cast_at < RESELECT_AFTER_CAST and spell.pa <= self._use.pa:
-            log.info("%s pas sélectionné juste après un lancer (animation) : nouvel essai", spell.name)
+        just_cast = time.monotonic() - self._cast_at < RESELECT_AFTER_CAST
+        # Ou après un déplacement ce tour : 19/10, touche pressée 0,5 s après le clic du pas, pendant la marche, refusée
+        # avec 4 PA (Pelle Fantomatique écartée du tour, Lancer de Pelle, plus faible, à la place).
+        if shown is None and (just_cast or self._turn_stats().moves) and spell.pa <= self._use.pa:
+            log.info("%s pas sélectionné juste après %s : nouvel essai", spell.name,
+                     "un lancer (animation)" if just_cast else "un déplacement")
             self.game.sleep(RESELECT_PAUSE)
             shown = self._range_frame(watch=self._watching) or self._select_spell(self.game.look(), spell)
         if shown is None:
@@ -1315,14 +1345,12 @@ class CombatAI:
                 log.info("Pas de ligne de vue sur %s", _aim_label(target))
                 return self._cancel_spell()
             hp = self._read_life(self._hovered, target) if target.team and self._hovered is not None else None
-            log.info("%s lancé sur %s%s", spell.name, _aim_label(target), f" ({hp} PV)" if hp is not None else "")
+            gap = self._chain_wait(spell)
+            log.info("%s lancé sur %s%s%s", spell.name, _aim_label(target), f" ({hp} PV)" if hp is not None else "",
+                     f" ({gap:.1f} s après le sort précédent)" if gap is not None else "")
             self.game.click()  # sur place : la souris est déjà sur la cible vérifiée
             self._mouse_away()
-            self._cast_at = time.monotonic()
-            if not confirm:  # dernier sort du tour (fast_end) : la fin de tour suit, sans attendre l'animation
-                self._turn_stats().casts += 1
-                self._note_cast(spell, target.cell)
-                return Cast.DONE
+            self._cast_at = self._target_cast_at = time.monotonic()
             after = self._confirm_cast(before, my_team, spell)
             if after is not None and target.team and self._left_its_cell(before, after, target):
                 # L'ennemi visé n'est plus sur sa case : le sort est parti (mort, repoussé), même si les PA ne l'ont pas

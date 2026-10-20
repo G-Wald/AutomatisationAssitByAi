@@ -1199,19 +1199,39 @@ def test_stale_tracked_cell_is_checked_once_per_turn_with_the_spell_range():
     assert found.cell == ai._me_cell and presses(game) == ["3", "escape"]
 
 
-def test_last_spell_of_the_turn_is_not_waited_for():
-    # Demande du 04/10 : peu de clics de sort ratés ; dernier sort du tour : clic puis fin de tour, sans attendre son
-    # animation (les PA qui baissent).
+def test_chained_spell_waits_for_the_animation_of_the_previous_one(monkeypatch):
+    # 19/10 (journal 204116, chat de combat) : Pelle Fantomatique cliquée 1,3 à 1,9 s après Lancer de Pièces, pendant
+    # son animation, ignorée par le jeu 23 fois sur 26 ; relancée 4 à 6 s après : 8 sur 8. Clic au moins CHAIN_GAP s
+    # après celui du sort précédent sur une cible ; le premier sort du tour n'attend pas.
+    import time
+
+    from bot.brain.combat import CHAIN_GAP
+
+    frame = load_frame("combat_portee_sort")
+    me, _ = me_and_enemy(frame)
+    target = enemy_in_range(frame)
+    game = FakeGame(frame)
+    game.background = True  # au premier plan, les clics pendant l'animation passent : pas d'attente
+    ai = CombatAI(game, CombatSettings())
+    monkeypatch.setattr(ai, "_confirm_cast", lambda *a: None)  # parti
+    assert ai._cast(frame, me, target, [me, target], RED) is Cast.DONE
+    assert not any(s >= 1 for s in game.slept)  # premier sort du tour : aucune attente
+    ai._target_cast_at = time.monotonic() - 0.5  # le sort précédent, cliqué il y a 0,5 s
+    game.slept.clear()
+    assert ai._cast(frame, me, target, [me, target], RED) is Cast.DONE
+    assert any(1.0 < s <= CHAIN_GAP - 0.5 for s in game.slept)  # le reste des CHAIN_GAP s (temps de calcul déduit)
+    assert len(clicks(game)) == 2
+
+
+def test_last_spell_of_the_turn_is_checked_before_ending_the_turn():
+    # 19/10 : le dernier sort du plan, jamais vérifié, était compté lancé (15 Pelles jamais parties). Ses PA sont
+    # attendus (~0,5 s) avant la fin du tour.
     frame = load_frame("combat_portee_sort")
     me, _ = me_and_enemy(frame)
     target = enemy_in_range(frame)
     game = FakeGame(frame, frame)
-    ai = CombatAI(game, CombatSettings(fast_end=True))
-    assert ai._cast(frame, me, target, [me, target], RED, confirm=False) is Cast.DONE
-    assert clicks(game) == [(round(target.x), round(target.y))]
-    looks_after_click = [a for a in game.actions[game.actions.index(next(a for a in game.actions if a[0] == "click")):]
-                         if a[0] == "look"]
-    assert looks_after_click == []  # aucune surveillance des PA après le clic
+    ai = CombatAI(game, CombatSettings(fast_end=True, cast_confirm=0.15))
+    assert ai._cast(frame, me, target, [me, target], RED) is not Cast.DONE  # PA inchangés : pas parti
 
 
 def test_fast_burst_presses_the_key_again_until_the_game_takes_it(monkeypatch):
