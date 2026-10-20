@@ -163,7 +163,8 @@ human:                    # rythme des gestes, en secondes [min, max] tirées au
 logs:                      # journaux et captures dans logs/<date_heure>/
   keep_sessions: 20        # au démarrage, ne garder que les 20 dernières sessions (celle qui commence comprise) ;
                            # le 01/10, 5 lancements d'affilée avaient effacé les journaux des tests précédents
-  max_total_mb: 300        # et pas plus de 300 Mo en tout (les plus vieilles sont supprimées d'abord)
+  max_total_mb: 3000       # et pas plus de 3 Go en tout (les plus vieilles sont supprimées d'abord) ; 19/10 : un
+                           # passage du donjon pèse ~210 Mo de captures, 300 Mo n'en gardait plus qu'un
                            # les bilans chiffrés de chaque session restent dans data/bilans/ (jamais effacés)
   max_images: 300          # captures au plus par session
   images: "toutes"         # captures enregistrées : toutes (tests), problemes (seulement les échecs), aucune
