@@ -428,6 +428,7 @@ class CombatAI:
         self._doubt = False  # déplacement raté ou arrêté en route : ma case est à revérifier avant d'agir
         self._no_proof = False  # _whoami : des cercles de ma couleur, aucun prouvé le mien
         self._timeline_moved = -1  # tour où la timeline a été changée de côté (_move_timeline)
+        self._shown_view: tuple[Cell, str, RangeView] | None = None  # dernière portée lue : (ma case, sort, cases)
         self._hover_seen = False  # une fiche est déjà apparue au survol pendant cette session
         self._hover_misses = 0  # survols sans fiche : au-delà de HOVER_MISSES, le survol ne sert plus (arrière-plan)
         self._expected_plan = ""  # ce qu'il restait du dernier plan journalisé
@@ -1245,6 +1246,23 @@ class CombatAI:
         report_episode(what, False, "sélectionné par un clic sur sa case : sorts cliqués jusqu'à la fin du tour")
         return shown
 
+    def _no_sight_shown(self, me: Fighter, target: Fighter, spell: CombatSpell) -> bool:
+        """La portée affichée par le jeu dit que la cible est sans ligne de vue : sa case en bleu clair, ou (case cachée
+        par son corps) toutes ses voisines de mon côté en bleu clair. 23/10, Porkass, carte à relief (ligne de vue
+        prévue juste à 56 %) : Ronce refusée 3 fois d'affilée, ~2 s chacune, sur des ennemis dont les cases voisines
+        étaient toutes sans ligne de vue."""
+        if self._shown_view is None or self._shown_view[:2] != (me.cell, spell.spell_id) or spell.on_self:
+            return False
+        view, cell = self._shown_view[2], target.cell
+        if cell in view.castable:
+            return False
+        if cell in view.no_sight:
+            return True
+        toward = [(cell[0] + dx, cell[1] + dy) for dx in (-1, 1) for dy in (-1, 1)]
+        toward = [n for n in toward if distance(n, me.cell) < distance(cell, me.cell)]
+        known = [n for n in toward if n in view.castable or n in view.no_sight]
+        return bool(known) and all(n in view.no_sight for n in known)
+
     def _learn_range(self, shown: Frame, me: Fighter, fighters: list[Fighter], spell: CombatSpell) -> None:
         """Portée du sort et obstacles, lus sur les cases colorées (mode tactique seulement)."""
         if not tactical_mode(shown):
@@ -1259,6 +1277,7 @@ class CombatAI:
             return
         if spell.in_line:
             view = in_line_only(view, me.cell)
+        self._shown_view = (me.cell, spell.spell_id, view)
         low, high = spell.spell_range
         high += (self._use.range_bonus + ALLY_RANGE_BONUS) if spell.range_modifiable else 0
         if spell.spell_id != "sort_configure" and (view.spell_range[1] > high or view.spell_range[0] < low):
@@ -1442,7 +1461,11 @@ class CombatAI:
             if key.startswith("num"):
                 self._numpad_missed(spell)
             return Cast.NO_SPELL
+        self._shown_view = None
         self._learn_range(shown, me, fighters, spell)
+        if self._no_sight_shown(me, target, spell):
+            log.info("Pas de ligne de vue sur %s d'après la portée affichée par le jeu : pas de clic", _aim_label(target))
+            return self._cancel_spell()
         high = spell_range(spell, self._use)[1]  # bonus de portée (Tir Éloigné) compris, dès le tour où il est lancé
         if self._map_reliable and distance(me.cell, target.cell) > high:
             log.info("%s à %d cases, hors de portée (%d max)", _aim_label(target).capitalize(),

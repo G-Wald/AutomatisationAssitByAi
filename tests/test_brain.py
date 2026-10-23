@@ -1422,3 +1422,19 @@ def test_timeline_moved_to_the_other_side_once_per_turn_when_fighters_are_hidden
     (click,) = clicks(game)
     assert math.dist(click, frame.layout.point(*TIMELINE_UP)) <= 6
     assert not ai._move_timeline(frame) and len(clicks(game)) == 1  # une fois par tour
+
+
+def test_no_click_on_a_target_the_shown_range_puts_out_of_sight():
+    # 23/10, Porkass, carte à relief : Ronce refusée 3 fois de suite sur des ennemis dont les cases voisines, de mon
+    # côté, étaient toutes en bleu clair (sans ligne de vue) ; la case de l'ennemi, cachée par son corps, ne se lit pas.
+    from bot.perception.fighters import find_fighters
+
+    frame = load_frame("portee_relief_porkass")
+    fighters = find_fighters(frame)
+    me = next(f for f in fighters if f.cell == (6, 8))
+    ronce = CombatSpell(3, "ronce", "Ronce", 4, (1, 8), range_modifiable=True, damage=15)
+    ai = CombatAI(FakeGame(frame), CombatSettings())
+    ai._learn_range(frame, me, fighters, ronce)
+    enemy = {f.cell: f for f in fighters}
+    assert ai._no_sight_shown(me, enemy[(10, 14)], ronce) and ai._no_sight_shown(me, enemy[(14, 14)], ronce)
+    assert not ai._no_sight_shown(me, enemy[(14, 8)], ronce)  # une voisine à portée : on essaie
