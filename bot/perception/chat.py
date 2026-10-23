@@ -176,6 +176,19 @@ def read_position(frame: Frame, name: str | None = None) -> tuple[int, int] | No
     return None
 
 
+# 23/10 : « Impossible de rejoindre le combat car l'équipe est fermée (ou limitée au groupe du joueur principal). » :
+# le suiveur n'est pas dans le groupe du principal (resté dans l'ancien groupe après une déconnexion du principal).
+JOIN_REFUSED = "equipe est fermee"
+
+
+def join_refused(frame: Frame) -> bool:
+    """Le chat du dessous dit que l'équipe du combat est fermée au personnage (pas dans le groupe du principal)."""
+    if not ocr_available():
+        return False
+    lines = ocr_lines(last_lines_image(frame, 3, whole=True))
+    return JOIN_REFUSED in _plain(" ".join(lines[-6:]))  # la phrase tient sur deux lignes
+
+
 # --- Chat de combat (zone du haut) : « Nom lance Sort. » ---------------------------------------------------------
 # 16/10 : chaque sort parti écrit aussitôt « Dinarpepe lance Lancer de Pièces. » en vert en bas de la zone du haut du
 # chat (canal de combat activé) ; un sort refusé (hors de portée, pas de ligne de vue) n'écrit rien. Lu par l'OCR de

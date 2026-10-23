@@ -30,6 +30,7 @@ import time
 from bot.perception.join import JOIN_SPREAD, PART_NAMES, Sword, find_fight_swords, find_join_entry, sword_part_scores
 from bot.perception.layout import Box
 from bot.brain.popups import close_flash_menu, close_small_menu
+from bot.perception.chat import join_refused
 from bot.perception.popups import find_context_menu, find_flash_menu, find_small_menu
 from bot.state.scene import Phase, read_scene
 from bot.team.member import Member, to_reference
@@ -99,6 +100,7 @@ class Joiner:
         # x 2 recherches de 4 s, le principal 1 min 30 au placement avant son premier tour.
         self.sword_missing = False
         self.old: list[tuple[float, float]] = []  # centres des épées déjà là avant l'attaque (repère de référence)
+        self.outsiders: set[str] = set()  # pas dans le groupe du principal (chat : « l'équipe est fermée ») : plus essayés
 
     def new_fight(self) -> None:
         self.started = time.monotonic()
@@ -121,10 +123,19 @@ class Joiner:
 
     def join(self, member: Member, hint: tuple[float, float] | None = None) -> bool:
         """True si le personnage est au placement du combat."""
+        if member.name in self.outsiders:
+            log.info("%s n'est pas dans le groupe du principal : il ne rejoint pas ce combat", member.name)
+            return False
         deadline = time.monotonic() + self.timeout
         for _ in range(1 if self.sword_missing else JOIN_TRIES):
             if self.ask(member, hint, quick=False) and self.wait_placement(member, deadline):
                 return True
+            if join_refused(member.game.look(park=False)):
+                # 23/10 : Pesopepe, 4 combats d'affilée, 25 s de recherche à chaque fois, l'équipe « fermée ».
+                self.outsiders.add(member.name)
+                log.warning("%s n'est pas dans le groupe du principal (chat : « l'équipe est fermée ») : il ne pourra "
+                            "rejoindre aucun combat ; mets-le dans le groupe du principal", member.name)
+                return False
             if time.monotonic() >= deadline:
                 break
         log.warning("%s n'a pas rejoint le combat : il reste hors combat", member.name)

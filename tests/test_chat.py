@@ -88,3 +88,12 @@ def test_position_line_cut_after_the_name_by_the_ocr():
 @pytest.mark.skipif(not ocr_available(), reason="OCR de Windows absent (requirements-winrt.txt)")
 def test_leader_position_read_when_the_ocr_cuts_its_line():
     assert read_position(load_frame("position_coupee_apres_le_nom"), "Koalaloupour") == (10, -28)
+
+
+@pytest.mark.skipif(not ocr_available(), reason="OCR de Windows absent (requirements-winrt.txt)")
+def test_join_refused_because_the_follower_is_not_in_the_leaders_group():
+    # 23/10 : Pesopepe resté dans l'ancien groupe, « l'équipe est fermée » à chaque combat, 25 s perdues à chaque fois.
+    from bot.perception.chat import join_refused
+
+    assert join_refused(load_frame("equipe_fermee_pas_dans_le_groupe"))
+    assert not join_refused(load_frame("chat_position_apres_connexion"))
