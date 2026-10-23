@@ -151,6 +151,11 @@ class Crossing:
     after: MapLabel  # carte d'arrivée
 
 
+# Attente des suiveurs (_wait_followers) prolongée tant que l'un bouge encore (immobile depuis moins de MOVING_RECENTLY s),
+# jusqu'à WALK_EXTENSION fois travel.walk_timeout.
+MOVING_RECENTLY, WALK_EXTENSION = 2.0, 2.0
+
+
 @dataclass
 class _Walk:
     """Suiveur en route vers le soleil, regardé à tour de rôle (_wait_followers)."""
@@ -775,8 +780,17 @@ class TeamBot:
         pending = {member.name: _Walk(member, _scene(before), clicked) for member, before, clicked in walking}
         target = self._arrival(crossing)
         leader_view: Frame | None = None  # carte où est arrivé le principal, pour juger au décor
-        deadline = time.monotonic() + self.travel_settings.walk_timeout
-        while pending and time.monotonic() < deadline:
+        start = time.monotonic()
+        deadline = start + self.travel_settings.walk_timeout
+        while pending:
+            now = time.monotonic()
+            if now >= deadline:
+                # 23/10, Plaine des Porkass (grandes cartes, rochers) : suiveurs encore en marche déclarés perdus à 20 s,
+                # rattrapages un par un. Tant que l'un d'eux bouge, l'attente continue (jusqu'à WALK_EXTENSION fois).
+                walking_now = [w for w in pending.values() if w.still_since is None or now - w.still_since < MOVING_RECENTLY]
+                if not walking_now or now - start >= WALK_EXTENSION * self.travel_settings.walk_timeout:
+                    break
+                deadline = now + MOVING_RECENTLY
             for name, walk in list(pending.items()):
                 member = walk.member
                 frame = member.game.look(park=False)
@@ -853,7 +867,7 @@ class TeamBot:
                 self.leader.game.sleep(0.2)
         for walk in pending.values():
             self._left_behind(walk.member, crossing,
-                              f"toujours pas arrivé après {self.travel_settings.walk_timeout:.0f} s")
+                              f"toujours pas arrivé après {time.monotonic() - start:.0f} s")
 
     def _still_follower(self, walk: _Walk, crossing: Crossing, pending: dict[str, _Walk]) -> None:
         """Suiveur immobile sur la carte de départ (_wait_followers) : décor revu sur une capture fraîche, puis reclic ;
