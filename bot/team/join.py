@@ -179,6 +179,7 @@ class Joiner:
         for sword in swords[:SWORDS_TRIED]:
             log.info("Épée du combat en %s : %s vu(s) (%s)", sword.center,
                      ", ".join(PART_NAMES[p] for p in sword.parts), _scores_text(sword.scores))
+            missed = []  # 23/10 : point raté (menu de Flash) proposé ensuite aux suiveurs, Pesopepe resté dehors
             for (point, spread), part in zip(sword.points, sword.point_parts):
                 if self._try(game, point, spread):
                     scale = frame.layout.scale
@@ -186,8 +187,9 @@ class Joiner:
                     self.known_spread = (spread[0] / scale, spread[1] / scale)
                     self.spots = [(to_reference(frame.layout, p), (s[0] / scale, s[1] / scale))
                                   for (p, s), other in zip(sword.points, sword.point_parts)
-                                  if other in SPOT_PARTS and p != point]
+                                  if other in SPOT_PARTS and p != point and p not in missed]
                     return True
+                missed.append(point)
         path = game.recorder.save(game.look(park=False).image, "menu_rejoindre_absent", lossless=True)
         log.info("Pas de menu « Rejoindre » après le clic sur l'épée (capture : %s)", path)
         return False
