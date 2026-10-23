@@ -72,7 +72,7 @@ from bot.perception.hp import read_hovered_hp, read_hovered_name, same_name, she
 from bot.perception.layout import Point
 from bot.perception.placement import read_placement, standing_cells
 from bot.perception.sight import (RangeView, Terrain, in_line_only, line_of_sight, locate_caster, read_blocks,
-                                  read_range, read_terrain, sight_agreement)
+                                  range_fit, read_range, read_terrain, sight_agreement)
 from bot.perception.spellbook import slot_greyed
 from bot.perception.timeline import challenge_icons, timeline_portraits
 from bot.perception.toolbar import ToolbarButton, find_creature_button, find_tactical_button
@@ -100,6 +100,7 @@ from bot.state.scene import Phase, is_my_turn, read_scene
 log = logging.getLogger(__name__)
 
 CAST_ATTEMPTS = 3  # clics sur la cible au plus, quand le sort ne part pas
+TRANSFORMED_KEYS, TRANSFORMED_MAX_RANGE = ("1", "2", "3"), 10  # sorts inconnus (transformation) : _transformed_turn
 LOCATE_RANGE = 6  # repérage par la portée d'un sort : portée maximale visée (losange visible en entier, assez grand)
 LOCATE_SAVED = 12  # captures « reperage_portee » gardées par personnage et par session (mesure du repérage)
 LOCATE_TRIES = 2  # repérage par la portée : sorts essayés au plus (le second si la portée du premier ne se lit pas)
@@ -428,6 +429,7 @@ class CombatAI:
         self._doubt = False  # déplacement raté ou arrêté en route : ma case est à revérifier avant d'agir
         self._no_proof = False  # _whoami : des cercles de ma couleur, aucun prouvé le mien
         self._timeline_moved = -1  # tour où la timeline a été changée de côté (_move_timeline)
+        self._spells_dead = False  # ce tour, aucun sort connu ne s'est sélectionné (transformation : _transformed_turn)
         self._shown_view: tuple[Cell, str, RangeView] | None = None  # dernière portée lue : (ma case, sort, cases)
         self._hover_seen = False  # une fiche est déjà apparue au survol pendant cette session
         self._hover_misses = 0  # survols sans fiche : au-delà de HOVER_MISSES, le survol ne sert plus (arrière-plan)
@@ -562,6 +564,7 @@ class CombatAI:
         self._is_mine, self._find_me, self._me_cell = is_mine, find_me, me_cell
         self._me_sure, self._proven_now, self._doubt = me_cell is not None, False, False  # me_cell : case sûre
         self._warned_who = False  # « rien ne prouve lequel est moi » : une fois par tour
+        self._spells_dead = False
         self._team_cells = team_cells
         self._located = False  # repérage par la portée d'un sort fait ce tour (_locate_by_range)
         self._deaf_checked, self._keys_deaf, self._spell_stuck = False, False, False  # touches réessayées à chaque tour
@@ -610,6 +613,8 @@ class CombatAI:
                             self.settings.cancel_key.upper())
                 break
             if me is None and self._no_proof:
+                if self._spells_dead and self._transformed_turn(frame, fighters, my_team):
+                    casts += 1
                 break  # cercles vus, aucun prouvé le mien (déjà dit, capture gardée) : rien sur une supposition
             if me is None or not enemies:
                 if not looked_again:
@@ -828,10 +833,12 @@ class CombatAI:
         # Sorts grisés lus avant de sélectionner : une touche sans portée n'est soupçonnée d'être ignorée (fenêtre
         # sourde, _deaf_key) que pour un sort que la barre de CE tour montre lançable.
         self._read_bar(frame)
+        selected = False
         for spell in ranked[:LOCATE_TRIES]:
             shown = self._select_spell(frame, spell)
             if shown is None:
                 continue
+            selected = True
             expected = spell_range(spell, self._use)
             # Mes cercles lus aussi sur cette capture : sur celle du tour, le mien pouvait manquer (20/10 : souris sur
             # ma case d'arrivée, case éclairée en bleu, cercle pas vu ; il l'est une fois la portée affichée).
@@ -862,6 +869,7 @@ class CombatAI:
                 continue
             log.info("Moi : le cercle en %s (au centre de la portée de %s%s)", circle.cell, spell.name, shown_range)
             return circle
+        self._spells_dead = not selected  # aucune touche n'a montré de portée : sorts changés ?
         return None
 
     def _locate_by_hover(self, mine: list[Fighter]) -> Fighter | None:
@@ -1114,6 +1122,51 @@ class CombatAI:
             clicks = {}
             self._clicks = (self._use.turn, clicks)
         return clicks.setdefault(cell, [])
+
+    def _transformed_turn(self, frame: Frame, fighters: list[Fighter], my_team: str) -> bool:
+        """Aucun sort connu ne se sélectionne (23/10, Contour d'Astrub : l'équipe changée en Bouftous d'Halouine par
+        l'événement d'Halloween, autres sorts dans les cases 1 à 3 ; 40 min de combat sans un coup) : les touches 1 à 3
+        essayées ; la portée affichée dit qui je suis (la taille dont le losange, centré sur un de mes cercles, colle le
+        mieux) et qui est à portée ; l'ennemi le plus proche est frappé, PA vérifiés. True si un sort est parti."""
+        mine = {f.cell for f in fighters if f.team == my_team}
+        enemies = [f for f in fighters if f.team and f.team != my_team]
+        if not mine or not enemies:
+            return False
+        for key in TRANSFORMED_KEYS:
+            self.game.press(key)
+            shown = self._range_frame()
+            if shown is None:
+                continue
+            best = None
+            for high in range(1, TRANSFORMED_MAX_RANGE + 1):
+                for low in (0, 1):
+                    center, score = range_fit(shown, (low, high), self.map.unwalkable, False)
+                    if center in mine and score >= 0.5 and (best is None or score > best[0]):
+                        best = (score, center)
+            if best is None:
+                self.game.press(self.settings.cancel_key)
+                continue
+            me = Fighter(my_team, *shown.grid.center(best[1]), best[1])
+            view = read_range(shown, me, fighters)
+            targets = [e for e in enemies if e.cell in view.castable
+                       or any((e.cell[0] + dx, e.cell[1] + dy) in view.castable for dx in (-1, 1) for dy in (-1, 1))]
+            if not targets:
+                log.info("Sort de la case %s (transformation) : aucun ennemi à portée", key)
+                self.game.press(self.settings.cancel_key)
+                continue
+            target = min(targets, key=lambda e: distance(e.cell, me.cell))
+            pa = read_pa(shown)
+            point, spread = clear_point(shown.grid, target.cell, fighters)
+            log.info("Sorts inconnus (transformation ?) : moi en %s d'après la portée de la case %s, je frappe %s",
+                     me.cell, key, _aim_label(target))
+            self.game.move(point, spread)
+            self.game.click()
+            self._mouse_away()
+            self.game.sleep(1.2)
+            after = read_pa(self.game.look())
+            if pa is not None and after is not None and after < pa:
+                return True
+        return False
 
     def _move_timeline(self, frame: Frame) -> bool:
         """Moi ou les ennemis introuvables alors que des portraits de la timeline couvrent la carte : la timeline passe
