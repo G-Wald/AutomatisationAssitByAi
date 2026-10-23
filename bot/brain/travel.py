@@ -32,6 +32,7 @@ import logging
 import math
 import re
 import time
+import heapq
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, replace
@@ -985,14 +986,19 @@ def shortest_path(start: tuple[int, int], goals, links, allowed) -> list[tuple[s
     return None
 
 
-def shortest_route(start: tuple[int, int], entry: str | None, goals, links, allowed) -> list | None:
+def shortest_route(start: tuple[int, int], entry: str | None, goals, links, allowed, cost=None) -> list | None:
     """Comme shortest_path, sur les états (carte, côté d'arrivée) : sur une carte coupée par un rempart, une sortie peut
-    n'être inatteignable que pour qui arrive par un certain côté. `links(carte, côté d'arrivée)`."""
+    n'être inatteignable que pour qui arrive par un certain côté. `links(carte, côté d'arrivée)`. `cost(carte, côté,
+    carte voisine)` : coût du passage (défaut 1 : le moins de cartes) ; chemin le moins coûteux."""
     first = (start, entry)
     came: dict = {first: None}
-    queue = deque([first])
+    best = {first: 0.0}
+    queue = [(0.0, 0, first)]
+    order = 1  # départage des égalités : ordre d'arrivée (comme la largeur d'abord)
     while queue:
-        state = queue.popleft()
+        spent, _, state = heapq.heappop(queue)
+        if spent > best.get(state, float("inf")):
+            continue
         if state[0] in goals:
             path = []
             while came[state] is not None:
@@ -1002,10 +1008,14 @@ def shortest_route(start: tuple[int, int], entry: str | None, goals, links, allo
             return path[::-1]
         for side, dest in links(*state).items():
             following = (dest, OPPOSITE[side])
-            if following in came or not allowed(dest):
+            if not allowed(dest):
                 continue
-            came[following] = (state, side)
-            queue.append(following)
+            total = spent + (cost(state[0], side, dest) if cost is not None else 1.0)
+            if total >= best.get(following, float("inf")):
+                continue
+            best[following], came[following] = total, (state, side)
+            heapq.heappush(queue, (total, order, following))
+            order += 1
     return None
 
 
@@ -1308,6 +1318,51 @@ class ZoneRoamer:
             self.came_from = OPPOSITE[side]
 
 
+# Itinéraire (Journey._cost) : passage jamais pris, et entrée dans une autre zone que celles du départ et de l'arrivée.
+UNCONFIRMED_COST, ZONE_COST = 2.0, 2.0
+PASSAGES_DIR = PROJECT_DIR / "config" / "monde" / "passages"
+
+
+class Passages:
+    """Référence des passages d'une région (config/monde/passages/<région>.json), construite à partir de ce que le bot a
+    vu en jeu (tools/passages.py, depuis data/carte.json) et relue à la main : les cases des cartes du client sont
+    chiffrées (docs/rapports/cles_cartes.md), on ne sait par où l'on passe qu'en y étant allé. Gardée à part de la
+    mémoire, qu'une lecture ratée peut fausser (23/10 : 5,-30 droite notée « bloquée » à tort).
+
+    Format : {"x,y": {"sorties": {côté: "x,y" | "bloquée"}, "bloquees_depuis": {côté d'arrivée: [côtés]}}}."""
+
+    def __init__(self, maps: dict | None = None) -> None:
+        self.maps = maps or {}
+
+    @staticmethod
+    def path(region: str | None) -> Path:
+        slug = (region or "region").lower().replace(" ", "_")
+        return PASSAGES_DIR / f"{slug}.json"
+
+    @classmethod
+    def load(cls, region: str | None) -> "Passages":
+        path = cls.path(region)
+        if not path.exists():
+            return cls()
+        return cls(json.loads(path.read_text(encoding="utf-8")))
+
+    def exits(self, coords: tuple[int, int]) -> dict[str, tuple[int, int] | str]:
+        out = {}
+        for side, dest in ((self.maps.get(f"{coords[0]},{coords[1]}") or {}).get("sorties") or {}).items():
+            if dest == BLOCKED:
+                out[side] = BLOCKED
+            elif dest:
+                where = _coords_of(f"x {dest}")
+                if where is not None:
+                    out[side] = where
+        return out
+
+    def blocked_from(self, coords: tuple[int, int], entry: str | None) -> set[str]:
+        if not entry:
+            return set()
+        return set(((self.maps.get(f"{coords[0]},{coords[1]}") or {}).get("bloquees_depuis") or {}).get(entry) or [])
+
+
 class Journey:
     """Mode aller (--aller x,y) : jusqu'à la carte d'arrivée par le plus court chemin, sans combat.
 
@@ -1329,6 +1384,8 @@ class Journey:
         self.crossed = 0  # changements de carte réussis
         self.failures = 0  # changements de carte ratés d'affilée
         self.reroutes = 0  # itinéraires recalculés
+        self.passages = Passages.load(traveler.region)  # passages vus en jeu, gardés (config/monde/passages)
+        self._zones_ok: set[str | None] = set()  # zones du départ et de l'arrivée (_cost)
 
     def step(self) -> None:
         frame, label = self.traveler.look()
@@ -1390,8 +1447,10 @@ class Journey:
             if self.reroutes > JOURNEY_REROUTES:
                 self._stop(f"plus de {JOURNEY_REROUTES} itinéraires recalculés (liaisons qui se contredisent ?)")
                 return False
+        zone = self.traveler.atlas.zone
+        self._zones_ok = {zone(self.traveler.region, here), zone(self.traveler.region, self.goal)}
         path = shortest_route(here, getattr(self.traveler, "entry", None), {self.goal},
-                              lambda coords, entry: self._links(coords, entry=entry), self._allowed)
+                              lambda coords, entry: self._links(coords, entry=entry), self._allowed, self._cost)
         if path is None:
             self._stop(f"aucun chemin de {here[0]},{here[1]} à {x},{y} : {self._no_path(here)}")
             return False
@@ -1410,6 +1469,15 @@ class Journey:
         else:  # carte absente des références (intérieur, oubli) : ses voisines qui y sont, à confirmer en jeu
             links = {side: (coords[0] + dx, coords[1] + dy) for side, (dx, dy) in DELTA.items()
                      if atlas.get(region, (coords[0] + dx, coords[1] + dy)) is not None}
+        for side, dest in self.passages.exits(coords).items():  # référence des passages, puis la mémoire
+            if dest == BLOCKED:
+                if blocked:
+                    links.pop(side, None)
+            else:
+                links[side] = dest
+        if blocked:
+            for side in self.passages.blocked_from(coords, entry):
+                links.pop(side, None)
         for side, dest in (self.world.maps.get(World.key(region, coords)) or {}).get("sorties", {}).items():
             if dest == BLOCKED:
                 if blocked:
@@ -1429,6 +1497,20 @@ class Journey:
             for side in self.world.blocked_from(World.key(region, coords), entry):
                 links.pop(side, None)  # inatteignable quand on arrive par ce côté (rempart)
         return links
+
+    def _cost(self, coords: tuple[int, int], side: str, dest: tuple[int, int]) -> float:
+        """Coût d'un passage pour l'itinéraire : 1 s'il est confirmé (déjà pris : mémoire ou référence des passages) ;
+        sinon UNCONFIRMED_COST, et ZONE_COST de plus pour entrer dans une zone qui n'est ni celle du départ ni celle
+        de l'arrivée. 23/10 : en ligne droite de 11,-28 vers -3,-29, le bot est entré dans Le berceau (plateau fermé, 5,-30
+        sans issue vers l'ouest) par des passages jamais vus, plutôt que par les Champs déjà parcourus."""
+        region = self.traveler.region
+        dest_key = World.key(region, dest)
+        if self.world.destination(World.key(region, coords), side) == dest_key \
+                or self.passages.exits(coords).get(side) == dest:
+            return 1.0
+        zone = self.traveler.atlas.zone
+        here_zone, dest_zone = zone(region, coords), zone(region, dest)
+        return UNCONFIRMED_COST + (ZONE_COST if dest_zone != here_zone and dest_zone not in self._zones_ok else 0.0)
 
     def _known(self, coords: tuple[int, int]) -> bool:
         """Carte des références, ou déjà vue."""

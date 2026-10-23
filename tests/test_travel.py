@@ -809,3 +809,35 @@ def test_sun_outlined_on_pale_grass_with_the_grid_off_by_half_a_cell():
     assert abs(x - 1868) <= 4 and abs(y - 630) <= 4  # le losange vu, pas la case de la grille (y 643)
     (cx, cy), _ = _click_spot(frame, (27, 25), 1, exits["droite"].point)
     assert abs(cy - 630) < 0.6 * frame.grid.half_h + 2  # même le bas du losange reste dans la case vue
+
+
+def test_route_prefers_passages_already_taken_over_a_shorter_unknown_way():
+    # 23/10 : en ligne droite de 11,-28 vers -3,-29, le bot est entré dans Le berceau (plateau fermé) par des passages
+    # jamais vus. Passage confirmé : 1 ; jamais pris : 2 ; entrée dans une autre zone (ni départ ni arrivée) : 2 de plus.
+    from bot.brain.travel import shortest_route
+
+    grid = {(0, 0): {"droite": (1, 0), "bas": (0, 1)}, (1, 0): {"droite": (2, 0)}, (2, 0): {},
+            (0, 1): {"droite": (1, 1)}, (1, 1): {"haut": (1, 0), "droite": (2, 1)}, (2, 1): {"haut": (2, 0)}}
+    confirmed = {((0, 0), "bas"), ((0, 1), "droite"), ((1, 1), "droite"), ((2, 1), "haut")}
+    cost = lambda here, side, dest: 1.0 if (here, side) in confirmed else 3.0
+    links = lambda coords, entry: grid[coords]
+    assert [d for _, d in shortest_route((0, 0), None, {(2, 0)}, links, lambda c: True)] == [(1, 0), (2, 0)]
+    assert [d for _, d in shortest_route((0, 0), None, {(2, 0)}, links, lambda c: True, cost)] == \
+        [(0, 1), (1, 1), (2, 1), (2, 0)]  # 4 passages connus plutôt que 2 jamais pris
+
+
+def test_passages_reference_exported_from_the_memory_without_losing_a_known_passage():
+    from bot.brain.travel import Passages
+    from tools.passages import exporter
+
+    memory = {"Monde des Douze 5,-30": {"sorties": {"droite": "Monde des Douze 6,-30", "bas": "bloquée"},
+                                         "bloquees_depuis": {"droite": ["gauche"]}},
+              "Monde des Douze 6,-29": {"sorties": {"gauche": "bloquée"}},
+              "Incarnam 1,1": {"sorties": {"bas": "Incarnam 1,2"}}}
+    reference = {"6,-29": {"sorties": {"gauche": "5,-29"}}}  # déjà pris : une sortie « bloquée » ne l'efface pas
+    out = exporter(memory, "Monde des Douze", reference)
+    assert set(out) == {"5,-30", "6,-29"}
+    assert out["5,-30"]["sorties"] == {"droite": "6,-30", "bas": "bloquée"} and out["6,-29"]["sorties"]["gauche"] == "5,-29"
+    passages = Passages(out)
+    assert passages.exits((5, -30)) == {"droite": (6, -30), "bas": "bloquée"}
+    assert passages.blocked_from((5, -30), "droite") == {"gauche"} and passages.blocked_from((5, -30), None) == set()
