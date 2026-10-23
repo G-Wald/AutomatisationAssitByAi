@@ -609,8 +609,6 @@ class CombatAI:
                 log.warning("Un sort est resté sélectionné malgré %s : je finis mon tour sans toucher la carte",
                             self.settings.cancel_key.upper())
                 break
-            if (me is None or not enemies) and self._move_timeline(frame):
-                continue  # timeline de l'autre côté de la carte : combattants revus sur une nouvelle capture
             if me is None and self._no_proof:
                 break  # cercles vus, aucun prouvé le mien (déjà dit, capture gardée) : rien sur une supposition
             if me is None or not enemies:
@@ -618,6 +616,11 @@ class CombatAI:
                     looked_again = True  # une animation (sort, coup, mort) peut cacher un cercle un instant
                     self.game.sleep(0.3)
                     continue
+                # Cercles vraiment absents (pas « vus, aucun prouvé le mien » : 23/10, Contour d'Astrub, équipe changée
+                # en citrouilles par l'événement d'Halloween, la timeline déplacée 41 fois pour rien).
+                if self._move_timeline(frame):
+                    looked_again = False
+                    continue  # timeline de l'autre côté de la carte : combattants revus sur une nouvelle capture
                 path = self.game.recorder.save(frame.image, "combattants_introuvables", lossless=True)
                 log.warning("Je ne vois pas %s sur la carte (capture : %s)",
                             "mon personnage" if me is None else "d'ennemi", path)
