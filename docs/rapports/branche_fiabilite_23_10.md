@@ -55,3 +55,26 @@ le soleil, etc.).
 3. **Référence des passages** : la mettre à jour après chaque session (`tools/passages.py --exporter`), et lancer une
    exploration (`--explore`) des zones de farm pour la compléter.
 4. **Frise déplacée** : à voir en jeu (pas encore eu de combat dans un coin).
+
+## Deuxième heure (23/10, 21:58 → 23:30)
+
+| Étape | Résultat |
+|---|---|
+| Recherche web (agent) | `docs/rapports/recherche_monstres_agressifs_et_passages.md` : passages StarLoco (478 de nos 479 passages s'y retrouvent), clés de cartes officielles MapKeys-DR (cases praticables lisibles), rien d'officiel sur l'agression ; monstres d'Halloween dans le Contour, les Prairies, Le berceau, les Champs, le Coin des Tofus et la forêt des Abraknydes. **Rien n'est intégré : chaque type de données est à approuver.** |
+| Mode banque (`--banque`) | Porkass -> banque d'Astrub : 28 cartes sans perte ; **8 sur 8** ont vidé l'onglet ressources (~15 s chacun ; Lestunes 100 % -> 0 %) |
+| Niveau maximal automatique | `engage.max_level: auto` = 0,7 x niveau cumulé ; niveaux retenus à chaque « Tu passes niveau N » ; 70 en attendant (aucun niveau encore connu) |
+| Banque -> Contour d'Astrub | 12 cartes, 84 passages de suiveurs sur 84 |
+| Contour d'Astrub | 2 combats sans souci, puis l'équipe **changée en citrouilles** (Bouftous d'Halouine) : sorts différents, portraits tous identiques ; combat bloqué depuis 22:14 |
+
+Correctifs de cette heure : mode banque ; niveau maximal automatique ; frise déplacée seulement si des cercles manquent
+(elle était déplacée 41 fois pour rien) ; sorts inconnus essayés par les cases 1 à 3 (moi repéré au centre de leur
+portée, pas vers l'ennemi si personne n'est à portée) ; lecture du chat « équipe fermée » seulement après un clic sur
+l'épée (test qui dépendait de la vitesse).
+
+Constats :
+- **Événement d'Halloween** : éviter les zones des monstres d'Halouine (liste de l'agent) ; d'après l'utilisateur, une
+  coiffe citrouille équipée protège de la malédiction.
+- **Transformation** : le bot n'a ni les sorts ni le repérage du tour (portraits identiques) ; le repli « cases 1 à 3 »
+  frappe une fois puis se perd. Le combat bloqué ne finira pas seul : l'abandonner est ta décision (pénalité inconnue).
+- La Prairie des Blops, les Pichons et l'Orée des Abraknydes n'ont pas pu être testés : le combat de citrouilles a pris
+  le reste de l'heure.

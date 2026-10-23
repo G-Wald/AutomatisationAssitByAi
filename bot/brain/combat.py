@@ -1144,16 +1144,21 @@ class CombatAI:
                     if center in mine and score >= 0.5 and (best is None or score > best[0]):
                         best = (score, center)
             if best is None:
+                path = self.game.recorder.save(shown.image, "transformation_portee", lossless=True)
+                log.info("Sort de la case %s (transformation) : portée affichée, centre sur aucun de mes cercles "
+                         "(capture : %s)", key, path)
                 self.game.press(self.settings.cancel_key)
                 continue
             me = Fighter(my_team, *shown.grid.center(best[1]), best[1])
             view = read_range(shown, me, fighters)
-            targets = [e for e in enemies if e.cell in view.castable
-                       or any((e.cell[0] + dx, e.cell[1] + dy) in view.castable for dx in (-1, 1) for dy in (-1, 1))]
+            low, high = view.spell_range or (1, 1)
+            targets = [e for e in enemies if low <= distance(e.cell, me.cell) <= high and (
+                e.cell in view.castable
+                or any((e.cell[0] + dx, e.cell[1] + dy) in view.castable for dx in (-1, 1) for dy in (-1, 1)))]
             if not targets:
-                log.info("Sort de la case %s (transformation) : aucun ennemi à portée", key)
                 self.game.press(self.settings.cancel_key)
-                continue
+                self._step_toward(shown, me, enemies, fighters, key, high)
+                return False
             target = min(targets, key=lambda e: distance(e.cell, me.cell))
             pa = read_pa(shown)
             point, spread = clear_point(shown.grid, target.cell, fighters)
@@ -1167,6 +1172,24 @@ class CombatAI:
             if pa is not None and after is not None and after < pa:
                 return True
         return False
+
+    def _step_toward(self, frame: Frame, me: Fighter, enemies: list[Fighter], fighters: list[Fighter], key: str,
+                     reach: int) -> None:
+        """Sorts inconnus, aucun ennemi à portée : quelques pas vers le plus proche (case libre la plus proche de lui,
+        à portée de mes PM), pour le frapper au tour suivant."""
+        pm = read_pm(frame) or 0
+        if pm <= 0:
+            return
+        target = min(enemies, key=lambda e: distance(e.cell, me.cell))
+        taken = {f.cell for f in fighters} | set(self.map.unwalkable)
+        cells = [c for c in frame.grid.cells() if c not in taken and 0 < distance(c, me.cell) <= pm]
+        if not cells:
+            return
+        cell = min(cells, key=lambda c: (max(0, distance(c, target.cell) - reach), distance(c, me.cell)))
+        log.info("Sort de la case %s (transformation) : aucun ennemi à portée (%d case(s)), je m'avance en %s vers %s",
+                 key, reach, cell, _aim_label(target))
+        self.game.click(*clear_point(frame.grid, cell, fighters))
+        self.game.sleep(1.5)
 
     def _move_timeline(self, frame: Frame) -> bool:
         """Moi ou les ennemis introuvables alors que des portraits de la timeline couvrent la carte : la timeline passe
