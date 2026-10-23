@@ -129,9 +129,35 @@ def close_small_menu(game: Game, frame: Frame, still_open: Callable[[Frame], boo
         log.info("Le menu est encore là après le clic sous la barre de sorts")
 
 
+LEVEL_UP = "informations (niveau supérieur)"
+
+
+def read_level_up(frame: Frame, box) -> int | None:
+    """Niveau de « Tu passes niveau N » (fenêtre Informations), lu par l'OCR de Windows ; None s'il ne se lit pas."""
+    import re
+
+    import cv2
+
+    from bot.perception.chat import ocr_available, ocr_lines
+
+    if not ocr_available() or box is None:
+        return None
+    x0, y0, x1, y1 = (max(0, round(v)) for v in box)
+    crop = frame.image[y0:y1, x0:x1]
+    if crop.size == 0:
+        return None
+    for line in ocr_lines(cv2.resize(crop, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)):
+        match = re.search(r"niveau\s*(\d+)", line, re.IGNORECASE)
+        if match:
+            return int(match.group(1))
+    return None
+
+
 class PopupCloser:
-    def __init__(self, game: Game, specs: list[PopupSpec], unknown_key: str, unknown_delay: float) -> None:
+    def __init__(self, game: Game, specs: list[PopupSpec], unknown_key: str, unknown_delay: float,
+                 on_level: Callable[[int], None] | None = None) -> None:
         self.game = game
+        self.on_level = on_level  # niveau lu dans « Tu passes niveau N » avant de fermer la fenêtre (engage.max_level)
         self.specs = specs
         self.unknown_key = unknown_key
         self.unknown_delay = unknown_delay
@@ -208,6 +234,11 @@ class PopupCloser:
 
     def _close_known(self, frame: Frame, known: PopupMatch) -> bool:
         name = known.spec.name
+        if name == LEVEL_UP and self.on_level is not None and self._closed is None or \
+                name == LEVEL_UP and self.on_level is not None and self._closed[0] != name:
+            level = read_level_up(frame, known.box)
+            if level is not None:
+                self.on_level(level)
         if self.blocked == name:
             return False  # déjà signalée : pas d'autre essai avant le tour des fenêtres suivant
         now = time.monotonic()

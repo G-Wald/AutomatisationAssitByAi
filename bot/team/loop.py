@@ -57,7 +57,7 @@ from bot.perception.ui import READY_SPREAD, hp_ratio, pods_fill, tactical_mode
 from bot.state.scene import Phase, Scene, read_scene
 from bot.perception.chat import combat_lines, died
 from bot.team.join import Joiner, recent_click
-from bot.team.member import Member, to_reference
+from bot.team.member import load_level, Member, to_reference
 from bot.team.placement import Seat, by_elimination, next_moves, plan_seats
 from bot.team.recovery import RecoverySettings, Watchdog
 from bot.team.roster import TeamSettings
@@ -246,6 +246,13 @@ class TeamBot:
             engage = False  # déplacements (test, exploration, trajet) : pas de combat lancé par le bot
         enabled = engage_settings.enabled if engage is None else engage
         self.engager = Engager(self.leader.game, engage_settings) if enabled else None
+        if self.engager is not None and engage_settings.max_level_auto:
+            self.engager.team_levels = [load_level(settings, m.name) for m in members]
+            missing = [m.name for m, level in zip(members, self.engager.team_levels) if level is None]
+            log.info("Niveau maximal des groupes : %s", f"{self.engager.level_limit()} ({engage_settings.level_ratio:g} x "
+                     f"niveau cumulé {sum(self.engager.team_levels)})" if not missing else
+                     f"{engage_settings.max_level} (niveau pas encore connu : {', '.join(missing)} ; retenu au prochain "
+                     "« Tu passes niveau N »)")
         self.roamer = make_roamer(self.leader.game, self.travel_settings)
         self._crossings: list[Crossing] = []
         # Suiveurs partis vers le soleil en même temps que le principal (_dispatch) : capture de départ, heure du clic.

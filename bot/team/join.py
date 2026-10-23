@@ -130,7 +130,7 @@ class Joiner:
         for _ in range(1 if self.sword_missing else JOIN_TRIES):
             if self.ask(member, hint, quick=False) and self.wait_placement(member, deadline):
                 return True
-            if join_refused(member.game.look(park=False)):
+            if not self.sword_missing and join_refused(member.game.look(park=False)):  # épée cliquée, pas entré
                 # 23/10 : Pesopepe, 4 combats d'affilée, 25 s de recherche à chaque fois, l'équipe « fermée ».
                 self.outsiders.add(member.name)
                 log.warning("%s n'est pas dans le groupe du principal (chat : « l'équipe est fermée ») : il ne pourra "

@@ -773,3 +773,25 @@ def test_stop_control_pause_by_the_bot_and_lifted_for_a_look():
     assert control.paused and control.wait_paused(0.05)
     control.resume("test")
     assert not control.paused and not control.wait_paused(1.0)
+
+
+@pytest.mark.skipif(not __import__("bot.perception.chat", fromlist=["x"]).ocr_available(), reason="OCR de Windows absent")
+def test_level_read_in_the_level_up_window_before_closing_it():
+    # 23/10 : engage.max_level « auto » : level_ratio x niveau cumulé de l'équipe, niveaux retenus à chaque passage.
+    from bot.brain.popups import LEVEL_UP, read_level_up
+
+    frame = load_frame("niveau_14_par_dessus_resultat_calanques")
+    match = find_known_popup(frame, load_popup_specs())
+    assert match.spec.name == LEVEL_UP and read_level_up(frame, match.box) == 14
+
+
+def test_level_limit_follows_the_team_cumulated_level():
+    from bot.brain.engage import Engager, EngageSettings
+
+    settings = EngageSettings.from_settings({"engage": {"max_level": "auto", "level_ratio": 0.5}})
+    engager = Engager.__new__(Engager)
+    engager.settings = settings
+    engager.team_levels = [14, 13, 15, None]
+    assert engager.level_limit() == 70  # un niveau manque : le plafond fixe
+    engager.team_levels = [14, 13, 15, 14]
+    assert engager.level_limit() == 28

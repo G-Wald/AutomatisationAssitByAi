@@ -23,10 +23,11 @@ from bot.actions.input import NO_SPREAD, Human, Spread
 from bot.actions.stop import StopControl
 from bot.brain.combat import CombatAI, CombatSettings
 from bot.brain.game import Game
-from bot.brain.memory import SessionSettings
+from bot.brain.memory import CharacterMemory, SessionSettings
 from bot.brain.popups import PopupCloser
 from bot.brain.spellbook import SpellBook
 from bot.capture.window import GameWindow
+from bot.connection.characters import memory_dir
 from bot.debug.recorder import Recorder
 from bot.perception.frame import Frame
 from bot.perception.layout import Layout, Point
@@ -201,8 +202,30 @@ def make_member(name: str, window: GameWindow, settings: dict, focus: Focus, con
         spellbook=spellbook,
         ai=CombatAI(game, CombatSettings.from_settings(settings), spellbook, name=name),  # nom : lu au survol
         popups=PopupCloser(game, load_popup_specs(), unknown_key=popups.get("unknown_window_key") or "",
-                           unknown_delay=float(popups.get("unknown_window_delay", 20))),
+                           unknown_delay=float(popups.get("unknown_window_delay", 20)),
+                           on_level=lambda level: save_level(settings, name, level)),
     )
+
+
+def load_level(settings: dict, name: str) -> int | None:
+    """Niveau retenu du personnage (data/personnages/<Nom>.json, clé « niveau ») ; None s'il n'a jamais été lu."""
+    folder = memory_dir(settings)
+    record = CharacterMemory(folder).load(name) if folder else None
+    level = (record or {}).get("niveau")
+    return int(level) if isinstance(level, int) else None
+
+
+def save_level(settings: dict, name: str, level: int) -> None:
+    """« Tu passes niveau N » lu : retenu pour le niveau maximal des groupes attaqués (engage.max_level: auto)."""
+    folder = memory_dir(settings)
+    if not folder:
+        return
+    memory = CharacterMemory(folder)
+    record = memory.load(name) or {}
+    if record.get("niveau") != level:
+        record.pop("personnage", None)
+        memory.save(name, {**record, "niveau": level})
+        log.info("%s passe niveau %d (retenu)", name, level)
 
 
 class MemberTag(logging.Filter):

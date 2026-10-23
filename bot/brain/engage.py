@@ -129,6 +129,10 @@ class EngageSettings:
     show_groups_key: str = "z"
     max_monsters: int = 8  # groupes plus gros ignorés (lignes de l'infobulle)
     max_level: int = 0  # groupes de niveau total plus haut ignorés (titre « Niveau N » de l'infobulle) ; 0 : sans limite
+    # « auto » (max_level_auto) : level_ratio x niveau cumulé de l'équipe (niveaux retenus, team/member.py) ; max_level
+    # sert tant qu'un niveau manque.
+    max_level_auto: bool = False
+    level_ratio: float = 0.7
     pause_between_fights: tuple[float, float] = (1.5, 2.5)
     retry_delay: float = 10.0  # attente quand aucun groupe n'est attaquable
     # Arrière-plan : bouton du clic direct sur le groupe (engage.clic_sonde). Gauche : à côté, le personnage y marche ;
@@ -145,7 +149,10 @@ class EngageSettings:
             enabled=bool(engage.get("enabled", cls.enabled)),
             show_groups_key=engage.get("show_groups_key") or cls.show_groups_key,
             max_monsters=int(engage.get("max_monsters", cls.max_monsters)),
-            max_level=int(engage.get("max_level", cls.max_level) or 0),
+            max_level=70 if str(engage.get("max_level")).strip().lower() == "auto"
+            else int(engage.get("max_level", cls.max_level) or 0),
+            max_level_auto=str(engage.get("max_level")).strip().lower() == "auto",
+            level_ratio=float(engage.get("level_ratio", cls.level_ratio)),
             pause_between_fights=tuple(float(v) for v in engage.get("pause_between_fights", cls.pause_between_fights)),
             retry_delay=float(engage.get("retry_delay", cls.retry_delay)),
             probe_click=probe_click,
@@ -413,7 +420,7 @@ class Engager:
                 return False
         self.groups_seen = len(seen)
         tooltips = [t for t in seen if t.monsters <= self.settings.max_monsters]
-        if self.settings.max_level:
+        if self.settings.max_level or self.settings.max_level_auto:
             tooltips = self._not_too_strong(frame, tooltips)
         self.game.recorder.save(frame.image, "groupes_z", quality=92)  # capture brute, pour réanalyse
         firsts = [points[0] for points in (hover_points(t, frame) for t in tooltips) if points]  # 1er survol prévu
@@ -481,14 +488,22 @@ class Engager:
         self.none_found = not self.missed
         return False
 
+    def level_limit(self) -> int:
+        """Niveau total maximal d'un groupe attaqué : engage.max_level, ou (auto) level_ratio x niveau cumulé de
+        l'équipe (team_levels : un par personnage, None si jamais lu ; max_level tant qu'il en manque un)."""
+        levels = getattr(self, "team_levels", None) or []
+        if self.settings.max_level_auto and levels and all(level is not None for level in levels):
+            return round(self.settings.level_ratio * sum(levels))
+        return self.settings.max_level
+
     def _not_too_strong(self, frame: Frame, tooltips: list[GroupTooltip]) -> list[GroupTooltip]:
         """Groupes de niveau total au plus engage.max_level (23/10 : zones à choisir pour l'équipe, Porkass jusqu'au
         niveau 30 par monstre). Niveau illisible : gardé, et dit."""
-        kept = []
+        kept, limit = [], self.level_limit()
         for tooltip in tooltips:
             level = read_group_level(frame, tooltip)
-            if level is not None and level > self.settings.max_level:
-                log.info("Groupe de niveau %d laissé (engage.max_level : %d)", level, self.settings.max_level)
+            if level is not None and level > limit:
+                log.info("Groupe de niveau %d laissé (niveau maximal : %d)", level, limit)
                 continue
             if level is None:
                 log.debug("Niveau du groupe illisible : je le garde")

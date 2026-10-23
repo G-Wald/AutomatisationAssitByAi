@@ -55,6 +55,8 @@ from bot.capture.monitors import ScreenSettings, place_windows, valid_choice
 from bot.capture.window import character_name, find_windows
 from bot.config import apply_overrides, load_settings, parse_override
 from bot.connection.group import Player, form_group
+from bot.team.bank import BANK_MAP, BankVisit
+from bot.team.bank import inside as bank_inside
 from bot.connection.characters import parse_names
 from bot.connection.clients import client_windows
 from bot.connection.manager import Watcher, connect_at_start
@@ -238,6 +240,9 @@ def main() -> int:
                         help="mode équipe : faire le donjon NOM (config/donjons_entree.yaml), l'équipe devant l'entrée ; "
                              "NOM:ETAPE pour reprendre à une étape (entree, dalle, soleil, pnj, salles), NOM:ETAPE:NOMS "
                              "pour ces seuls personnages à cette étape (les autres l'ont faite), NOM:salles:N en salle N")
+    parser.add_argument("--banque", action="store_true",
+                        help="mode équipe : à la banque d'Astrub (4,-16), chaque personnage vide l'onglet ressources de "
+                             "son inventaire dans son coffre, puis le bot s'arrête")
     parser.add_argument("--passages", type=int, default=1, metavar="N",
                         help="avec --donjon : N passages complets (entrée, combats de salle en salle, sortie)")
     parser.add_argument("--equipe", action="store_true",
@@ -419,6 +424,8 @@ def run_team(args: argparse.Namespace, settings: dict, team: TeamSettings, title
             m.game.release_keys(_held_keys(settings))  # une touche tenue lors d'un arrêt brutal précédent
         if args.combat_zone is not None:
             args.travel, args.position = "zone", args.combat_zone
+        if args.banque and args.aller is None:
+            args.aller = BANK_MAP  # trajet jusqu'à la banque d'Astrub d'abord (team/bank.py)
         goto = _goto(args, settings)
         bot = TeamBot(members, settings, team, act=not args.observe, engage=False if args.combat_only or goto else None,
                       travel=args.travel, start=args.position, region=WORLDS.get(args.monde))
@@ -477,7 +484,17 @@ def run_team(args: argparse.Namespace, settings: dict, team: TeamSettings, title
                 log.error("Donjon inconnu : %s (config/donjons_entree.yaml)", args.donjon)
                 return 1
             return 0 if DungeonFarm(bot, spec, args.passages).run(step or None, only, room) == args.passages else 1
+        if args.banque and bank_inside(members[0]):
+            log.info("Banque : le principal est déjà dans la banque, pas de trajet")
+            return 0 if len(BankVisit(members).run()) == len(members) else 1
         bot.run()  # erreurs d'un tour de boucle rattrapées là (TeamBot.safe_step) : jamais d'arrêt en plein combat
+        if args.banque:
+            arrived = bot.roamer is not None and bot.roamer.traveler.coords == BANK_MAP and not bot._lost
+            if not arrived:
+                log.warning("Banque : l'équipe n'est pas toute sur la carte de la banque (%s,%s) : pas de passage au coffre",
+                            *BANK_MAP)
+                return 1
+            return 0 if len(BankVisit(members).run()) == len(members) else 1
     except BotStopped as stop:
         log.info("Bot arrêté (%s)", stop)
     except KeyboardInterrupt:
