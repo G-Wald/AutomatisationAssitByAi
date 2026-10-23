@@ -33,6 +33,12 @@ EDGE_ROWS = 3  # un soleil de changement de carte est sur l'une des 3 rangées d
 SUN_MIN = 0.5
 OUTLINE_MIN = 0.55
 OUTLINE_BRIGHT = 205  # contour : rouge et vert au moins à ce niveau (le bleu est un peu plus bas : blanc crème)
+# Et le bleu au moins à ce niveau : 23/10, Tainéla 5,-30, herbe vert pâle (bleu 140 à 180) prise pour du contour
+# autour du soleil de droite, case jugée « zone claire » ; le contour, lui, a un bleu de 200 et plus.
+OUTLINE_BLUE = 190
+# Contour cherché aussi une demi-hauteur de case plus haut ou plus bas que la case de la grille : 23/10, Tainéla 5,-30,
+# soleil de droite 12 px au-dessus du centre calculé, pas trouvé (le principal bloqué sur la carte).
+OUTLINE_SHIFT_MAX, OUTLINE_SHIFT_STEP = 0.6, 2  # demi-hauteur au plus, par pas de 2 px (le contour tient à 2 px près)
 OUTLINE_THICK = 3  # px de trait clair d'affilée, en hauteur (grille : 2 px, et bien moins clairs)
 SAME_SUN = 3  # cases au plus entre deux détections d'un même soleil (au-delà : un autre soleil du même côté)
 
@@ -116,10 +122,28 @@ def find_suns(frame: Frame, every: bool = False) -> list[Exit]:
     return _clusters_per_side(found) if every else _best_per_side(found)
 
 
-def _outline_score(bright: np.ndarray, frame: Frame, cell: Cell) -> float:
-    """Contour clair épais sur chacun des 4 côtés de la case (score : le côté le moins bien tracé), à condition que
-    ni l'intérieur ni l'extérieur tout proche ne soient clairs eux aussi (pierres, chemin)."""
+def _outline_at(bright: np.ndarray, frame: Frame, cell: Cell) -> tuple[float, tuple[float, float]]:
+    """Meilleur contour de la case (décalée jusqu'à OUTLINE_SHIFT_MAX demi-hauteur) : score, et centre du losange."""
     cx, cy = frame.grid.center(cell)
+    best = (0.0, (cx, cy))
+    hw, hh = frame.grid.half_w, frame.grid.half_h
+    near = bright[max(0, round(cy - 1.7 * hh)): round(cy + 1.7 * hh), max(0, round(cx - hw)): round(cx + hw)]
+    if near.mean() < 0.02 if near.size else True:
+        return best  # pas de trait clair autour : aucun contour, décalé ou non
+    reach = round(OUTLINE_SHIFT_MAX * hh)
+    for shift in sorted(range(-reach, reach + 1, OUTLINE_SHIFT_STEP), key=abs):  # au plus près de la grille d'abord
+        center = (cx, cy + shift)
+        score = _outline_score(bright, frame, cell, center)
+        if score > best[0]:
+            best = (score, center)
+    return best
+
+
+def _outline_score(bright: np.ndarray, frame: Frame, cell: Cell, center: tuple[float, float] | None = None) -> float:
+    """Contour clair épais sur chacun des 4 côtés de la case (score : le côté le moins bien tracé), à condition que
+    ni l'intérieur ni l'extérieur tout proche ne soient clairs eux aussi (pierres, chemin). `center` : centre du
+    losange, s'il n'est pas celui de la grille."""
+    cx, cy = center or frame.grid.center(cell)
     hw, hh = frame.grid.half_w, frame.grid.half_h
     corners = [(cx - hw, cy), (cx, cy - hh), (cx + hw, cy), (cx, cy + hh)]
     height, width = bright.shape
@@ -151,14 +175,14 @@ def find_marked_exits(frame: Frame, every: bool = False) -> list[Exit]:
     """Sorties entourées de blanc après un appui sur A, au plus une par côté (`every` : toutes celles qui sont
     distinctes)."""
     c = frame.image.astype(np.int16)
-    light = (np.minimum(c[:, :, 1], c[:, :, 2]) >= OUTLINE_BRIGHT) & (c.max(axis=2) - c.min(axis=2) <= 70)
+    light = (np.minimum(c[:, :, 1], c[:, :, 2]) >= OUTLINE_BRIGHT) & (c[:, :, 0] >= OUTLINE_BLUE) \
+        & (c.max(axis=2) - c.min(axis=2) <= 70)
     # Trait épais : OUTLINE_THICK pixels clairs d'affilée en hauteur (les lignes de la grille n'y arrivent pas).
     kernel = np.ones((OUTLINE_THICK, 1), np.uint8)
     bright = cv2.erode(light.astype(np.uint8), kernel).astype(bool)
     found = []
     for cell, side in _edge_cells(frame):
-        score = _outline_score(bright, frame, cell)
+        score, (cx, cy) = _outline_at(bright, frame, cell)
         if score >= OUTLINE_MIN:
-            cx, cy = frame.grid.center(cell)
             found.append(Exit(side, cell, (round(cx), round(cy)), score, marked=True))
     return _clusters_per_side(found) if every else _best_per_side(found)

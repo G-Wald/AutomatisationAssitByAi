@@ -49,6 +49,7 @@ from bot.actions.stop import BotStopped, StopControl
 from bot.brain.game import Game
 from bot.brain.loop import Bot
 from bot.brain.memory import CONTROL, READING_MODES, reading_mode
+from bot.brain.recovery import capture_once
 from bot.brain.travel import WORLDS
 from bot.capture.monitors import ScreenSettings, place_windows, valid_choice
 from bot.capture.window import character_name, find_windows
@@ -476,13 +477,15 @@ def run_team(args: argparse.Namespace, settings: dict, team: TeamSettings, title
                 log.error("Donjon inconnu : %s (config/donjons_entree.yaml)", args.donjon)
                 return 1
             return 0 if DungeonFarm(bot, spec, args.passages).run(step or None, only, room) == args.passages else 1
-        bot.run()
+        bot.run()  # erreurs d'un tour de boucle rattrapées là (TeamBot.safe_step) : jamais d'arrêt en plein combat
     except BotStopped as stop:
         log.info("Bot arrêté (%s)", stop)
     except KeyboardInterrupt:
         log.info("Bot arrêté (Ctrl+C)")
     except Exception:
+        # Erreur hors de la boucle (démarrage, donjon hors des combats) : au journal avec une capture de chaque fenêtre.
         log.exception("Erreur inattendue : le bot s'arrête")
+        _capture_windows(locals().get("members") or [], "erreur_fatale")
         return 1
     finally:
         for m in members if "members" in locals() else []:
@@ -495,6 +498,17 @@ def run_team(args: argparse.Namespace, settings: dict, team: TeamSettings, title
         control.close()
         _keep_summary(recorder)
     return 0
+
+
+def _capture_windows(members: list, label: str) -> None:
+    """Une capture de chaque fenêtre de l'équipe (au plus une par cause et par fenêtre toutes les 5 min)."""
+    for member in members:
+        try:
+            path = capture_once(member.game, member.game.look(park=False).image, label)
+            if path:
+                log.info("Capture de %s : %s", member.name, path)
+        except Exception:  # noqa: BLE001 : fenêtre fermée, capture impossible
+            pass
 
 
 def _keep_summary(recorder: Recorder) -> None:

@@ -398,10 +398,18 @@ def test_launcher_play_button():
     image = frame("launcher_retro").image
     assert find_play(image) == (368, 576) and find_retro_icon(image) == (44, 250)
     other_game = image.copy()
-    other_game[185:225, 470:600] = other_game[240:280, 1500:1630]  # sans le sélecteur « Retro » : autre jeu
+    other_game[185:225, 470:600] = other_game[240:280, 1500:1630]  # sans le sélecteur « Retro » : autre jeu,
+    other_game[210:292, 0:88] = other_game[300:382, 0:88]  # dont la case n'est pas celle de Dofus Retro (barre)
     assert find_play(other_game) is None  # le « JOUER » d'un autre jeu n'est jamais cliqué
     for name in ("connexion_choix_personnage", "hors_combat"):
         assert find_play(frame(name).image) is None, name
+
+
+def test_launcher_play_button_on_a_page_scrolled_up():
+    # 21/10 : page Dofus Retro défilée vers le haut, sélecteur « Retro » coupé ; « JOUER » là, et l'icône de Dofus Retro
+    # en surbrillance dans la barre de gauche. Le bot s'était arrêté (« page introuvable »).
+    image = frame("launcher_retro_page_defilee").image
+    assert find_play(image) is not None
 
 
 def test_launcher_play_button_with_a_dpi_from_another_screen():
@@ -580,6 +588,28 @@ def test_characters_text_and_known_ones(tmp_path):
     (tmp_path / "Gela-[A13].json").write_text("{}", encoding="utf-8")
     (tmp_path / "Brawli-[Gal].json").write_text("{}", encoding="utf-8")
     assert characters.known_characters(tmp_path) == ["Brawli-[Gal]", "Gela-[A13]"]
+    assert characters.known_characters(None) == []  # session.memory vide : rien n'est retenu
+    assert characters.memory_dir({}) == characters.MEMORY_DIR
+    assert characters.memory_dir({"session": {"memory": str(tmp_path)}}) == tmp_path
+    assert characters.memory_dir({"session": {"memory": ""}}) is None
+
+
+def test_forget_character_moves_file(tmp_path):
+    from bot.brain.memory import CharacterMemory
+    from bot.connection import characters
+    source = CharacterMemory(tmp_path).path("Gela-[A13]")
+    source.write_text('{"nom": "Gela-[A13]"}', encoding="utf-8")
+    (tmp_path / "Brawli-[Gal].json").write_text("{}", encoding="utf-8")
+    moved = characters.forget_character("Gela-[A13]", tmp_path)
+    assert moved is not None and moved.parent == tmp_path / "supprimes" and not source.exists()
+    assert moved.name.startswith("Gela-[A13]_") and len(moved.stem) == len("Gela-[A13]_AAAAMMJJ_HHMMSS")
+    assert moved.read_text(encoding="utf-8") == '{"nom": "Gela-[A13]"}'  # déplacé, pas effacé
+    assert characters.known_characters(tmp_path) == ["Brawli-[Gal]"]  # supprimes/ n'est pas relu
+    assert characters.forget_character("Gela-[A13]", tmp_path) is None  # plus de fichier
+    assert characters.forget_character("Inconnu", tmp_path / "absent") is None
+    odd = CharacterMemory(tmp_path).path("Bob:Le|Fou")  # caractères interdits : même nom de fichier que la mémoire
+    odd.write_text("{}", encoding="utf-8")
+    assert characters.forget_character("Bob:Le|Fou", tmp_path).name.startswith("Bob_Le_Fou_")
 
 
 def test_client_titles():

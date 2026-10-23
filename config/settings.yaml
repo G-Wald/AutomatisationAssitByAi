@@ -103,6 +103,10 @@ popups:
   unknown_window_key: "escape"   # touche essayée sur une fenêtre inconnue juste après un combat ("" : ne rien tenter)
   unknown_window_delay: 20       # secondes après un combat pendant lesquelles on tente de fermer une fenêtre inconnue
 
+recovery:                  # mode équipe, hors combat seulement : surveillance du progrès (bot/team/recovery.py, 21/10)
+  last_resort: pause       # 5 min sans progrès (combat, carte, suiveur, tour), ou 2 diagnostics sans cause : captures,
+                           # avertissement, puis pause (F9 pour reprendre ; nouveau diagnostic toutes les 2 min) ou stop
+
 team:                      # mode équipe : une fenêtre du jeu par personnage, tous sur la même carte (--equipe)
   enabled: auto            # auto : mode équipe dès que plusieurs fenêtres de personnages sont ouvertes ; true : toujours ;
                            # false : jamais sans --equipe

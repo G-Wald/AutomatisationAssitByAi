@@ -23,7 +23,7 @@ from bot.perception.blobs import find_blobs
 from bot.perception.colors import TEAMS, orange_mask, team_mask
 from bot.perception.frame import Frame
 from bot.perception.layout import Box
-from bot.perception.ui import TIMELINE_ZONE
+from bot.perception.ui import timeline_zone
 
 PORTRAIT_INNER = (7, 8, 45, 62)  # dessin dans le cadre orange (gauche, haut, droite, bas ; référence), sans la barre de vie
 SIGNATURE_SIZE = (12, 18)
@@ -42,7 +42,7 @@ class Portrait:
 def current_portrait(frame: Frame) -> Portrait | None:
     """Portrait encadré d'orange (mêmes critères que ui.current_fighter_team) ; None hors combat."""
     layout = frame.layout
-    box = layout.box(*TIMELINE_ZONE)
+    box = timeline_zone(frame)
     for blob in find_blobs(orange_mask(frame.crop(box)), offset=box[:2]):
         if not (layout.length(50) <= blob.w <= layout.length(72) and layout.length(58) <= blob.h <= layout.length(82)):
             continue
@@ -85,11 +85,39 @@ PORTRAIT_SIZE = ((15, 48), (48, 66))  # fond blanc d'un portrait de la timeline,
 PORTRAIT_MARGIN = (6, 6, 16, 8)  # autour de ce fond : cadre, et barre de vie à droite (gauche, haut, droite, bas)
 
 
+# Icônes des challenges du combat (20/10, Champs 6,2) : carrés orange (66 px en 1057 de haut) empilés à gauche de la
+# carte, sous ses coordonnées, chacun avec son pourcentage dessous. Dinarpepe, en (2, 8) sous l'une d'elles : deux clics
+# de déplacement tombés sur l'icône, « n'a pas bougé ». Repère de référence : zone où elles se trouvent (depuis le coin
+# haut-gauche de la carte), taille d'une icône, et ce qu'elle cache en plus (pourcentage dessous, marge).
+CHALLENGE_ZONE = (0, 90, 130, 520)
+CHALLENGE_ORANGE = (40, 132, 238)  # BGR, fond de l'icône
+CHALLENGE_SIZE = (50, 80)
+CHALLENGE_MARGIN = (4, 4, 4, 22)  # gauche, haut, droite, bas (le pourcentage)
+
+
+def challenge_icons(frame: Frame) -> list[Box]:
+    """Icônes de challenge par-dessus la carte (en haut à gauche) : ce qu'elles cachent, à ne pas cliquer."""
+    layout = frame.layout
+    mx, my = layout.map_box[:2]
+    x0, y0, x1, y1 = (round(v) for v in (mx + layout.length(CHALLENGE_ZONE[0]), my + layout.length(CHALLENGE_ZONE[1]),
+                                          mx + layout.length(CHALLENGE_ZONE[2]), my + layout.length(CHALLENGE_ZONE[3])))
+    crop = frame.image[y0:y1, x0:x1].astype(np.int16)
+    if crop.size == 0:
+        return []
+    orange = (np.abs(crop - np.array(CHALLENGE_ORANGE, np.int16)).max(axis=2) <= 30).astype(np.uint8)
+    count, _, stats, _ = cv2.connectedComponentsWithStats(orange, connectivity=8)
+    low, high = (layout.length(v) for v in CHALLENGE_SIZE)
+    left, top, right, bottom = (layout.length(v) for v in CHALLENGE_MARGIN)
+    return [(round(x0 + x - left), round(y0 + y - top), round(x0 + x + w + right), round(y0 + y + h + bottom))
+            for x, y, w, h, area in stats[1:count]
+            if low <= w <= high and low <= h <= high and area >= 0.35 * w * h]  # la main sombre au milieu : ~45 %
+
+
 def timeline_portraits(frame: Frame) -> list[Box]:
     """Portraits des combattants dans la timeline (fond blanc, 38 x 56 de référence), avec leur cadre et leur barre
     de vie : ce qu'ils cachent de la carte. 2 portraits en duel ; 9 en équipe de 8, sur 600 px de large (15/10)."""
     layout = frame.layout
-    x0, y0, x1, y1 = layout.box(*TIMELINE_ZONE)
+    x0, y0, x1, y1 = timeline_zone(frame)
     white = (frame.image[y0:y1, x0:x1].min(axis=2) >= 225).astype(np.uint8)
     count, _, stats, _ = cv2.connectedComponentsWithStats(white, connectivity=8)
     (w_min, w_max), (h_min, h_max) = PORTRAIT_SIZE

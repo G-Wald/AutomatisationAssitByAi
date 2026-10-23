@@ -34,7 +34,7 @@ import re
 import time
 from collections import deque
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import cv2
@@ -42,7 +42,9 @@ import numpy as np
 
 from bot.brain.atlas import Atlas, MapInfo
 from bot.brain.game import Game
+from bot.brain.popups import close_context_menu
 from bot.brain.position import PositionAsker
+from bot.brain.recovery import mark_deaf, mark_heard, report_episode, unlock_click
 from bot.debug.draw import annotate
 from bot.perception.exits import DELTA, OPPOSITE, SAME_SUN, SIDES, Exit, find_marked_exits, find_suns
 from bot.perception.grid import distance
@@ -59,6 +61,7 @@ START = "départ"  # côté d'arrivée inconnu : carte du début du trajet (Trav
 # Toujours sur la carte de départ, décor inchangé : le soleil est recliqué toutes les RECLICK_EVERY s (un personnage passait
 # dessus, le clic l'a visé lui : 03/10, 12 s perdues). En marche, recliquer la même case ne change rien.
 RECLICK_EVERY = 3.0
+A_REREAD = 0.4  # touche A sans aucun contour : relue après ce délai, avant le clic de déblocage (20/10, S14)
 # Écart moyen (niveaux de gris, 0-255) entre deux vues réduites de la carte. Mesuré le 28/09 : 0,1 à 0,3 sur une
 # même carte pendant que le personnage marche, 28 à 37 entre deux cartes voisines.
 SCENE_CHANGED, SCENE_STABLE = 12.0, 3.0
@@ -73,6 +76,7 @@ MOTION_SIZE, MOTION_LEVEL = (160, 90), 12.0
 SURE_UNREAD = 2
 WALKED_POLLS = 3  # captures (0,4 s) où il bougeait : il a marché (pas seulement l'affichage des autres joueurs)
 CANDIDATE_TRIES = 2  # clics sur un même soleil (le second au bas de la case) avant de passer au soleil suivant
+MENU_RETRIES = 2  # menus de personnage fermés en s'écartant, sans compter d'essai sur le soleil
 MAX_CANDIDATES = 3  # soleils essayés d'un même côté (carte coupée par un rempart : un soleil de chaque côté du mur)
 MODES = ("", "test", "explore", "zone", "aller")
 # Mode aller (03/10) : changements de carte ratés d'affilée (sortie introuvable, clic sans effet, agression) avant
@@ -352,6 +356,7 @@ class Traveler:
         self.on_click = None
         self._unknown_saved: set[str] = set()
         self._a_saved = 0
+        self.a_unheard = False  # dernière lecture des sorties : aucun contour après A, même après déblocage (20/10)
         # Faux pour le trajet d'un suiveur qui rejoint le principal (team/loop.py) : rien d'écrit dans la mémoire
         # partagée (sa position est souvent déduite du chemin, pas lue).
         self.learns = True
@@ -359,6 +364,7 @@ class Traveler:
         # Sorties bloquées notées pour ce trajet seulement (carte pas sûre : pas écrites dans data/carte.json), pour
         # que l'itinéraire soit quand même recalculé (Journey._links).
         self.blocked_here: set[tuple[str | None, str]] = set()
+        self.aim_center: tuple[int, int] | None = None  # losange du soleil visé, vu avec la touche A (équipe : _dispatch)
         # Côté par lequel on est arrivé sur cette carte, et case d'arrivée estimée (en face du soleil pris) ; None au
         # début du trajet. Sur une carte coupée par un rempart, il dit de quel côté du mur on est.
         self.entry: str | None = None
@@ -395,7 +401,12 @@ class Traveler:
                          f" : carte {expected[0]},{expected[1]} d'après le chemin" if expected else "", path)
             return
         if label.coords is not None:
-            if expected is not None and label.coords != expected:
+            if expected is not None and label.coords != expected and self._last_label is None:
+                # 21/10 : --combat-zone=11,-28 donné, l'équipe restée en 10,-25 (même zone) après la session d'avant :
+                # cru téléporté dès le départ, plus aucun changement de carte de la session (2 sessions, 0 carte).
+                # Au premier regard, la position donnée n'est qu'une indication : la lecture l'emporte.
+                log.info("Départ lu en %s,%s (position donnée : %s,%s) : je pars d'ici", *label.coords, *expected)
+            elif expected is not None and label.coords != expected:
                 far = max(abs(label.coords[0] - expected[0]), abs(label.coords[1] - expected[1])) > 1
                 self.jumped = self.jumped or far
                 log.warning("Coordonnées lues %s,%s : j'attendais %s,%s%s", *label.coords, *expected,
@@ -463,6 +474,7 @@ class Traveler:
         """Sorties de la carte ; la touche A seulement si le soleil voulu (ou aucun, sans préférence) n'est pas vu.
 
         `complete` : il faut toutes les sorties (exploration d'une carte nouvelle) : A dès qu'un côté manque."""
+        self.a_unheard = False
         key = self.key()
         known = self.world.suns(key)
         info = self.here()
@@ -507,6 +519,9 @@ class Traveler:
                 self.game.sleep(0.4)
                 frame = self.game.look(park=True)
                 marked = find_marked_exits(frame, every=True)
+                suns = find_suns(frame, every=True)
+                if not marked and not suns:  # « aucune » sortie : impossible (fenêtre sourde à A ?)
+                    frame, marked = self._exits_unheard()
                 if save and self._a_saved < 5:  # quelques captures pour vérifier la détection des contours
                     self._a_saved += 1
                     self.game.recorder.save(frame.image, "sorties_touche_a", lossless=True)
@@ -517,7 +532,32 @@ class Traveler:
             if not any(e.marked for e in found.get(exit_.side, [])):
                 found.setdefault(exit_.side, []).append(exit_)
         self.candidates = {side: self._ordered(exits) for side, exits in found.items()}
+        self.a_unheard = not found  # aucune sortie, même après déblocage : lecture impossible (go : rien de noté
+        # bloqué partout)
         return self.candidates
+
+    def _exits_unheard(self) -> tuple[Frame, list[Exit]]:
+        """Ni contour après A ni soleil : impossible, toute carte a au moins une sortie (20/10, S14 : « Sorties avec la
+        touche A : aucune », la sortie voulue notée bloquée partout). Relue A_REREAD s plus tard (contours lents à venir),
+        puis clic de déblocage sur le fond beige (fenêtre sourde aux touches, brain/recovery.py) et A de nouveau."""
+        self.game.sleep(A_REREAD)
+        frame = self.game.look(park=True)
+        marked = find_marked_exits(frame, every=True)
+        if marked or find_suns(frame, every=True):
+            log.info("Sorties vues à la 2e lecture, %.1f s plus tard", A_REREAD)
+            return frame, marked
+        unlocked = unlock_click(self.game, frame)
+        self.game.press(self.settings.show_exits_key)
+        self.game.sleep(0.4)
+        frame = self.game.look(park=True)
+        marked = find_marked_exits(frame, every=True)
+        if marked:
+            mark_heard(self.game)
+        else:
+            mark_deaf(self.game, f"aucune sortie après {self.settings.show_exits_key.upper()}, deux fois")
+        report_episode(f"touche {self.settings.show_exits_key.upper()}", bool(marked),
+                       "" if unlocked else "clic impossible, fond beige pas libre")
+        return frame, marked
 
     def _ordered(self, exits: list[Exit]) -> list[Exit]:
         """Le soleil le plus proche de l'endroit où l'on est arrivé d'abord (carte coupée par un rempart : le plus
@@ -586,6 +626,13 @@ class Traveler:
         """Passe sur la carte voisine par le côté `side` ; None si c'est impossible (ou si un combat commence)."""
         exits = exits if exits is not None and side in exits else self.exits(frame, side)
         exit_ = exits.get(side)
+        if exit_ is None and self.a_unheard:
+            # 20/10 (S14) : A sans aucun contour, la fenêtre n'avait pas reçu la touche ; la sortie notée bloquée pour
+            # tous les passages. Jamais sur une lecture vide : bloquée pour ce trajet seulement.
+            log.warning("Pas de sortie vers le %s, mais la touche A n'a montré aucune sortie (lecture impossible) : je "
+                        "ne la note pas bloquée, seulement évitée pour ce trajet", side)
+            self.blocked_here.add((self.key(label), side))
+            return None
         if exit_ is None:
             log.info("Pas de sortie vers le %s sur cette carte, même avec la touche A : je la note bloquée", side)
             self._note_blocked(self.key(label), side, label, everywhere=True)
@@ -602,23 +649,39 @@ class Traveler:
             if len(tried) > 1:
                 log.info("Autre soleil du %s : %s (le précédent n'est pas atteignable d'ici)", side, exit_.cell)
             spot = 0  # endroit de la case où cliquer : d'abord le centre, puis là où un personnage ne se tient pas
-            for attempt in range(1, CANDIDATE_TRIES + 1):
-                point, spread = _click_spot(frame, exit_.cell, spot)
+            attempt, menus = 0, 0
+            while attempt < CANDIDATE_TRIES:
+                attempt += 1
+                # Soleil entouré par la touche A : son losange tel qu'il est vu (grille décalée sur certaines cartes).
+                self.aim_center = exit_.point if exit_.marked else None
+                point, spread = _click_spot(frame, exit_.cell, spot, self.aim_center)
                 log.info("Vers la carte du %s : clic sur le soleil en %s%s", side, exit_.cell,
                          " (contour de la touche A)" if exit_.marked and not spot else " (bas de la case)" if spot else "")
                 with self._players_hidden():  # tenue pendant la marche : le mouvement se voit sans les autres joueurs
                     self.click_sun(point, spread)
-                    if attempt == 1 and self.on_click is not None:
+                    if self.on_click is not None:
+                        # À chaque essai, avec l'endroit visé (20/10, soleil (27,5) de 5,5 : le principal a recliqué
+                        # le bas de la case et il est passé ; ses 5 suiveurs immobiles, recliqués seulement après son
+                        # arrivée, ~7 s perdues). L'équipe ne reclique que ceux qui n'ont pas quitté le départ.
                         self.on_click(side, exit_.cell, frame, spot)
                     reclick = None if fast else (lambda point=point, spread=spread: self.click_sun(point, spread))
                     arrived = self._wait_arrival(label, frame, before_coords, reclick=reclick)
                 if arrived is None:
                     return None  # combat (agression) ou autre fenêtre : la boucle principale s'en charge
                 if arrived == MENU:
-                    # Un personnage ou un monstre est sur le soleil : son menu s'est ouvert au lieu du déplacement.
-                    log.info("Quelqu'un se tient sur le soleil : je ferme son menu et je clique ailleurs sur la case")
-                    self._close_menu(frame, exit_.cell)
-                    spot += 1
+                    # Quelqu'un sur le soleil, souvent soi-même (arrivé par ce soleil) : son menu au lieu du déplacement.
+                    # Fermé d'un clic à côté, qui écarte le personnage de la case (close_context_menu), puis le soleil
+                    # de nouveau, au centre ; MENU_RETRIES fois sans compter d'essai.
+                    log.info("Un menu de personnage s'est ouvert au lieu de la marche (quelqu'un sur le soleil, "
+                             "peut-être moi) : je le ferme en m'écartant, puis je reclique le soleil")
+                    if not close_context_menu(self.game, self.game.look(park=False)):
+                        escape_menu(self.game)
+                    if menus < MENU_RETRIES:
+                        menus += 1
+                        attempt -= 1
+                        spot = 0
+                    else:
+                        spot += 1
                     continue
                 if isinstance(arrived, tuple):
                     new_frame, new_label = arrived
@@ -626,7 +689,11 @@ class Traveler:
                         self.world.confirm_sun(before_key, side, exit_.cell, entry if self._sure_here(label) else None)
                     self._arrived(new_frame, new_label, before_key, before_coords, side, exit_.cell)
                     if self.on_crossed is not None:
-                        self.on_crossed(side, exit_.cell, label, new_label)
+                        # Coordonnées complétées par celles déduites du chemin (20/10, 11,-23 : « 11,-2? » lu par le
+                        # principal, « 11,-23 » par ses suiveurs ; les noms comparés ne collaient pas, 6 suiveurs crus
+                        # perdus et le bot arrêté).
+                        self.on_crossed(side, exit_.cell, _completed(label, before_coords),
+                                        _completed(new_label, self.coords))
                     return new_label
                 if arrived == STILL and self._walked:
                     log.info("Le personnage a marché vers le soleil en %s puis s'est arrêté sans changer de carte : pas "
@@ -723,10 +790,6 @@ class Traveler:
         log.debug("Pas arrivé en %.0f s (cases qui bougeaient : %s)", self.settings.walk_timeout, counts)
         return False
 
-    def _close_menu(self, frame: Frame, target: tuple[int, int]) -> None:
-        """Ferme le menu ouvert par erreur : Échap seulement (escape_menu), jamais de clic « ailleurs »."""
-        escape_menu(self.game)
-
     def _settled(self, frame: Frame, label: MapLabel) -> tuple[Frame, MapLabel]:
         self.game.sleep(self.settings.settle)
         settled_frame = self.game.look(park=False)
@@ -757,28 +820,52 @@ class Traveler:
                 self.world.link(key, OPPOSITE[side], before_key)
 
 
+def _completed(label: MapLabel, coords: tuple[int, int] | None) -> MapLabel:
+    """Nom de carte lisible aux coordonnées incomplètes (« 11,-2? ») : complétées par `coords` (carte déduite du
+    chemin). Nom illisible, ou coordonnées déjà lues : tel quel."""
+    if label.coords is not None or coords is None or not label.readable:
+        return label
+    return replace(label, coords=coords)
+
+
+# Échap sans menu à fermer : le Menu principal s'ouvre, parfois plus d'un instant après (20/10, Vertdepomme : pas vu au
+# regard de 0,3 s, six reclics tombés dedans, ~25 s perdues). Cherché ESCAPE_LOOKS fois, toutes les ESCAPE_EVERY s.
+ESCAPE_LOOKS, ESCAPE_EVERY = 3, 0.3
+
+
 def escape_menu(game: Game) -> None:
     """Échap pour fermer un menu ouvert par erreur (quelqu'un sur le soleil). S'il n'y avait rien à fermer, Échap ouvre
     le Menu principal (Changer de perso / Déconnecter / Quitter Dofus) : refermé aussitôt par Échap, sans aucun clic.
     11/10 : le Menu principal pris pour un menu de joueur, un clic « ailleurs » est tombé sur « Déconnecter »."""
     game.press("escape")
-    game.sleep(0.3)
-    now = game.look(park=False)
-    known = find_known_popup(now, load_popup_specs())
-    if known is not None and known.spec.name == "menu principal":
-        log.info("Échap a ouvert le Menu principal : je le referme (Échap)")
-        game.press("escape")
-        game.sleep(0.3)
+    specs = load_popup_specs()
+    for _ in range(ESCAPE_LOOKS):
+        game.sleep(ESCAPE_EVERY)
+        known = find_known_popup(game.look(park=False), specs)
+        if known is not None and known.spec.name == "menu principal":
+            log.info("Échap a ouvert le Menu principal : je le referme (Échap)")
+            game.press("escape")
+            game.sleep(0.3)
+            return
 
 
-def _click_spot(frame: Frame, cell: tuple[int, int], spot: int) -> tuple[tuple[float, float], tuple[float, float]]:
+def _click_spot(frame: Frame, cell: tuple[int, int], spot: int,
+                center: tuple[float, float] | None = None) -> tuple[tuple[float, float], tuple[float, float]]:
     """Où cliquer dans la case du soleil, et avec quelle dispersion. 0 : autour du centre ; ensuite, le bas du
-    losange, puis ses pointes gauche et droite : un personnage debout sur la case en cache le centre et le haut."""
-    cx, cy = frame.grid.center(cell)
+    losange, puis ses pointes gauche et droite : un personnage debout sur la case en cache le centre et le haut.
+    `center` : centre du losange vu (contour de la touche A), à la place de celui de la grille."""
+    cx, cy = center or frame.grid.center(cell)
     hw, hh = frame.grid.half_w, frame.grid.half_h
     spots = [(cx, cy), (cx, cy + 0.55 * hh), (cx - 0.55 * hw, cy + 0.1 * hh), (cx + 0.55 * hw, cy + 0.1 * hh)]
+    # Case du bord de la carte (21/10, Astrub : les 9 clics sans effet sur 42 changements de carte étaient tous sur des
+    # soleils de la rangée du haut, du bas ou de la colonne de gauche, cliqués autour du centre ; les 9 reclics, sur le
+    # bas du losange, sont tous partis) : le bas du losange d'emblée, à dispersion serrée.
+    left, top, right, bottom = frame.layout.map_box
+    edge = min(cx - left, right - cx) < 1.2 * hw or min(cy - top, bottom - cy) < 1.2 * hh
+    if edge:
+        spots = [spots[1], spots[0], spots[2], spots[3]]  # le bas, puis le centre, puis les pointes
     x, y = spots[min(spot, len(spots) - 1)]
-    spread = frame.grid.click_spread() if spot == 0 else (hw * 0.12, hh * 0.1)
+    spread = frame.grid.click_spread() if spot == 0 and not edge else (hw * 0.12, hh * 0.1)
     return (x, y), spread
 
 
@@ -1323,12 +1410,6 @@ class Journey:
         else:  # carte absente des références (intérieur, oubli) : ses voisines qui y sont, à confirmer en jeu
             links = {side: (coords[0] + dx, coords[1] + dy) for side, (dx, dy) in DELTA.items()
                      if atlas.get(region, (coords[0] + dx, coords[1] + dy)) is not None}
-        if blocked:
-            for key, side in getattr(self.traveler, "blocked_here", ()):
-                if key == World.key(region, coords):
-                    links.pop(side, None)  # bloquée pour ce trajet seulement (carte pas sûre)
-            for side in self.world.blocked_from(World.key(region, coords), entry):
-                links.pop(side, None)  # inatteignable quand on arrive par ce côté (rempart)
         for side, dest in (self.world.maps.get(World.key(region, coords)) or {}).get("sorties", {}).items():
             if dest == BLOCKED:
                 if blocked:
@@ -1339,6 +1420,14 @@ class Journey:
                     links[side] = where
                 else:
                     links.pop(side, None)  # mène hors de la région
+        if blocked:
+            # Après la mémoire : 23/10, en 5,-30, la sortie de droite bloquée pour ce trajet revenait par le lien
+            # appris en arrivant (6,-30 gauche -> 5,-30) ; 3 essais d'affilée sans un clic, trajet arrêté.
+            for key, side in getattr(self.traveler, "blocked_here", ()):
+                if key == World.key(region, coords):
+                    links.pop(side, None)  # bloquée pour ce trajet seulement (carte pas sûre)
+            for side in self.world.blocked_from(World.key(region, coords), entry):
+                links.pop(side, None)  # inatteignable quand on arrive par ce côté (rempart)
         return links
 
     def _known(self, coords: tuple[int, int]) -> bool:

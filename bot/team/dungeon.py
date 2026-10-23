@@ -359,8 +359,9 @@ class DungeonFarm:
             bot.engager.new_map()
         rooms = self.spec.rooms
         fights, won = bot.fights, 0
+        step = getattr(bot, "safe_step", bot.step)  # erreurs rattrapées comme dans TeamBot.run (21/10)
         while not bot.finished:
-            bot.step()
+            step()
             if bot.fights - fights > won:
                 won = bot.fights - fights
                 if rooms:
@@ -371,7 +372,11 @@ class DungeonFarm:
                 if first + won > rooms:
                     log.info("Donjon : salle de fin (les %d salles finies)", rooms)
                     return True
-            elif bot._empty_searches >= EMPTY_ROOM and getattr(bot.engager, "groups_seen", 0) == 0:
+            elif bot._empty_searches >= EMPTY_ROOM and getattr(bot.engager, "groups_seen", 0) == 0 \
+                    and getattr(bot.engager, "keyboard_ok", True) is True:
+                # Jamais sur un clavier sourd (20/10 : Z ignoré par la fenêtre de Koalaloupour) : la dernière recherche
+                # vide doit avoir été vérifiée par la touche A (brain/engage.py, _z_unheard : sorties vues). Pas encore
+                # vérifiée (None) : la recherche suivante le sera ; sourde (False) : la surveillance du progrès s'en charge.
                 log.info("Donjon : salle de fin (plus de groupe), %d combat(s) dans ce passage", won)
                 return True
         log.warning("Donjon : arrêt pendant les combats (%s)", bot._stop_reason or "session terminée")

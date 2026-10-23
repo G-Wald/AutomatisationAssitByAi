@@ -5,6 +5,7 @@ passent par `StopControl.sleep`, qui vérifie l'arrêt toutes les 50 ms : le bot
 Filet de sécurité supplémentaire : amener la souris dans le coin haut-gauche de l'écran principal.
 """
 
+import contextlib
 import logging
 import threading
 import time
@@ -45,6 +46,7 @@ class StopControl:
         self._stopped = threading.Event()
         self._paused = threading.Event()
         self.reason = ""
+        self.paused_total = 0.0  # s passées en pause (touche de pause) dans les attentes du bot
         self._listener = keyboard.Listener(on_press=self._on_press)
         self._listener.daemon = True
 
@@ -76,16 +78,66 @@ class StopControl:
     def stopped(self) -> bool:
         return self._stopped.is_set()
 
-    def check(self) -> None:
-        """Lève BotStopped si l'arrêt est demandé ; bloque tant que le bot est en pause."""
-        while True:
+    @property
+    def paused(self) -> bool:
+        return self._paused.is_set()
+
+    def pause(self, reason: str) -> None:
+        """Pause demandée par le bot lui-même (surveillance du progrès, team/recovery.py), comme un appui sur la touche
+        de pause : la même touche la lève."""
+        if not self._paused.is_set():
+            self._paused.set()
+            log.warning("Pause (%s)%s", reason,
+                        f" : {self.pause_key_name.upper()} pour reprendre" if self.pause_key_name else "")
+
+    def resume(self, reason: str) -> None:
+        if self._paused.is_set():
+            self._paused.clear()
+            log.info("Reprise (%s)", reason)
+
+    def wait_paused(self, seconds: float) -> bool:
+        """En pause : attend `seconds` s au plus. False dès que la pause est levée (touche de pause) ; BotStopped à
+        l'arrêt demandé."""
+        end = time.monotonic() + seconds
+        while time.monotonic() < end:
             if self.corner and win32api.GetCursorPos() == (0, 0):
                 self.stop("souris dans le coin haut-gauche de l'écran")
             if self._stopped.is_set():
                 raise BotStopped(self.reason)
             if not self._paused.is_set():
-                return
+                return False
             time.sleep(0.05)
+        return self._paused.is_set()
+
+    @contextlib.contextmanager
+    def lifted(self):
+        """Pause levée le temps d'un coup d'œil du bot (diagnostic pendant sa propre pause), remise ensuite : ses
+        attentes (StopControl.sleep) ne bloquent pas pendant ce temps."""
+        was = self._paused.is_set()
+        self._paused.clear()
+        try:
+            yield
+        finally:
+            if was:
+                self._paused.set()
+
+    def check(self) -> None:
+        """Lève BotStopped si l'arrêt est demandé ; bloque tant que le bot est en pause (temps compté dans
+        paused_total : la surveillance du progrès, team/recovery.py, ne le compte pas comme du temps perdu)."""
+        started = None
+        try:
+            while True:
+                if self.corner and win32api.GetCursorPos() == (0, 0):
+                    self.stop("souris dans le coin haut-gauche de l'écran")
+                if self._stopped.is_set():
+                    raise BotStopped(self.reason)
+                if not self._paused.is_set():
+                    return
+                started = started or time.monotonic()
+                time.sleep(0.05)
+        finally:
+            if started is not None:
+                self.paused_total += time.monotonic() - started
 
     def sleep(self, seconds: float) -> None:
         end = time.monotonic() + seconds

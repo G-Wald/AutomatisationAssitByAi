@@ -6,13 +6,20 @@
 #   close: fin_de_combat_x.png   bouton à cliquer pour la fermer
 #   key: escape                  ou, à la place de close, touche qui la ferme
 #   threshold: 0.85              ressemblance minimale (0 à 1), facultatif
+#   detect_also: [autre.png]     autres modèles du titre (autre qualité graphique), facultatif
+#   pair_threshold: 0.8          titre OU bouton au seuil suffit si l'autre atteint ce score, facultatif
 
 popups:
   - name: informations (niveau supérieur)
-    detect: informations_titre.png      # titre « Informations » ; s'ouvre par-dessus le résultat du combat
+    detect: informations_titre.png      # titre « Informations » ; s'ouvre par-dessus le résultat du combat (20/10 :
+                                        # « Tu passes niveau 14 », à fermer avant le résultat)
     close: informations_ok.png          # bouton « Ok »
   - name: résultat du combat
     detect: fin_de_combat_titre.png     # « Résultat du combat » (sans le nombre de tours, qui varie)
+    detect_also: [fin_de_combat_titre_2.png]  # le même, découpé le 20/10 (journal 201321, capture 0021, fenêtre de
+                                              # 1057 px) : 0,874 avec le premier, pas reconnu en jeu
+    pair_threshold: 0.8                 # titre ou bouton à 0,85 suffit si l'autre dépasse 0,80 (autres fenêtres des
+                                        # tests : titre à 0,55 au plus)
     close: fin_de_combat_fermer.png     # bouton « Fermer » sous la fenêtre
   - name: menu principal
     detect: menu_principal_titre.png    # « Menu principal » : Échap sans rien à fermer l'ouvre (11/10, un suiveur)

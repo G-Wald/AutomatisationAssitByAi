@@ -5,6 +5,7 @@ import logging
 import math
 import time
 from contextlib import contextmanager
+from dataclasses import replace
 
 import cv2
 import numpy as np
@@ -20,7 +21,7 @@ from bot.perception.frame import Frame
 from bot.perception.join import find_fight_swords, find_join_entry, sword_orange
 from bot.perception.layout import Layout
 from bot.perception.maplabel import read_map_label, text_glyphs, unreadable_label
-from bot.perception.popups import load_popup_specs
+from bot.perception.popups import find_context_menu, load_popup_specs
 from bot.perception.timeline import current_portrait, same_portrait
 from bot.perception.ui import RING_CENTER, RING_RADII, RING_SPLIT_Y
 from bot.state.scene import Phase, read_scene
@@ -301,6 +302,23 @@ def test_member_window_brought_forward_before_acting(monkeypatch):
     assert second.ai.spellbook is second.spellbook and second.popups.game is second.game
 
 
+def test_capture_before_a_map_click_is_kept_for_the_swords_already_there(monkeypatch):
+    # 21/10 : les épées déjà là avant le clic d'attaque du principal sont celles d'autres combats (team/join.py).
+    monkeypatch.setattr("bot.brain.game.ScreenCapture", lambda: None)
+    monkeypatch.setattr("bot.brain.game.Game.click", lambda self, point=None, spread=(0, 0), button="left": True)
+    frame = load_frame("hors_combat")
+    monkeypatch.setattr("bot.brain.game.Game._grab", lambda self: frame)
+    control = FakeControl()
+    game = make_member("Second", FakeWindow(Screen(), "Second"), load_settings(), Focus(control), control,
+                       FakeRecorder(), Human(), act=True).game
+    game._layout = frame.layout
+    assert game._grab() is frame and game.map_click_frame is None
+    game.click((1900, 990))  # hors de la carte : rien ne change
+    assert game.map_click_frame is None
+    game.click((900, 400))
+    assert game.map_click_frame is frame and game.last_map_click is not None
+
+
 def test_logs_and_captures_tagged_with_the_character():
     recorder = FakeRecorder()
     TaggedRecorder(recorder, "Jesuisleking").save(None, "tour")
@@ -414,17 +432,71 @@ def test_sword_with_its_handle_hidden_by_a_monster():
     assert abs(sword.center[0] - 1540) < 20 and 260 < sword.center[1] < 330
 
 
-def test_sword_not_seen_follower_clicks_where_the_leader_attacked(monkeypatch):
-    # 16/10, Incarnam 6,2 : groupe tout en haut, épée coupée par le bord et sous le nom de la carte ; aucun des 7 suiveurs
-    # ne la voyait. L'épée remplace le groupe : clic droit là où le principal a cliqué.
+def test_sword_not_seen_the_group_is_never_clicked_and_part_scores_are_logged(monkeypatch, caplog):
+    # 20/10 : le clic « là où le principal a attaqué » (repli du 16/10) a donné 0 entrée sur 32 clics : l'épée en bois
+    # des monstres, ou rien. Plus jamais de clic sur le groupe ; les scores de chaque partie vont au journal.
     monkeypatch.setattr("bot.team.join.SWORD_WAIT", 0)
+    monkeypatch.setattr("bot.team.join.SEARCH_UNTIL", 0)
     screen = Screen()
     hors_combat = load_frame("hors_combat")
-    follower = member("Second", screen, hors_combat, hors_combat, load_frame("preparation"))
+    follower = member("Second", screen, hors_combat)
     hint = to_reference(hors_combat.layout, (1011, 84))
+    with caplog.at_level(logging.INFO, logger="bot.team.join"):
+        assert not Joiner(timeout=0).join(follower, hint)
+    assert events(screen, "click_right") == [] and events(screen, "click") == []
+    assert "epee_introuvable" in follower.game.recorder.saved
+    assert any("meilleurs scores : pommeau" in r.getMessage() and "lame" in r.getMessage() for r in caplog.records)
+
+
+def test_sword_searched_again_near_the_leader_click_until_it_appears(monkeypatch):
+    # 20/10 (journaux 205623, 211515) : fenêtre « Résultat du combat » posée sur l'épée, épée éclaircie par la souris :
+    # pas vue à la première capture. Fenêtres fermées, souris écartée, nouvelle capture, jusqu'à la voir.
+    slept = []
+    screen = Screen()
+    sword = with_sword("hors_combat", at=(900, 300))
+    follower = member("Second", screen, load_frame("hors_combat"), load_frame("coeur_43pv"), sword,
+                      load_frame("preparation"))
+    follower.game.sleep = slept.append
+    hint = to_reference(sword.layout, (1000, 420))
     assert Joiner(timeout=5).join(follower, hint)
-    ((x, y),) = [e[2] for e in events(screen, "click_right")]
-    assert abs(x - 1011) <= 10 and abs(y - 84) <= 10
+    clicks = [e for e in screen.events if e[1] in ("click", "click_right")]
+    assert clicks[0][1] == "click"  # la fenêtre « Résultat du combat » fermée d'abord
+    (x, y), = [e[2] for e in clicks if e[1] == "click_right"]
+    assert abs(x - 980) <= 4 and abs(y - 344) <= 4  # pommeau de l'épée
+    assert any(abs(s - 1.0) < 0.1 or abs(s - 0.5) < 0.05 for s in slept)  # un instant avant le premier clic
+
+
+def test_sword_far_from_the_leader_click_but_new_is_ours(monkeypatch):
+    # 21/10, Calanques 12,-24 : clic d'attaque en (1565, 162), épée plantée en (863, 532), à ~790 px (le groupe a bougé
+    # pendant la marche du principal). La distance au clic ne dit pas quel combat est le nôtre ; seules les épées déjà là
+    # avant l'attaque sont d'autres combats (test suivant). Rien près du clic : une épée nouvelle, ailleurs, est cliquée.
+    monkeypatch.setattr("bot.team.join.SWORD_WAIT", 0)
+    monkeypatch.setattr("bot.team.join.SEARCH_UNTIL", 0)
+    monkeypatch.setattr("bot.team.join.SWORD_READY", 0)
+    screen = Screen()
+    sword = with_sword("hors_combat", at=(900, 300))
+    follower = member("Second", screen, sword)
+    Joiner(timeout=0).join(follower, to_reference(sword.layout, (1500, 700)))
+    assert events(screen, "click_right")  # l'épée est visée
+
+
+def test_swords_already_there_before_the_attack_are_ignored():
+    # Autre combat juste à côté du groupe attaqué : son épée était déjà sur la capture du principal d'avant son clic.
+    screen = Screen()
+    before = with_sword("hors_combat", at=(900, 300))
+    image = with_sword("hors_combat", at=(1100, 330)).image.copy()
+    image[300 : 300 + SWORD_CROP.shape[0], 900 : 900 + SWORD_CROP.shape[1]] = before.image[
+        300 : 300 + SWORD_CROP.shape[0], 900 : 900 + SWORD_CROP.shape[1]]
+    both = Frame.of(image)
+    assert len(find_fight_swords(both)) == 2
+    hint = to_reference(both.layout, (1010, 400))  # plus près de l'ancienne épée
+    joiner = Joiner(timeout=5)
+    joiner.ignore_swords_before(before, hint)
+    assert len(joiner.old) == 1
+    follower = member("Second", screen, both, load_frame("preparation"))
+    assert joiner.join(follower, hint)
+    (x, y), = [e[2] for e in events(screen, "click_right")]
+    assert abs(x - 1180) <= 4 and abs(y - 374) <= 4  # pommeau de la nouvelle épée
 
 
 def test_once_a_follower_cannot_see_the_sword_the_next_ones_do_not_wait_for_it(monkeypatch):
@@ -835,7 +907,7 @@ def test_lost_follower_rejoins_the_leader_before_it_moves_on(tmp_path, monkeypat
     assert leader_steps == [1] and not bot._lost  # B arrivé (2e carte) : le principal repart aussitôt
     # Un suiveur qui ne peut pas rejoindre : le bot s'arrête plutôt que de continuer sans lui.
     monkeypatch.setattr("bot.team.loop.Journey", lambda traveler, goal: FakeJourney(traveler, goal, 1, False))
-    bot._lost = {"B"}
+    bot._lost, bot._seen_at = {"B"}, {"B": (5, -17)}  # sa carte connue : sans elle, son décor serait revu (_regroup)
     bot._roam()
     assert bot.finished and leader_steps == [1]
 
@@ -1016,11 +1088,22 @@ def test_follower_joins_the_sword_at_the_top_by_its_handle():
     assert abs(x - 812) <= 2 and abs(y - 11) <= 2  # la poignée, au-dessus du nom de la carte
 
 
+
+def test_sword_cut_by_the_top_of_the_screen_found_by_its_guard_and_icon():
+    # 21/10, Calanques 8,-27 : groupe attaqué tout en haut, pommeau hors de l'écran, garde (0,71) et icône dessous
+    # (0,75) vues ; centre de l'épée au-dessus du bord, écartée : les 7 suiveurs restés hors du combat.
+    frame = load_frame("epee_coupee_haut_ecran")
+    (sword,) = find_fight_swords(frame)
+    assert abs(sword.center[0] - 1216) <= 3 and sword.center[1] < 0
+    for x0, y0, x1, y1 in _click_boxes(sword):
+        assert y0 >= 0  # clic sur la garde, jamais au-dessus du bord de l'écran
+    assert Joiner()._find(frame, to_reference(frame.layout, (1212, 86)))[0].center == sword.center
+
 @pytest.mark.parametrize("at", [(1853, 85), (1694, 747), (900, 300)])
 def test_icon_alone_is_not_a_sword_even_over_orange_buttons(at):
     # 04/10 : icône collée au hasard sur 1 200 captures sans épée : sous les boutons orange du haut à droite ou
     # au-dessus de la barre des sorts, une plage orange passait pour la poignée.
-    from bot.perception.join import ICON, _asset, _icon_matches
+    from bot.perception.join import ICON, ICON_ABOVE, _asset, _Maps
 
     icon = _asset(ICON)
     image = load_frame("hors_combat").image.copy()
@@ -1029,7 +1112,9 @@ def test_icon_alone_is_not_a_sword_even_over_orange_buttons(at):
     patch = image[y : y + icon.shape[0], x : x + icon.shape[1]]
     image[y : y + icon.shape[0], x : x + icon.shape[1]] = (icon[..., :3] * alpha + patch * (1 - alpha)).astype(np.uint8)
     frame = Frame.of(image)
-    assert any(abs(ix - x) <= 1 and abs(iy - y) <= 1 for _, ix, iy in _icon_matches(frame, frame.layout.map_box))
+    # L'icône est vue (elle propose une épée sous elle) ; seule, elle ne fait qu'un vote.
+    origins = _Maps(frame, frame.layout.map_box).peaks("icon")
+    assert any(abs(ox - x - ICON_ABOVE[0]) <= 1 and abs(oy - y - ICON_ABOVE[1]) <= 1 for _, ox, oy in origins)
     assert find_fight_swords(frame) == []
 
 
@@ -1037,6 +1122,62 @@ def test_sword_of_a_fight_we_cannot_join_is_not_taken_despite_its_icon():
     # 04/10 : « Impossible de rejoindre le combat car l'équipe est fermée (ou limitée au groupe du joueur principal) » :
     # épée beige, sans orange, avec l'icône des 3 personnages au-dessus (1,0).
     assert find_fight_swords(load_frame("epee_beige_equipe_limitee_au_groupe")) == []
+
+
+def test_sword_in_front_of_an_orange_monster_found_without_its_handle():
+    # 20/10 (journal 203456, 0011 à 0020) : la poignée se mêle à l'orange d'un monstre debout derrière ; l'ancienne
+    # règle (poignée obligatoire) ne la trouvait pas, les 7 suiveurs sont restés dehors. Pommeau, garde, lame et icône
+    # votent au même endroit.
+    (sword,) = find_fight_swords(load_frame("epee_devant_monstre_orange"))
+    assert abs(sword.center[0] - 1317) <= 3 and abs(sword.center[1] - 453) <= 3
+    assert set(sword.parts) == {"pommel", "guard", "blade", "icon"}
+    assert sword.point_parts == ("pommel", "blade", "guard")  # pas de clic sur la poignée qu'on ne voit pas
+    assert sword.scores["blade"] >= 0.9 and sword.scores["pommel"] >= 0.75
+
+
+def test_sword_at_the_top_found_by_its_blade_its_icon_below_and_its_handle():
+    # 20/10 (journal 211515, 0114 à 0122) : coin du modèle en (853, -12), pommeau hors de l'écran, garde sous le nom de
+    # la carte (0,20) ; lame 0,76, icône sous l'épée 0,78, poignée orange. Aucun des 7 suiveurs ne l'avait vue.
+    frame = load_frame("epee_haut_ecran_lame_et_icone_dessous")
+    (sword,) = find_fight_swords(frame)
+    assert abs(sword.center[0] - 862) <= 3 and abs(sword.center[1] - 15) <= 3
+    assert set(sword.parts) == {"blade", "icon", "handle"}
+    assert sword.point_parts == ("handle", "blade")
+    (hx, hy), (bx, by) = (p for p, _ in sword.points)
+    assert abs(hx - 860) <= 2 and abs(hy - 11) <= 2  # la poignée
+    assert abs(bx - 860) <= 2 and abs(by - 58) <= 3  # le milieu de la lame, entre les deux lignes du nom de la carte
+
+
+def test_sword_under_the_result_window_clicked_on_its_blade_first():
+    # 20/10 (journal 205623, 0248) : fenêtre « Résultat du combat » sur le haut de l'épée ; garde (0,72) et lame (0,97)
+    # seules visibles. Pas de clic sur le pommeau ni sur la poignée, cachés ; la lame d'abord.
+    (sword,) = find_fight_swords(load_frame("epee_sous_fenetre_resultat_lame_visible"))
+    assert set(sword.parts) == {"guard", "blade"}
+    assert sword.point_parts == ("blade", "guard")
+    (x, y), _ = sword.points[0]
+    assert abs(x - 961) <= 2 and abs(y - 727) <= 3
+
+
+@pytest.mark.parametrize("name", ["sans_epee_tournesol", "sans_epee_palmier_nom_de_carte"])
+def test_no_sword_once_it_is_gone(name):
+    # 20/10 : captures « epee_introuvable » sans épée (combat commencé, épée retirée) : un Tournesol (203456, 0021) ; un
+    # palmier et le nom de la carte (211515, 0123). Chaque partie y reste sous son seuil, ou seule.
+    assert find_fight_swords(load_frame(name)) == []
+
+
+def test_one_part_alone_is_never_a_sword():
+    # La lame atteint 0,74 sans épée (pierres claires) : une partie seule, même au-dessus de son seuil, ne suffit pas.
+    from bot.perception.join import BLADE, THRESHOLDS, VOTES, _asset, sword_part_scores
+
+    assert VOTES == 2 and THRESHOLDS["blade"] < 0.74
+    blade = _asset(BLADE)  # la lame seule, sans pommeau, poignée, garde ni icône
+    image = load_frame("hors_combat").image.copy()
+    alpha = blade[..., 3:4] / 255.0
+    patch = image[500 : 500 + blade.shape[0], 1000 : 1000 + blade.shape[1]]
+    patch[:] = (blade[..., :3] * alpha + patch * (1 - alpha)).astype(np.uint8)
+    frame = Frame.of(image)
+    assert sword_part_scores(frame)["blade"] >= 0.95
+    assert find_fight_swords(frame) == []
 
 
 def test_ally_turn_waits_for_its_timer_in_this_window_before_looking_at_the_others():
@@ -1207,7 +1348,10 @@ def test_flash_menu_opened_by_a_sword_click_is_closed_without_escape():
     assert not [e for e in events(screen, "press") if e[2] == "escape"]
     close = [e[2] for e in events(screen, "click")]
     assert close and not sword.layout.on_map(close[0])
-    assert len(events(screen, "click_right")) >= 2
+    clicks = [e[2] for e in events(screen, "click_right")]
+    assert len(clicks) >= 2
+    # 20/10 : le point suivant aussitôt, la poignée (le pommeau ouvrait le menu de Flash, épée pas encore cliquable).
+    assert abs(clicks[1][0] - 981) <= 2 and abs(clicks[1][1] - 359) <= 3
 
 
 def test_flash_menu_opened_by_the_click_that_joins_is_closed_at_once():
@@ -1296,6 +1440,166 @@ def test_follower_still_on_the_map_clicks_the_sun_again(monkeypatch):
     assert "suiveur_bloque" not in b.game.recorder.saved
 
 
+def with_main_menu(frame: Frame) -> Frame:
+    """Capture avec le Menu principal (Changer de perso / Déconnecter / Quitter Dofus) par-dessus la carte."""
+    image = frame.image.copy()
+    image[180:620, 980:1520] = cv2.imread(str(FIXTURES / "menu_principal.png"))
+    return Frame.of(image)
+
+
+def copy_of(frame: Frame) -> Frame:
+    """Même capture, autre objet (pour lui associer un nom de carte lu à part)."""
+    return Frame.of(frame.image.copy())
+
+
+def walking_team(*followers: Member, leader: Member, clicked_ago: float = 0.0, departure: Frame | None = None):
+    """Équipe dont les suiveurs viennent de cliquer le soleil avec le principal (_dispatch), depuis `departure`."""
+    bot = team_bot(leader, *followers, engage=False)
+    departure = departure or load_frame("hors_combat_foret")
+    bot._dispatched = {m.name: (departure, time.monotonic() - clicked_ago) for m in followers}
+    return bot
+
+
+def test_followers_reading_the_arrival_map_otherwise_than_the_leader_have_followed(monkeypatch):
+    # 20/10, 11,-23 : le principal lisait « 11,-2? » (complété par son chemin : 11,-23), ses suiveurs « 11,-23 »,
+    # « 11,-?3 » ou « 11,-? ». Noms comparés nom contre nom : 6 suiveurs crus perdus, le bot arrêté. Coordonnées
+    # égales, lecture partielle qui concorde, ou à défaut même décor que le principal : il a suivi.
+    screen = Screen()
+    foret, champs, prairie = load_frame("hors_combat_foret"), load_frame("hors_combat"), load_frame("hors_combat_prairie")
+    real = read_map_label(champs)
+    other_line = read_map_label(foret).signature  # ligne des coordonnées dessinée autrement que chez le suiveur
+    after = replace(real, text="4,?", signature=other_line)  # « 4,? » lu par le principal, 4,3 d'après son chemin
+    frames = {name: copy_of(champs) for name in "BCD"}
+    frames["E"] = copy_of(prairie)
+    labels = {id(frames["B"]): real,  # « 4,3 »
+              id(frames["C"]): replace(real, coords=None, text="?,3"),  # en partie, sans contradiction
+              id(frames["D"]): replace(real, coords=None, text="?,?3"),  # en partie, un chiffre de trop : le décor
+              id(frames["E"]): replace(read_map_label(prairie), coords=None, text="5,?")}  # ailleurs (autre décor)
+    monkeypatch.setattr("bot.team.loop.read_map_label", lambda frame: labels.get(id(frame)) or read_map_label(frame))
+    a = member("A", screen, champs)
+    followers = [member(name, screen, frame) for name, frame in frames.items()]
+    bot = walking_team(*followers, leader=a)
+    bot.follow(Crossing("droite", (27, 9), read_map_label(foret), after))
+    assert bot._lost == {"E"} and bot._seen_at == {"E": (5, 3)}  # sa carte notée d'après sa lecture partielle
+    assert events(screen, "click") == []
+
+
+def test_lost_follower_of_unknown_position_but_on_the_leaders_map_does_not_stop_the_bot(tmp_path):
+    # 20/10, 11,-23 : Pesopepe cru perdu, carte inconnue (« 11,-?3 »), le bot s'est arrêté ; il était avec le principal.
+    settings = load_settings()
+    settings["travel"] = {**(settings.get("travel") or {}), "memory": str(tmp_path / "carte.json")}
+    screen = Screen()
+    a, b = member("A", screen, load_frame("hors_combat")), member("B", screen, load_frame("hors_combat"))
+    bot = TeamBot([a, b], settings, TeamSettings(enabled=True), travel="test")
+    bot.roamer.traveler.coords = (4, 3)
+    bot._together_checked, bot._lost = True, {"B"}
+    assert bot._regroup() and not bot._lost and not bot.finished
+    b.game.frames = [load_frame("hors_combat_foret")]  # vraiment ailleurs, carte inconnue : arrêt, comme avant
+    bot._lost = {"B"}
+    assert not bot._regroup() and bot.finished
+
+
+def test_main_menu_opened_during_the_wait_is_closed_before_any_reclick(monkeypatch):
+    # 20/10, Vertdepomme : un Échap a ouvert le Menu principal, pas vu ; six reclics tombés dedans, ~25 s perdues.
+    monkeypatch.setattr("bot.team.loop.RECLICK_EVERY", 0)
+    monkeypatch.setattr("bot.team.loop.FOLLOWER_STILL", 0)
+    screen = Screen()
+    foret, champs = load_frame("hors_combat_foret"), load_frame("hors_combat")
+    a = member("A", screen, champs)
+    b = member("B", screen, with_main_menu(foret))
+    b.game.after_press["escape"] = [champs]  # refermé : il était déjà arrivé derrière
+    bot = walking_team(b, leader=a)
+    bot.follow(Crossing("droite", (27, 9), read_map_label(foret), read_map_label(champs)))
+    assert [e[2] for e in events(screen, "press")] == ["escape"] and events(screen, "click") == []
+    assert not bot._lost
+
+
+def test_follower_not_reclicked_at_the_first_look_however_long_ago_it_clicked():
+    # 20/10 : 22 reclics sur 29 dès le premier regard (immobilité comptée depuis le clic), dont 15 sur des suiveurs
+    # qui arrivaient déjà. L'immobilité se compte à partir du premier regard sur lui.
+    screen = Screen()
+    foret, champs = load_frame("hors_combat_foret"), load_frame("hors_combat")
+    a = member("A", screen, champs)
+    b = member("B", screen, foret, champs)
+    bot = walking_team(b, leader=a, clicked_ago=10.0)
+    bot.follow(Crossing("droite", (27, 9), read_map_label(foret), read_map_label(champs)))
+    assert events(screen, "click") == [] and not bot._lost
+
+
+def test_follower_not_reclicked_when_a_fresh_capture_shows_it_arriving(monkeypatch):
+    monkeypatch.setattr("bot.team.loop.RECLICK_EVERY", 0)
+    monkeypatch.setattr("bot.team.loop.FOLLOWER_STILL", 0)
+    screen = Screen()
+    foret, champs = load_frame("hors_combat_foret"), load_frame("hors_combat")
+    a = member("A", screen, champs)
+    b = member("B", screen, foret, champs)  # immobile au premier regard ; la capture d'avant le reclic : arrivé
+    bot = walking_team(b, leader=a)
+    bot.follow(Crossing("droite", (27, 9), read_map_label(foret), read_map_label(champs)))
+    assert events(screen, "click") == [] and not bot._lost
+
+
+def test_follower_still_on_the_departure_after_two_reclicks_takes_its_own_way(monkeypatch):
+    # 20/10 : un suiveur immobile au départ attendait travel.walk_timeout (20 s) avant son propre trajet. Après 2
+    # reclics (~9 s en jeu), il le fait aussitôt. Capture gardée au premier reclic (diagnostic).
+    monkeypatch.setattr("bot.team.loop.RECLICK_EVERY", 0)
+    monkeypatch.setattr("bot.team.loop.FOLLOWER_STILL", 0)
+    screen = Screen()
+    foret, champs = load_frame("hors_combat_foret"), load_frame("hors_combat")
+    a, b = member("A", screen, champs), member("B", screen, foret)
+    bot = walking_team(b, leader=a)
+    start = time.monotonic()
+    bot.follow(Crossing("droite", (27, 9), read_map_label(foret), read_map_label(champs)))
+    assert time.monotonic() - start < 5 and len(events(screen, "click")) == 2
+    assert bot._lost == {"B"} and bot._seen_at["B"] == (2, 4)  # resté sur la carte de départ
+    assert b.game.recorder.saved == ["suiveur_reclic", "suiveur_bloque"]
+
+
+def test_context_menu_seen_during_the_wait_is_kept_in_a_capture():
+    screen = Screen()
+    menu, foret, champs = load_frame("hors_combat_menu_personnage"), load_frame("hors_combat_foret"), \
+        load_frame("hors_combat")
+    a = member("A", screen, foret)
+    b = member("B", screen, menu, foret, foret)  # menu fermé par le clic à côté (21/10 : Échap ne le ferme pas)
+    bot = walking_team(b, leader=a, departure=champs)
+    bot.follow(Crossing("droite", (27, 9), read_map_label(champs), read_map_label(foret)))
+    assert "suiveur_menu" in b.game.recorder.saved and not bot._lost
+    assert ("B", "press", "escape") not in screen.events
+    step, sun = [e[2] for e in events(screen, "click")]  # le clic à côté du menu, puis le soleil
+    x0, y0, x1, y1 = find_context_menu(menu)
+    assert not (x0 - 10 <= step[0] <= x1 + 10 and y0 - 50 <= step[1] <= y1 + 10)
+
+
+def test_leader_retry_reclicks_only_the_followers_still_on_the_departure():
+    # 20/10, soleil (27,5) de 5,5 : le principal a recliqué le bas de la case et il est passé ; ses 5 suiveurs restés
+    # immobiles n'étaient recliqués qu'après son arrivée (~7 s perdues). Recliqués avec lui, ceux encore au départ.
+    screen = Screen()
+    foret, champs = load_frame("hors_combat_foret"), load_frame("hors_combat")
+    a = member("A", screen, foret)
+    b = member("B", screen, foret, foret)  # toujours au départ
+    c = member("C", screen, foret, champs)  # parti
+    bot = team_bot(a, b, c, engage=False)
+    bot._dispatch("droite", (27, 9), foret, 0)
+    bot._dispatch("droite", (27, 9), foret, 1)  # nouvel essai du principal, au bas de la case
+    b_clicks = [e[2] for e in events(screen, "click") if e[0] == "B"]
+    assert len(b_clicks) == 2 and b_clicks[1] != b_clicks[0]  # recliqué, ailleurs dans la case
+    assert [e[0] for e in events(screen, "click")].count("C") == 1 and not bot._lost  # C en route : ni reclic ni perdu
+    assert set(bot._dispatched) == {"B", "C"} and bot._dispatched["B"][0] is foret  # départ : la première capture
+
+
+def test_followers_click_in_a_random_order_with_the_capture_taken_before_their_click(monkeypatch):
+    # 20/10 : toujours les mêmes derniers cliqués (Pombro, Vertdepomme, Vieenjaune), donc les derniers arrivés. Ordre
+    # tiré au hasard à chaque carte. Capture de départ : celle d'avant le clic, sans en reprendre une après.
+    monkeypatch.setattr("bot.team.loop.random.sample", lambda seq, k: list(reversed(seq))[:k])
+    screen = Screen()
+    foret = load_frame("hors_combat_foret")
+    a, b, c, d = (member(name, screen, foret) for name in "ABCD")
+    bot = team_bot(a, b, c, d, engage=False)
+    bot._dispatch("droite", (27, 9), foret, 0)
+    assert [e[0] for e in events(screen, "click")] == ["D", "C", "B"]
+    assert [e[1] for e in screen.events if e[0] == "B" and e[1] in ("look", "click")] == ["look", "click"]
+    assert list(bot._dispatched) == ["D", "C", "B"] and all(sent[0] is foret for sent in bot._dispatched.values())
+
+
 def test_without_placement_everybody_joins_and_is_ready_at_once(monkeypatch):
     # Demande du 03/10 : à 8, se placer prend trop de temps. Personne ne bouge, Prêt partout ; chacun est repéré à son
     # premier tour par la portée d'un sort.
@@ -1354,14 +1658,17 @@ def test_team_colour_learned_from_a_known_portrait():
     assert bot.my_team == read_scene(frame).current_team  # sans placement choisi : appris ici
 
 
-def test_fight_running_past_the_session_time_stops_the_bot():
-    # 16/10 : farm de 30 min, combat bloqué à partir de la 28e minute ; le bot tournait encore à la 43e.
+def test_fight_running_past_the_session_time_ends_the_session_after_this_fight(caplog):
+    # 16/10 : farm de 30 min, combat bloqué à partir de la 28e minute ; le bot tournait encore à la 43e. 21/10 : jamais
+    # d'arrêt en plein combat (17/10, Pesopepe laissé mourir) : le combat est fini, la session s'arrête ensuite.
     screen = Screen()
-    one = member("Premier", screen, load_frame("combat_mon_tour"))
+    one = member("Premier", screen, *[load_frame("combat_tour_adversaire")] * 3, load_frame("hors_combat"))
     bot = team_bot(one)
     bot.deadline = time.monotonic() - 301
-    assert bot._turns([one]) is None
-    assert bot.finished and "dépassée" in bot._stop_reason
+    with caplog.at_level("WARNING"):
+        assert bot._turns([one]) is None  # jusqu'à la fin du combat
+    assert not bot.finished and "dépassée" in bot._stop_reason
+    assert sum("je finis ce combat" in r.getMessage() for r in caplog.records) == 1  # annoncé une fois
 
 
 def test_member_whose_turn_never_passes_is_left_alone_for_a_while():
@@ -1402,7 +1709,7 @@ def test_sword_found_with_a_wider_handle_in_a_taller_window():
 def test_followers_click_other_upper_parts_of_the_sword_never_the_guard(monkeypatch):
     # 18/10 : les suiveurs suivants ne cliquent plus tous au même pixel ; une fois sur deux le point qui a marché,
     # sinon l'autre partie haute de la même épée (pommeau ou poignée), jamais la garde (cachée par qui est dessus).
-    from bot.team.join import SWORD_PARTS
+    from bot.team.join import SPOT_PARTS
 
     joiner = Joiner()
     joiner.known = (900.0, 300.0)
@@ -1414,7 +1721,7 @@ def test_followers_click_other_upper_parts_of_the_sword_never_the_guard(monkeypa
     joiner.spots = []
     monkeypatch.setattr("bot.team.join.random.random", lambda: 0.9)
     assert joiner._spot() == ((900.0, 300.0), (3, 3))
-    assert SWORD_PARTS == 2  # pommeau et poignée seulement
+    assert SPOT_PARTS == ("pommel", "handle")  # pommeau et poignée seulement
 
 
 def test_sword_spots_remembered_after_the_first_join():
@@ -1443,3 +1750,14 @@ def test_a_guessed_cell_is_not_kept_for_the_team():
     b.ai.on_turn = lambda: setattr(b.ai, "_me_cell", (16, 14))  # arrivée vue
     bot._play(b, read_scene(frame))
     assert bot._cells["B"] == (16, 14)
+
+
+def test_sword_far_from_the_attacked_group_found_on_the_whole_map():
+    # 21/10, Calanques 12,-24 : épée plantée à ~260 px du groupe attaqué (le clic du principal), juste hors de la
+    # recherche proche ; 4 suiveurs sur 7 ne l'ont pas rejointe. Rien près du clic : toute la carte, la plus proche.
+    from bot.team.join import Joiner
+
+    frame = load_frame("epee_loin_du_groupe_calanques")
+    hint = (1110 / frame.layout.scale, 480 / frame.layout.scale)  # clic du principal, repère de référence
+    (sword,) = Joiner(timeout=5)._find(frame, hint)
+    assert abs(sword.center[0] - 863) <= 8 and abs(sword.center[1] - 532) <= 8

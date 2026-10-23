@@ -59,25 +59,29 @@ from bot.brain.engine import (
     plan_turn,
 )
 from bot.brain.game import Game
+from bot.brain.recovery import is_deaf, mark_deaf, mark_heard, report_episode, unlock_click
 from bot.brain.spellbook import SpellBook
-from bot.brain.tactics import (DANGER_DISTANCE, CombatSpell, HitLog, SpellUse, reach_range, refusals, refused_beyond,
-                               spell_range)
+from bot.brain.tactics import (DANGER_DISTANCE, CombatSpell, HitLog, SpellUse, reach_range, refusals,
+                               refusals_on_hit_target, refused_beyond, spell_range)
 from bot.debug.draw import annotate
 from bot.perception.chat import cast_announced, combat_lines
 from bot.perception.fighters import Fighter, clear_point, find_fighters
 from bot.perception.frame import Frame
 from bot.perception.grid import Cell, distance
 from bot.perception.hp import read_hovered_hp, read_hovered_name, same_name, sheet_visible
+from bot.perception.layout import Point
 from bot.perception.placement import read_placement, standing_cells
 from bot.perception.sight import (RangeView, Terrain, in_line_only, line_of_sight, locate_caster, read_blocks,
                                   read_range, read_terrain, sight_agreement)
 from bot.perception.spellbook import slot_greyed
-from bot.perception.timeline import timeline_portraits
+from bot.perception.timeline import challenge_icons, timeline_portraits
 from bot.perception.toolbar import ToolbarButton, find_creature_button, find_tactical_button
 from bot.perception.ui import (
     END_TURN_SPREAD,
     PA_BUBBLE,
     SPELL_SLOT_SPREAD,
+    TIMELINE_DOWN,
+    TIMELINE_UP,
     default_slot_key,
     find_end_turn_button,
     forbidden_cursor_near,
@@ -89,6 +93,7 @@ from bot.perception.ui import (
     spell_slot_box,
     spell_slot_point,
     tactical_mode,
+    timeline_at_top,
 )
 from bot.state.scene import Phase, is_my_turn, read_scene
 
@@ -118,8 +123,12 @@ CONFIRM_EVERY = 0.15  # secondes entre deux vérifications qu'un sort est parti 
 # Chat de combat (perception/chat.py) : « Nom lance Sort. » écrit dès que le sort part ; rien pour un refus. 17/10 : un
 # refus coûtait after_cast + cast_confirm (4,6 s) ; sans annonce ni PA dépensés en CHAT_REFUSED_AFTER s, refusé.
 CHAT_EVERY = 0.3  # s entre deux lectures du chat (OCR : ~40 ms)
-CHAT_REFUSED_AFTER = 2.0  # s après le clic sans annonce ni PA dépensés : sort refusé (temps d'annonce mesuré au journal)
+# 21/10 (journaux du 20 et du 21/10) : 74 annonces sur 74 arrivées 0,5 à 0,8 s après le clic. Refus conclu à 1,2 s (avant :
+# 2,0) ; en arrière-plan (pas de rafale), parti CHAT_PA_GRACE_BACKGROUND s après l'annonce (avant : 1,2 s de plus, les
+# sorts confirmés par le chat jugés partis à 1,7-1,9 s au lieu de 0,5-0,6). Idée de l'utilisateur : s'appuyer sur le chat.
+CHAT_REFUSED_AFTER = 1.2  # s après le clic sans annonce ni PA dépensés : sort refusé
 CHAT_PA_GRACE = 1.2  # s après l'annonce pour voir les PA changer (capture de départ d'une rafale), puis parti quand même
+CHAT_PA_GRACE_BACKGROUND = 0.3  # arrière-plan : la rafale n'y joue jamais, le temps que la bulle des PA suive
 MOVES_PER_TURN = 3  # déplacements au plus par tour : aller lancer, encore un pas, repli (01/10)
 TURN_RECHECK = 0.6  # secondes avant de revérifier que mon tour est vraiment fini
 # « Mon tour » moins de SAME_TURN_WINDOW secondes après la fin du précédent, sans mes PA pleins : c'est la suite du même
@@ -134,6 +143,9 @@ OBSOLETE_SETTINGS = ("style", "approach_below", "flee")
 _warned_obsolete: set[str] = set()
 WAIT_MODES = ("fixe", "condition")  # timing.wait_mode
 RANGE_SHOWN = 0.15  # fixe : capture 0,15 s après la touche du sort, portée affichée ou non
+# Relecture du 21/10 : 4 « clavier sourd … débloqué : oui » dans un combat, 4 fenêtres, touches parties 0,2 s après
+# « Mon tour » : portée juste lente à venir, pas une fenêtre sourde. Une capture de plus avant le clic de déblocage.
+RANGE_LATE = 0.35
 RANGE_WAIT = 0.6  # condition : portée guettée au plus 0,6 s après la touche
 CURSOR_WAIT = 0.25  # curseur « interdit » : capture 0,25 s après avoir posé la souris (condition : guetté jusque-là)
 # Rafale (combat.burst, 03/10) : capture 0,15 s après avoir reposé la souris sur la cible, la touche du sort pressée
@@ -153,7 +165,13 @@ RESELECT_AFTER_CAST, RESELECT_PAUSE = 1.5, 0.4
 # 4 à 6 s après : 8 sur 8. Les PA baissent ~0,5 s après le clic, bien avant la fin de l'animation : « parti » n'est pas
 # « prêt ». Le clic d'un sort attend CHAIN_GAP s après celui du dernier sort lancé sur une cible ce tour ; rien après
 # un sort sur moi (flèches après Tir Éloigné : 8 sur 8 à 1,3-2,2 s).
-CHAIN_GAP = 2.5
+# 21/10 (Calanques) : 4 Pelles sur 9 encore refusées à 2,6-2,9 s, les autres parties à 2,6-2,7 s : l'animation de Lancer
+# de Pièces dure plus longtemps sur une cible lointaine (la pièce vole jusqu'à elle). 3 s.
+# 21/10 au soir (journaux des 20 et 21/10) : pas le délai. 2e sort sur la même cible, refusé une fois : relancé de la
+# même case, 0 parti sur 10 (même 6,7 s après le premier) ; sur une autre cible 3 sur 3, après un pas 5 sur 6. Refus après
+# un sort parti sur cette cible ce tour : un essai de plus à un autre endroit de sa case (_cast, à mesurer), puis plus
+# aucun sort sur elle d'ici (_play_turn, Cast.OUT_OF_REACH). Le 2e sort vise déjà un autre endroit que le 1er.
+CHAIN_GAP = 3.0
 PA_BUFF_MAX = 4  # PA en plus du maximum (bonus d'un allié) : au-delà, la bulle est mal lue (« 10 » lu « 16 » en JPEG)
 ARRIVAL_CHECKS, ARRIVAL_EVERY = 8, 0.2  # fixe : arrivée vérifiée 8 fois, toutes les 0,2 s, après per_cell_moved
 TURN_PASSED_EVERY = 0.25  # fixe : main passée vérifiée toutes les 0,25 s après la fin de tour
@@ -409,6 +427,7 @@ class CombatAI:
         self._proven_now = False  # ... prouvée pendant ce tour (pas seulement héritée du tour d'avant)
         self._doubt = False  # déplacement raté ou arrêté en route : ma case est à revérifier avant d'agir
         self._no_proof = False  # _whoami : des cercles de ma couleur, aucun prouvé le mien
+        self._timeline_moved = -1  # tour où la timeline a été changée de côté (_move_timeline)
         self._hover_seen = False  # une fiche est déjà apparue au survol pendant cette session
         self._hover_misses = 0  # survols sans fiche : au-delà de HOVER_MISSES, le survol ne sert plus (arrière-plan)
         self._expected_plan = ""  # ce qu'il restait du dernier plan journalisé
@@ -422,9 +441,15 @@ class CombatAI:
         self._hovered: Frame | None = None  # dernière capture souris sur la cible d'un sort (_forbidden_target)
         self._sent: Frame | None = None  # capture qui a montré le dernier sort parti (_confirm_cast)
         self._aim: tuple[Cell, tuple[float, float], tuple[float, float]] | None = None  # (case, point, dispersion) visés
+        self._clicks: tuple[int, dict[Cell, list[Point]]] = (-1, {})  # (tour, points cliqués sur chaque case ce tour)
         self._cast_at = float("-inf")  # heure du dernier clic de lancer (sélection refusée juste après : animation)
         self._target_cast_at = float("-inf")  # heure du clic du dernier sort lancé sur une cible ce tour (CHAIN_GAP)
         self._life_saved: set[str] = set()  # captures de fiche déjà gardées (vie lue, illisible : _read_life)
+        # Fenêtre sourde aux touches (20/10, _deaf_key) : vérifiée une fois par tour ; sourde, sorts cliqués ce tour.
+        self._deaf_checked = False
+        self._keys_deaf = False
+        self._spell_stuck = False  # un sort est resté sélectionné malgré Échap : plus aucun clic sur la carte ce tour
+        self._bar_turn = -1  # tour (SpellUse.turn) où les sorts grisés de la barre ont été lus
         self.new_combat()
 
     @property
@@ -538,6 +563,7 @@ class CombatAI:
         self._warned_who = False  # « rien ne prouve lequel est moi » : une fois par tour
         self._team_cells = team_cells
         self._located = False  # repérage par la portée d'un sort fait ce tour (_locate_by_range)
+        self._deaf_checked, self._keys_deaf, self._spell_stuck = False, False, False  # touches réessayées à chaque tour
         self._target_cast_at = float("-inf")
         self._expected_plan = ""
         self._expected_step = None
@@ -576,6 +602,14 @@ class CombatAI:
             fighters = find_fighters(frame)
             me, allies, enemies = self._sides(frame, fighters, my_team)
             fighters = fighters + [a for a in allies if a not in fighters]  # alliés invisibles : obstacles aussi
+            if self._spell_stuck:
+                # Sort resté sélectionné malgré Échap (repérage par la portée, fenêtre sourde) : un clic sur la carte le
+                # lancerait sur une case vide. Fin du tour.
+                log.warning("Un sort est resté sélectionné malgré %s : je finis mon tour sans toucher la carte",
+                            self.settings.cancel_key.upper())
+                break
+            if (me is None or not enemies) and self._move_timeline(frame):
+                continue  # timeline de l'autre côté de la carte : combattants revus sur une nouvelle capture
             if me is None and self._no_proof:
                 break  # cercles vus, aucun prouvé le mien (déjà dit, capture gardée) : rien sur une supposition
             if me is None or not enemies:
@@ -675,6 +709,10 @@ class CombatAI:
                 self._use.unavailable.add(spell.spell_id)  # plus assez de PA pour lui, relance... : un autre
             elif result is Cast.OUT_OF_REACH:
                 self._use.refused |= refusals(spell, step.cell, self.spells, self._use)
+                hit = refusals_on_hit_target(step.cell, self.spells, self._use)
+                if hit:
+                    log.info("Plus de sort sur %s d'ici ce tour : une autre cible, ou un pas d'abord", _aim_label(target))
+                    self._use.refused |= hit
                 if all(e.cell != step.cell for e in enemies):
                     self._use.empty_refused.add(spell.spell_id)  # zone sur une case vide : pas une autre d'ici
                     self._use.empty_refusals[spell.spell_id] += 1  # ... ni du combat, au-delà de EMPTY_REFUSALS_LIMIT
@@ -783,6 +821,9 @@ class CombatAI:
             return None
         ranked = sorted(spells, key=lambda s: (s.in_line, abs(s.spell_range[1] - LOCATE_RANGE)))
         self._learn_blocks(frame, fighters)  # trous et blocs connus : jamais colorés, exclus du losange attendu
+        # Sorts grisés lus avant de sélectionner : une touche sans portée n'est soupçonnée d'être ignorée (fenêtre
+        # sourde, _deaf_key) que pour un sort que la barre de CE tour montre lançable.
+        self._read_bar(frame)
         for spell in ranked[:LOCATE_TRIES]:
             shown = self._select_spell(frame, spell)
             if shown is None:
@@ -940,6 +981,7 @@ class CombatAI:
         if greyed is None:
             self._use.greyed = set()  # barre cachée (fiche d'un combattant survolé) : on ne sait pas
             return
+        self._bar_turn = self._use.turn  # sorts grisés lus ce tour (soupçon de fenêtre sourde : _deaf_suspect)
         if greyed != self._use.greyed:
             log.debug("Sorts grisés dans la barre : %s",
                       ", ".join(s.name for s in self.spells if s.spell_id in greyed) or "aucun")
@@ -1061,6 +1103,29 @@ class CombatAI:
         """Le jeu se joue en arrière-plan (gestes par messages, pas de survol : brain/game.py)."""
         return bool(getattr(self.game, "background", False))
 
+    def _clicked_on(self, cell: Cell) -> list[Point]:
+        """Points cliqués ce tour sur `cell` (liste à compléter), oubliés au tour suivant."""
+        turn, clicks = self._clicks
+        if turn != self._use.turn:
+            clicks = {}
+            self._clicks = (self._use.turn, clicks)
+        return clicks.setdefault(cell, [])
+
+    def _move_timeline(self, frame: Frame) -> bool:
+        """Moi ou les ennemis introuvables alors que des portraits de la timeline couvrent la carte : la timeline passe
+        de l'autre côté (▲ / ▼ de son onglet orange), une fois par tour. 23/10, Tainéla 5,-30 : agression dans le coin
+        bas-droit, l'équipe et les monstres sous les portraits ; tours passés sans un sort, 4 morts."""
+        if self._timeline_moved == self._use.turn or not timeline_portraits(frame):
+            return False
+        self._timeline_moved = self._use.turn
+        top = timeline_at_top(frame)
+        log.info("Combattants introuvables, portraits de la timeline par-dessus la carte : je la mets %s",
+                 "en bas" if top else "en haut")
+        self.game.click(frame.layout.point(*(TIMELINE_DOWN if top else TIMELINE_UP)), frame.layout.spread(2, 2))
+        self.game.sleep(0.5)
+        self._no_proof = False
+        return True
+
     def _mouse_away(self) -> None:
         """Arrière-plan : souris « virtuelle » écartée juste après le clic qui lance un sort (Game.mouse_away)."""
         away = getattr(self.game, "mouse_away", None)
@@ -1129,13 +1194,56 @@ class CombatAI:
         """Sélectionne le sort avec son raccourci clavier ; renvoie la capture qui montre sa portée (None : refusé).
 
         Pas de clic sur la case du sort : un sort que sa touche ne sélectionne pas est refusé par le jeu (PA,
-        relance...). Clic seulement pour une case sans raccourci (bouton à gauche de la barre, combat.spell.key "")."""
+        relance...). Clic seulement pour une case sans raccourci (bouton à gauche de la barre, combat.spell.key ""),
+        ou quand la fenêtre est sourde aux touches ce tour (_deaf_key)."""
         key = self._slot_key(spell.slot)
-        if key:
+        if key and not self._keys_deaf:
             self.game.press(key)
         else:
             self.game.click(spell_slot_point(frame.layout, spell.slot), frame.layout.spread(*SPELL_SLOT_SPREAD))
-        return self._range_frame(watch=self._watching)
+        shown = self._range_frame(watch=self._watching)
+        if shown is None and key and not self._keys_deaf and self._deaf_suspect(spell, key):
+            shown = self._deaf_key(frame, spell, key)
+        return shown
+
+    def _deaf_suspect(self, spell: CombatSpell, key: str) -> bool:
+        """Pas de portée après la touche d'un sort qui devrait se sélectionner : ses PA, pas grisé dans la barre lue CE
+        tour, une touche ordinaire (pas le pavé numérique de l'arrière-plan, qui peut ne pas être réglé). Une fois par
+        tour au plus. Juste après un lancer (animation), c'est attendu : pas de soupçon."""
+        return (not self._deaf_checked and not key.startswith("num") and spell in self.spells
+                and self._bar_turn == self._use.turn and spell.pa <= self._use.pa
+                and spell.spell_id not in self._use.greyed and spell.spell_id not in self._use.unavailable
+                and time.monotonic() - self._cast_at >= RESELECT_AFTER_CAST)
+
+    def _deaf_key(self, frame: Frame, spell: CombatSpell, key: str) -> Frame | None:
+        """20/10 (S3, S4, S6, S8) : la fenêtre de Koalaloupour ignorait les chiffres des sorts, les clics passaient.
+        Clic de déblocage sur le fond beige (brain/recovery.py), la touche de nouveau, puis un clic sur la case du
+        sort. Portée affichée au clic seulement : fenêtre sourde, les sorts se cliquent pour le reste du tour (et F1
+        devient un clic sur le bouton : _pass_turn)."""
+        self._deaf_checked = True
+        self.game.sleep(RANGE_LATE)
+        late = self.game.look(park=False)
+        if spell_range_visible(late):
+            log.debug("Portée de %s affichée %.2f s après sa touche : lente, pas une fenêtre sourde", spell.name,
+                      RANGE_SHOWN + RANGE_LATE)
+            return late
+        what = f"touche {key.upper()} de {spell.name}"
+        unlocked = unlock_click(self.game, frame)
+        self.game.press(key)
+        shown = self._range_frame(watch=self._watching)
+        if shown is not None:
+            mark_heard(self.game)
+            report_episode(what, True, "" if unlocked else "sans clic possible : la touche a pris au 2e appui")
+            return shown
+        self.game.click(spell_slot_point(frame.layout, spell.slot), frame.layout.spread(*SPELL_SLOT_SPREAD))
+        shown = self._range_frame(watch=self._watching)
+        if shown is None:
+            log.info("%s pas sélectionné, ni par sa touche ni par un clic sur sa case : pas une touche ignorée", spell.name)
+            return None
+        self._keys_deaf = True
+        mark_deaf(self.game, f"{what} ignorée, le clic sur sa case l'a sélectionné")
+        report_episode(what, False, "sélectionné par un clic sur sa case : sorts cliqués jusqu'à la fin du tour")
+        return shown
 
     def _learn_range(self, shown: Frame, me: Fighter, fighters: list[Fighter], spell: CombatSpell) -> None:
         """Portée du sort et obstacles, lus sur les cases colorées (mode tactique seulement)."""
@@ -1193,7 +1301,12 @@ class CombatAI:
 
     def _cancel_spell(self) -> Cast:
         self.game.press(self.settings.cancel_key)
+        if self._keys_deaf and self._range_frame() is not None:
+            # Fenêtre sourde ce tour (_deaf_key) : clic de déblocage, puis Échap de nouveau.
+            unlock_click(self.game)
+            self.game.press(self.settings.cancel_key)
         if self._range_frame() is not None:
+            self._spell_stuck = True  # le tour s'arrête là (_play_turn) : aucun clic sur la carte, il lancerait le sort
             # Sort toujours sélectionné : un clic de déplacement le lancerait sur une case vide.
             log.warning("%s n'a pas annulé le sort : je finis mon tour (règle combat.cancel_key)",
                         self.settings.cancel_key.upper())
@@ -1253,7 +1366,8 @@ class CombatAI:
                     elif elapsed >= CHAT_REFUSED_AFTER:
                         log.debug("%s : ni annoncé dans le chat ni PA dépensés en %.1f s : refusé", spell.name, elapsed)
                         break
-                if announced_at is not None and elapsed >= announced_at + CHAT_PA_GRACE:
+                grace = CHAT_PA_GRACE_BACKGROUND if self.game_background else CHAT_PA_GRACE
+                if announced_at is not None and elapsed >= announced_at + grace:
                     sent, how = True, "chat"  # parti ; PA pas encore à jour : la capture d'après les montrera
                     break
                 if check < checks - 1:
@@ -1335,12 +1449,18 @@ class CombatAI:
                      distance(me.cell, target.cell), high)
             return self._cancel_spell()
         # Pas sur le corps d'un autre combattant debout devant la case : le clic le viserait lui (une zone visant une
-        # case vide près d'un allié le toucherait).
-        point, spread = clear_point(before.grid, target.cell, fighters if me in fighters else fighters + [me],
-                                    timeline_portraits(before))  # ni sur un portrait (case presque cachée, 15/10)
+        # case vide près d'un allié le toucherait). Ni sur un portrait de la timeline (case presque cachée, 15/10), ni
+        # sur une icône de challenge (20/10).
+        # Case déjà cliquée ce tour (2e sort sur la même cible) : un autre endroit de la case (utilisateur, 21/10 :
+        # « pas exactement au même endroit que le sort d'avant »).
+        standing = fighters if me in fighters else fighters + [me]
+        hidden = timeline_portraits(before) + challenge_icons(before)
+        clicked = self._clicked_on(target.cell)
+        point, spread = clear_point(before.grid, target.cell, standing, hidden, away=clicked)
         self._aim = (target.cell, point, spread)  # la rafale vise au même endroit
         for attempt in range(1, CAST_ATTEMPTS + 1):
             aim = self.game.move(point, spread)
+            clicked.append(aim)
             if self._forbidden_target(aim):
                 log.info("Pas de ligne de vue sur %s", _aim_label(target))
                 return self._cancel_spell()
@@ -1364,6 +1484,15 @@ class CombatAI:
                 self._not_gone[spell.spell_id] = 0
                 return Cast.DONE
             path = self.game.recorder.save(after.image, "sort_pas_parti", lossless=True)
+            if self.game_background and attempt == 1 and any(c == target.cell for _, c in self._use.casts_on_target):
+                # Cible déjà touchée ce tour : de nouveau, à un autre endroit de sa case (21/10 : relancé à 3 px du clic
+                # refusé, 0 parti sur 10 ; autre endroit à mesurer, sinon refusals_on_hit_target).
+                point, spread = clear_point(before.grid, target.cell, standing, hidden, away=clicked)
+                log.info("%s refusé sur %s (capture : %s) : nouvel essai à un autre endroit de sa case, en (%d, %d)",
+                         spell.name, _aim_label(target), path, *point)
+                if spell_range_visible(after) or self._select_spell(self.game.look(), spell) is not None:
+                    continue
+                log.info("%s non resélectionnable après le refus", spell.name)
             if self.game_background:
                 # 11/10 : en arrière-plan, pas de curseur « interdit » à voir avant de cliquer ; un sort refusé par le
                 # jeu (hors de portée, sans ligne de vue) ne se voit qu'aux PA inchangés. Pas de nouvel essai (5 s
@@ -1662,7 +1791,7 @@ class CombatAI:
         # Pas sur le corps d'un combattant debout devant la case, ni sur le mien (03/10 : case juste au-dessus de moi,
         # cachée par mon propre corps : le clic m'a sélectionné, « n'a pas bougé »).
         point, spread = clear_point(frame.grid, best, fighters if me in fighters else fighters + [me],
-                                    timeline_portraits(frame))
+                                    timeline_portraits(frame) + challenge_icons(frame))
         self.game.click(point, spread)
         # Arrière-plan : souris virtuelle écartée, sinon elle reste sur la case d'arrivée, éclairée en bleu avec le
         # curseur du jeu par-dessus, et mon cercle n'y est plus vu (20/10, Leproduitlatte : 7 s de repérage pour rien).
@@ -1844,8 +1973,13 @@ class CombatAI:
                 "deplacements_sans_bouger": sum(s.stuck_moves for s in stats)}
 
     def _pass_turn(self, my_team: str) -> None:
-        """Touche de fin de tour (F1), sinon le bouton ; on vérifie que la main passe."""
-        if self._end_turn_key:
+        """Touche de fin de tour (F1), sinon le bouton ; on vérifie que la main passe. Fenêtre déjà vue sourde aux
+        touches (20/10, S3 à S8 : F1 ignoré par la fenêtre de Koalaloupour ; brain/recovery.py) : le bouton
+        directement, sans perdre deux essais de F1."""
+        if self._end_turn_key and (self._keys_deaf or is_deaf(self.game)):
+            log.info("Fenêtre sourde aux touches : je clique sur le bouton de fin de tour plutôt que %s",
+                     self._end_turn_key.upper())
+        elif self._end_turn_key:
             self.game.press(self._end_turn_key)
             log.info("Fin de tour (%s)", self._end_turn_key.upper())
             if self._turn_passed(my_team, checks=10):

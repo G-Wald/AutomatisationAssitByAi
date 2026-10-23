@@ -35,6 +35,7 @@ from enum import Enum
 
 from bot.brain.game import WATCH_SLACK, Game
 from bot.brain.popups import close_flash_menu, close_npc_dialog, close_small_menu
+from bot.brain.recovery import capture_once, keyboard_answers, mark_deaf, mark_heard, report_episode, unlock_click
 from bot.debug.draw import annotate
 from bot.perception.frame import Frame
 from bot.perception.groups import (OFF_COLUMN, TITLE_SHIFT, GroupTooltip, can_be_under_its_group, column_offset,
@@ -110,6 +111,10 @@ UNREACHABLE_FOR = 600.0
 # visites où elle a été laissée, elle est revérifiée : un clic permis (au lieu de UNREACHABLE_HITS), qui la confirme
 # s'il touche sans combat. Une zone notée par erreur n'est donc pas laissée pour toujours.
 UNREACHABLE_RECHECK = 5
+# Fenêtre sourde aux touches (20/10, brain/recovery.py) : sonde du clavier après tant de recherches Z vides de suite
+# sur une même carte, et cycles « clic de déblocage, Z » au plus.
+DEAF_PROBE_AFTER = 2
+DEAF_CYCLES = 3
 
 
 class Outcome(Enum):
@@ -289,6 +294,14 @@ class Engager:
         self._where: Callable[[], tuple[str, str] | None] | None = None
         self._place: tuple[str, str] | None = None  # carte et côté d'arrivée dont les zones sont chargées
         self._zones: list[_Zone] = []
+        # Z sans aucune infobulle : la carte est vide, ou la fenêtre n'a pas reçu la touche (20/10, S3, S4, S6, S8 :
+        # fenêtre de Koalaloupour sourde aux touches, cartes crues vides l'une après l'autre). Sondé par la touche
+        # `probe_key` (A : toute carte a au moins une sortie) après DEAF_PROBE_AFTER recherches vides de suite sur la
+        # même carte, ou dès la 1re avec `probe_first` (mode zone : avant de changer de carte).
+        self.probe_key = "a"  # "" : pas de sonde
+        self.probe_first = False
+        self.keyboard_ok: bool | None = None  # dernière sonde : True clavier reçu, False sourd malgré les clics, None aucune
+        self._empty_z = 0  # recherches de suite sans aucune infobulle sur cette carte
 
     def remember_in(self, world, where: Callable[[], tuple[str, str] | None]) -> None:
         """Mode zone : zones hors d'atteinte gardées dans `world` (travel.World : unreachable_from,
@@ -300,6 +313,7 @@ class Engager:
         notés de la nouvelle sont chargés à la recherche suivante)."""
         self._skipped, self._no_menu, self._unreachable = [], [], []
         self._place, self._zones = None, []
+        self._empty_z, self.keyboard_ok = 0, None
 
     def _arrive(self) -> None:
         """Zones notées de la carte où l'on est, pour le côté par lequel on y est arrivé, chargées à la 1re recherche
@@ -388,6 +402,13 @@ class Engager:
         if read_scene(frame).phase is not Phase.OUT_OF_COMBAT:
             return False  # un combat a commencé entre-temps (agression, lancement tardif)
         seen = find_group_tooltips(frame)
+        self.keyboard_ok = None
+        self._empty_z = 0 if seen else self._empty_z + 1
+        if not seen and self.probe_key and (self.probe_first or self._empty_z >= DEAF_PROBE_AFTER):
+            self._empty_z = 0
+            frame, seen = self._z_unheard(frame)
+            if read_scene(frame).phase is not Phase.OUT_OF_COMBAT:
+                return False
         self.groups_seen = len(seen)
         tooltips = [t for t in seen if t.monsters <= self.settings.max_monsters]
         self.game.recorder.save(frame.image, "groupes_z", quality=92)  # capture brute, pour réanalyse
@@ -498,6 +519,36 @@ class Engager:
     def _forget(self, tooltip: GroupTooltip, frame: Frame) -> None:
         self._skipped = [s for s in self._skipped if not _same_tooltip(tooltip, s.tooltip, frame)]
         self._no_menu = [(t, when) for t, when in self._no_menu if not _same_tooltip(tooltip, t, frame)]
+
+    def _z_unheard(self, frame: Frame) -> tuple[Frame, list[GroupTooltip]]:
+        """Z n'a montré aucune infobulle : sonde de la touche A (sorties marquées). Sorties vues : la carte est vraiment
+        vide. Rien : clic de déblocage (brain/recovery.py), puis Z de nouveau tout de suite ; DEAF_CYCLES fois au plus,
+        puis un avertissement (keyboard_ok False : la boucle ne conclut pas à une carte vide, la surveillance du progrès
+        prend le relais). Renvoie la dernière capture Z et ses infobulles."""
+        unlocked = False  # un clic de déblocage a été fait dans cet épisode
+        for _ in range(DEAF_CYCLES):
+            if keyboard_answers(self.game, self.probe_key):
+                self.keyboard_ok = True
+                mark_heard(self.game)
+                if unlocked:
+                    report_episode("touche Z", True, "sorties vues avec A : la carte est vide")
+                return frame, []
+            mark_deaf(self.game, f"ni Z ni {self.probe_key.upper()} n'ont rien montré")
+            unlocked = unlock_click(self.game) or unlocked
+            frame = self._show_groups()
+            seen = find_group_tooltips(frame)
+            if seen or read_scene(frame).phase is not Phase.OUT_OF_COMBAT:
+                self.keyboard_ok = True
+                mark_heard(self.game)
+                report_episode("touche Z", True, f"{len(seen)} groupe(s) vu(s) après le clic")
+                return frame, seen
+        self.keyboard_ok = False
+        report_episode("touche Z", False, f"{DEAF_CYCLES} essais")
+        path = capture_once(self.game, frame.image, "clavier_sourd")
+        log.warning("Ni Z ni %s ne montrent rien malgré %d clics de déblocage : la fenêtre ne reçoit sans doute pas les "
+                    "touches. Je ne conclus pas que la carte est vide%s", self.probe_key.upper(), DEAF_CYCLES,
+                    f" (capture : {path})" if path else "")
+        return frame, []
 
     def _show_groups(self) -> Frame:
         self.game.look()  # écarte la souris de la carte

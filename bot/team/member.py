@@ -28,6 +28,7 @@ from bot.brain.popups import PopupCloser
 from bot.brain.spellbook import SpellBook
 from bot.capture.window import GameWindow
 from bot.debug.recorder import Recorder
+from bot.perception.frame import Frame
 from bot.perception.layout import Layout, Point
 from bot.perception.popups import load_popup_specs
 
@@ -93,10 +94,21 @@ class MemberGame(Game):
         super().__init__(window, control, recorder, human, act, background)
         self.focus = focus
         self.last_map_click: tuple[tuple[float, float], float] | None = None  # (point de référence, heure) : épée
+        # 21/10 : capture d'avant ce clic ; les épées déjà là sont celles d'autres combats (team/join.py).
+        self.map_click_frame: Frame | None = None
+        self._last_frame: Frame | None = None
+        # Fenêtre sourde aux touches jusqu'à cette heure (time.monotonic) : 20/10, Z, F1 et chiffres des sorts ignorés
+        # par la fenêtre de Koalaloupour, les clics passaient. Voir brain/recovery.py (mark_deaf, is_deaf).
+        self.deaf_until = 0.0
 
     def look(self, park: bool | None = None):
         self.focus.to(self.window)
         return super().look(park)
+
+    def _grab(self) -> Frame:
+        frame = super()._grab()
+        self._last_frame = frame
+        return frame
 
     def move(self, point: tuple[float, float], spread: Spread = NO_SPREAD) -> Point:
         self.focus.to(self.window, settle=False)
@@ -114,6 +126,7 @@ class MemberGame(Game):
         where = point if point is not None else self.input.cursor()
         if done and where is not None and self._layout is not None and self._layout.on_map(where):
             self.last_map_click = (to_reference(self._layout, where), time.monotonic())
+            self.map_click_frame = self._last_frame
         return done
 
     def wheel(self, point: tuple[float, float], notches: int, spread: Spread = NO_SPREAD) -> bool:

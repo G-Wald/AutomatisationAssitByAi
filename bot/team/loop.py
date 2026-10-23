@@ -26,14 +26,19 @@ import random
 import time
 from dataclasses import dataclass, replace
 
+import numpy as np
+
 from bot.actions import keys
+from bot.actions.stop import BotStopped
 from bot.brain.combat import MapMemory
 from bot.brain.engage import Engager, EngageSettings
 from bot.brain.loop import PLACEMENT_FIRST_TRY, PLACEMENT_GIVE_UP, SETTLE_AFTER_READY, SETTLE_SECONDS
-from bot.brain.popups import close_flash_menu
+from bot.brain.popups import close_context_menu, close_flash_menu
+from bot.brain.position import PositionAsker
+from bot.brain.recovery import capture_once
 from bot.brain.rest import CHECK_EVERY, STOOL, STOOL_SPREAD, STOOL_ZONE, RestSettings
 from bot.brain.travel import (RECLICK_EVERY, SCENE_CHANGED, SCENE_STABLE, Journey, TravelSettings, Traveler,
-                              escape_menu, make_roamer, same_map)
+                              escape_menu, make_roamer, merge_reading, same_map)
 from bot.brain.travel import _click_spot, _gap, _motion, _motion_view, _scene  # mêmes repères que le principal
 from bot.debug.draw import annotate
 from bot.debug.report import write_fight_report
@@ -54,6 +59,7 @@ from bot.perception.chat import combat_lines, died
 from bot.team.join import Joiner, recent_click
 from bot.team.member import Member, to_reference
 from bot.team.placement import Seat, by_elimination, next_moves, plan_seats
+from bot.team.recovery import RecoverySettings, Watchdog
 from bot.team.roster import TeamSettings
 from bot.team.turns import TurnRouter
 
@@ -89,8 +95,21 @@ START_CONFIRM = 2 * SETTLE_AFTER_READY
 REPLAY_GUARD = 1.5
 STUCK_TURNS = 3  # tours d'affilée où la main ne passe pas : ce personnage n'est plus cru en train de jouer...
 STUCK_PAUSE = 30.0  # ... pendant ce temps (16/10 : 79 « La main ne semble pas être passée » de Dinarpepe, 14 min)
-READY_GAP = (0.05, 0.6)  # s ajoutées au hasard après chaque Prêt (en plus de son geste) : 8 Prêt en ~3 à 5 s
-OVERTIME = 300.0  # s au-delà de la durée de la session : arrêt même en plein combat (16/10 : 30 min prévues, 43 min)
+# s ajoutées au hasard après chaque Prêt (en plus de son geste). 20/10 (utilisateur) : Prêt est un geste très rapide en
+# multicompte (changer de fenêtre, F1) ; 0,05-0,6 s donnait 8 Prêt en 4,2 s.
+READY_GAP = (0.03, 0.2)
+# s au-delà de la durée de la session (16/10 : 30 min prévues, 43 min) : fin de session après ce combat, annoncée une
+# fois. Jamais d'arrêt en plein combat (17/10 : un test arrêté en plein combat a laissé Pesopepe mourir) : avant le
+# 21/10, le bot s'arrêtait ici et laissait l'équipe sans lui.
+OVERTIME = 300.0
+# Erreurs rattrapées (TeamBot.safe_step, 21/10) : en combat, on continue (fin de session après le combat à la
+# MAX_FIGHT_ERRORS-ième) ; hors combat, arrêt propre à la MAX_ERRORS-ième en ERRORS_WINDOW s.
+MAX_FIGHT_ERRORS = 5
+MAX_ERRORS = 3
+ERRORS_WINDOW = 600.0
+# Combat fini sans fenêtre de résultat vue, et rien fermé chez le principal au tour des fenêtres : ses fenêtres
+# regardées de nouveau ce délai plus tard (20/10, journal 201321 : résultat reconnu de justesse, resté ouvert).
+RESULT_RECHECK = 2.0
 # Pendant le tour d'un personnage, ni son timer ni son portrait encadré : revu sur une 2e capture avant de conclure
 # que son tour est fini (11/10, idée validée par l'utilisateur).
 TURN_MARKS_RECHECK = 0.2
@@ -100,7 +119,13 @@ POD_LOG_STEP = 0.05  # pods notés au journal quand ils ont changé d'au moins 5
 # débloqué par l'utilisateur avec un défi lancé à un autre personnage puis quitté). Au bout de LEADER_STUCK fois de
 # suite, le bot s'arrête et le dit.
 LEADER_STUCK = 2
-FOLLOWER_STILL = 1.5  # s sans bouger avant de recliquer le soleil d'un suiveur (en marche, jamais)
+# s d'immobilité vue avant de recliquer le soleil d'un suiveur (en marche, jamais), comptées à partir du premier regard
+# sur lui : 20/10, 22 reclics sur 29 partaient dès ce premier regard (immobilité comptée depuis le clic), dont 15 sur
+# des suiveurs qui arrivaient déjà (Pombro, Vertdepomme, Vieenjaune, les derniers cliqués).
+FOLLOWER_STILL = 1.5
+# Reclics d'un suiveur resté immobile sur la carte de départ ; au suivant (~9 s après son clic), il fait son propre
+# trajet au lieu d'attendre travel.walk_timeout (20 s).
+FOLLOWER_RECLICKS = 2
 MAX_POPUPS = 6  # regards d'affilée dans une même fenêtre du jeu : fermer résultat, niveau supérieur, et retenter
 RESULT = "résultat du combat"  # même fenêtre, même bouton « Fermer » dans chaque fenêtre du combat
 RESULT_LAG = 0.2  # elle s'ouvre partout en même temps, à un instant près
@@ -124,6 +149,42 @@ class Crossing:
     cell: Cell  # case du soleil
     before: MapLabel  # carte quittée
     after: MapLabel  # carte d'arrivée
+
+
+@dataclass
+class _Walk:
+    """Suiveur en route vers le soleil, regardé à tour de rôle (_wait_followers)."""
+
+    member: Member
+    departure: np.ndarray  # décor de la carte de départ (_scene)
+    clicked: float  # heure du dernier clic sur le soleil
+    spot: int = 0  # endroit de la case visé au dernier clic
+    previous: np.ndarray | None = None  # décor au regard précédent
+    motion: np.ndarray | None = None  # vue du mouvement au regard précédent
+    still_since: float | None = None  # immobile depuis (vu à partir du premier regard ; None : pas encore regardé)
+    reclicks: int = 0  # reclics faute de bouger (pas ceux d'un menu ouvert sur le soleil)
+    menu_saved: bool = False  # capture d'un menu ouvert sur le soleil déjà gardée
+
+
+def _reads_as(label: MapLabel | None, coords: tuple[int, int] | None, known: MapLabel | None) -> bool | None:
+    """Le nom de carte lu dans une fenêtre désigne-t-il la carte `coords` (celle que croit le principal) ? True :
+    coordonnées lues égales, ou lues en partie sans contradiction (merge_reading : « 11,-?3 » pour 11,-23, au moins un
+    chiffre lu) ; False :
+    une autre carte ; None : on ne peut pas le dire au nom (illisible, lecture partielle qui ne colle pas). Sans
+    `coords`, comparaison au nom `known` lu par le principal.
+
+    20/10, 11,-23 : le principal lisait « 11,-2? », ses suiveurs « 11,-23 », « 11,-?3 » ou « 11,-? » ; comparés nom
+    contre nom, 6 suiveurs crus « pas sur la carte du principal », le bot arrêté."""
+    if label is None or not label.readable:
+        return None
+    if coords is not None:
+        if label.coords is not None:
+            return label.coords == coords
+        digits = any(c.isdigit() for c in label.text)  # « ?,? » ne contredit rien, mais ne dit rien non plus
+        return True if digits and merge_reading(label.text, coords)[1] else None
+    if known is None or not known.readable:
+        return None
+    return label.same_map(known)
 
 
 def _accepts(function, name: str) -> bool:
@@ -199,6 +260,11 @@ class TeamBot:
             self.roamer.traveler.on_click = self._dispatch
         if self.engager is not None and self.roamer is not None:  # zones hors d'atteinte gardées (brain/engage.py)
             self.engager.remember_in(self.roamer.traveler.world, self.roamer.traveler.place)
+        if self.engager is not None:
+            # Z sans infobulle : clavier sondé par la touche A (fenêtre sourde, 20/10), dès la 1re recherche vide en
+            # mode zone (avant de changer de carte), après deux sinon.
+            self.engager.probe_key = self.travel_settings.show_exits_key
+            self.engager.probe_first = self.roamer is not None
         self.rest_settings = RestSettings.from_settings(settings)
         # Repos seulement quand le bot circule lui-même (combats enchaînés, déplacements), comme en solo.
         self.rest_enabled = (self.engager is not None or self.roamer is not None) and self.rest_settings.enabled
@@ -235,10 +301,78 @@ class TeamBot:
         self._early: tuple[str, float] | None = None  # joue sur notification, sans son timer : (nom, jusqu'à quand)
         self._just_played: tuple[str, float] | None = None  # dernier personnage à avoir joué, heure de fin de son tour
         self._stuck: dict[str, float] = {}  # personnage -> fin de sa mise à l'écart (_unless_stuck)
+        # Reprise après erreur (21/10, team/recovery.py). Progrès : combat lancé ou fini, carte changée, suiveur arrivé,
+        # tour joué ; la surveillance (hors combat) cherche ce qui bloque quand il n'y en a plus.
+        self._progress_at = time.monotonic()
+        self._lost_seen = 0  # suiveurs perdus au dernier tour de boucle (un de moins : il est arrivé)
+        self._in_fight = False  # dans _fight : une erreur y est rattrapée sans arrêter le bot
+        self._fight_errors = 0  # erreurs rattrapées pendant le combat en cours
+        self._errors: list[float] = []  # heures des erreurs rattrapées hors combat
+        self._overtime_warned = False
+        self._result_unseen = False  # dernier combat fini sans fenêtre de résultat vue
+        self._result_check_at: float | None = None  # ... et rien fermé chez le principal : nouveau regard à cette heure
+        self._leader_closed = False  # le dernier tour des fenêtres a fermé une fenêtre chez le principal
+        control = getattr(self.leader.game, "control", None)
+        self.watchdog = Watchdog(self, RecoverySettings.from_settings(settings), control,
+                                 enabled=act and (self.engager is not None or self.roamer is not None))
 
     def run(self) -> None:
         while not self.finished:
+            self.safe_step()
+
+    def safe_step(self) -> None:
+        """Un tour de boucle (step), ses erreurs rattrapées (21/10) : en combat, l'erreur et une capture au journal,
+        puis on continue (jamais d'arrêt en plein combat : à MAX_FIGHT_ERRORS, fin de session après ce combat) ; hors
+        combat, arrêt propre à la MAX_ERRORS-ième erreur en ERRORS_WINDOW s."""
+        try:
             self.step()
+        except (BotStopped, KeyboardInterrupt):
+            raise
+        except Exception as error:  # noqa: BLE001 : toute erreur du bot, pas celles de l'arrêt demandé
+            self._step_failed(error)
+
+    def _step_failed(self, error: Exception) -> None:
+        in_fight, self._in_fight = self._in_fight, False
+        log.exception("Erreur %s : %s", "pendant le combat" if in_fight else "hors combat", error)
+        try:
+            game = self._front_member().game
+            path = capture_once(game, game.look(park=False).image, "erreur")
+            if path:
+                log.info("Capture de l'erreur : %s", path)
+        except Exception:  # noqa: BLE001 : fenêtre fermée, capture impossible : l'erreur est déjà au journal
+            pass
+        if in_fight:
+            self._fight_errors += 1
+            if self._fight_errors >= MAX_FIGHT_ERRORS and not self._stop_reason:
+                log.warning("%d erreurs pendant ce combat : je le finis, puis je m'arrête", self._fight_errors)
+                self._stop_reason = f"{self._fight_errors} erreurs pendant un combat"
+            self._round_due = True  # combat repris au tour des fenêtres (ou, fini, ses fenêtres fermées)
+            self.leader.game.sleep(1.0)
+            return
+        now = time.monotonic()
+        self._errors = [t for t in self._errors if now - t < ERRORS_WINDOW] + [now]
+        if len(self._errors) < MAX_ERRORS:
+            self._round_due = True
+            return
+        log.error("%d erreurs hors combat en %.0f min : je m'arrête proprement", len(self._errors), ERRORS_WINDOW / 60)
+        self._stop_reason = f"{len(self._errors)} erreurs hors combat"
+        try:
+            fighting = any(read_scene(m.game.look(park=False)).phase is not Phase.OUT_OF_COMBAT for m in self.members)
+        except Exception:  # noqa: BLE001
+            fighting = False
+        if fighting:
+            self._round_due = True  # un combat vient de commencer : fini d'abord, arrêt ensuite (_round)
+        else:
+            self.finished = True
+
+    def _front_member(self) -> Member:
+        return next((m for m in self.members if m.in_front()), self.leader)
+
+    def _progress(self, what: str) -> None:
+        """Progrès de l'équipe (surveillance : team/recovery.py)."""
+        self._progress_at = time.monotonic()
+        self.watchdog.progress()
+        log.debug("Progrès : %s", what)
 
     def step(self) -> None:
         if not self.act:
@@ -250,13 +384,27 @@ class TeamBot:
         if not self._stop_reason and self.deadline is not None and time.monotonic() >= self.deadline:
             self._stop_reason = "durée de la session écoulée"
             self._round_due = True  # fenêtres de résultat fermées avant de s'arrêter
+        if len(self._lost) < self._lost_seen:
+            self._progress("suiveur arrivé")
+        self._lost_seen = len(self._lost)
+        if not self._round_due and self.watchdog.check():
+            return  # diagnostic (hors combat), ou dernier recours
+        if self._result_check_at is not None and time.monotonic() >= self._result_check_at and not self._round_due:
+            self._result_check_at = None
+            self._recheck_results()
+            return
         if self._round_due:
+            unseen, self._result_unseen = self._result_unseen, False
             host = self._round()
             if host is not None:
                 self._fight(host)
             elif self._stop_reason:
                 log.info("Fin de la session : %s", self._stop_reason)
                 self.finished = True
+            elif unseen and not self._leader_closed:
+                # Tour des fenêtres d'après un combat fini sans résultat vu, rien fermé chez le principal : on y
+                # regarde de nouveau RESULT_RECHECK s plus tard (_recheck_results).
+                self._result_check_at = time.monotonic() + RESULT_RECHECK
             return
         member = self._watched()
         if member is None:
@@ -288,14 +436,19 @@ class TeamBot:
         self._last_round = time.monotonic()
         self._tired = []
         since = None if self._combat_ended_at is None else time.monotonic() - self._combat_ended_at
+        self._leader_closed = False
         for member in self.followers + [self.leader]:
             frame = member.game.look(park=False)
             self._check_layout(member, frame)
+            new_round = getattr(member.popups, "new_round", None)
+            if new_round is not None:
+                new_round()  # fenêtre notée bloquée au tour précédent : nouvel essai
             for _ in range(MAX_POPUPS):
                 if read_scene(frame).phase is not Phase.OUT_OF_COMBAT:
                     return member
                 if not member.popups.handle(frame, since):
                     break
+                self._leader_closed = self._leader_closed or member is self.leader
                 frame = member.game.look(park=False)
             if member.popups.describe(frame) is not None:
                 continue  # fenêtre inconnue (ou qui ne se ferme pas) : on n'y touche pas
@@ -307,6 +460,22 @@ class TeamBot:
                 self._tired.append(member)
             self._note_pods(member, frame)
         return None
+
+    def _recheck_results(self) -> None:
+        """Combat fini sans fenêtre de résultat vue, rien fermé chez le principal au tour des fenêtres : ses fenêtres
+        regardées une fois de plus, RESULT_RECHECK s après (20/10, journal 201321 : le résultat, pas reconnu, est resté
+        ouvert ; l'équipe a cherché des groupes derrière lui)."""
+        member = self.leader
+        since = None if self._combat_ended_at is None else time.monotonic() - self._combat_ended_at
+        frame = member.game.look(park=False)
+        for _ in range(MAX_POPUPS):
+            if read_scene(frame).phase is not Phase.OUT_OF_COMBAT:
+                self._round_due = True  # combat (agression) : pris en charge au tour des fenêtres
+                return
+            if not member.popups.handle(frame, since):
+                break
+            log.info("Fenêtre vue chez le principal %.0f s après la fin du combat", RESULT_RECHECK)
+            frame = member.game.look(park=False)
 
     def _note_pods(self, member: Member, frame: Frame) -> None:
         """Pods de chacun (jauge autour de la minimap, hors combat) : au journal quand ils changent ; vers 90 %, à la
@@ -339,6 +508,7 @@ class TeamBot:
             return  # une fenêtre couvre la carte du principal : ses clics tomberaient dessus
         if self._tired and self.rest_enabled:
             self._rest()
+            self._progress("repos")  # jusqu'à rest.max_seconds (180 s) sans bouger : pas un blocage
             return
         if self.engager is None:
             self._roam()
@@ -349,7 +519,17 @@ class TeamBot:
             return  # combat lancé : le placement est vu au tour de boucle suivant
         # Comme en solo : groupe parti avant l'arrivée, on en cherche un autre aussitôt ; aucun groupe, on attend
         # ou (mode zone) toute l'équipe passe sur une carte voisine.
+        if self.engager.keyboard_ok is False:
+            # Z et A sans effet malgré les clics de déblocage (brain/engage.py, _z_unheard) : rien ne dit que la carte
+            # est vide, on n'en change pas ; nouvel essai plus tard, la surveillance du progrès prend le relais.
+            self._empty_searches = 0
+            self._next_engage_at = time.monotonic() + self.engager.settings.retry_delay
+            return
         self._empty_searches = self._empty_searches + 1 if self.engager.none_found else 0
+        if self.roamer is None and self.engager.none_found:
+            # Mode carte : recherche Z entendue et sans groupe attaquable, l'équipe attend la repousse ; pas un blocage
+            # (relecture du 21/10 : carte vide 5 min = pause BLOQUÉ jamais levée par la repousse).
+            self._progress("carte vide, j'attends la repousse")
         if self.roamer is not None and self._empty_searches >= self.travel_settings.empty_searches:
             if not self._regroup():
                 return
@@ -409,37 +589,73 @@ class TeamBot:
     def _crossed(self, side: str, cell: Cell, before: MapLabel, after: MapLabel) -> None:
         """Appelée par le Traveler du principal (brain/travel.py) après chaque passage réussi."""
         self._crossings.append(Crossing(side, cell, before, after))
+        self._progress("changement de carte")
 
     def _dispatch(self, side: str, cell: Cell, frame: Frame, spot: int) -> None:
         """Le principal vient de cliquer sur le soleil : chaque suiveur clique aussitôt le même (même case, à l'échelle
-        de sa fenêtre), puis une capture de départ ; toute l'équipe marche en même temps (03/10 : les suiveurs ne
-        partaient qu'une fois le principal arrivé, ~4 s perdues à chaque carte). L'arrivée de chacun est vérifiée
-        ensuite (follow)."""
-        point, spread = _click_spot(frame, cell, spot)
+        de sa fenêtre) ; toute l'équipe marche en même temps (03/10 : les suiveurs ne partaient qu'une fois le
+        principal arrivé, ~4 s perdues à chaque carte). L'arrivée de chacun est vérifiée ensuite (follow).
+
+        Capture de départ : celle d'avant le clic (même décor, le personnage n'a pas encore bougé), plus de seconde
+        capture après. Ordre des suiveurs tiré au hasard à chaque carte (20/10 : toujours les mêmes derniers cliqués,
+        Pombro, Vertdepomme, Vieenjaune). Nouvel essai du principal (bas de la case, autre soleil) : recliqués aussi,
+        mais seulement ceux dont le décor est encore celui du départ (20/10, soleil (27,5) de 5,5 : les 5 suiveurs
+        restés immobiles n'étaient recliqués qu'après son arrivée, ~7 s perdues)."""
+        center = getattr(self.roamer.traveler, "aim_center", None) if self.roamer is not None else None
+        point, spread = _click_spot(frame, cell, spot, center)  # le losange vu par le principal (touche A)
         reference = to_reference(frame.layout, point)
         self._departure = self.roamer.traveler.coords if self.roamer is not None else None  # pas encore arrivé
         delta = DELTA.get(side)
         self._dispatch_side = side
-        self._dispatch_to = (self._departure[0] + delta[0], self._departure[1] + delta[1])             if self._departure is not None and delta else None  # carte où mène ce soleil (suiveurs passés seuls)
-        names = []
-        for member in self.followers:
+        # Carte où mène ce soleil (suiveurs passés seuls, lectures incomplètes).
+        self._dispatch_to = (self._departure[0] + delta[0], self._departure[1] + delta[1]) \
+            if self._departure is not None and delta else None
+        names, again = [], []
+        for member in random.sample(self.followers, len(self.followers)):
             if member.name in self._lost:
                 continue  # pas sur la carte du principal : il ne le suit pas à l'aveugle
-            if not same_map(member.game.look(park=False), frame):
+            now = member.game.look(park=False)
+            sent = self._dispatched.get(member.name)
+            if sent is not None:
+                if _gap(_scene(now), _scene(sent[0])) > SCENE_CHANGED:
+                    continue  # parti (ou en train de changer de carte) : pas de nouveau clic
+                if not self._clear_for_click(member, now):
+                    continue  # fenêtre fermée : il sera recliqué pendant l'attente des suiveurs
+            elif not same_map(now, frame):
                 # 11/10 : noms de carte illisibles dans la cité, un suiveur ailleurs a cliqué le même soleil sur sa
                 # carte à lui et s'est éloigné. Pas le même décor que le principal : il le rejoindra par son trajet.
                 log.warning("%s n'est pas sur la carte du principal (décor différent) : il ne le suit pas à l'aveugle",
                             member.name)
-                self._mark_lost(member)
+                self._mark_lost(member, now)
                 continue
             layout = getattr(member.game, "layout", None) or frame.layout
             target = layout.point(*reference)
-            clicked = self.roamer.traveler.click_sun(target, spread, member.game) if self.roamer is not None                 else member.game.click(target, spread)  # autres joueurs cachés (touche E) pendant le clic
+            # Autres joueurs cachés (touche E) pendant le clic.
+            clicked = self.roamer.traveler.click_sun(target, spread, member.game) if self.roamer is not None \
+                else member.game.click(target, spread)
             if clicked:
-                self._dispatched[member.name] = (member.game.look(park=False), time.monotonic())
-                names.append(member.name)
+                self._dispatched[member.name] = (sent[0] if sent is not None else now, time.monotonic())
+                (again if sent is not None else names).append(member.name)
         if names:
             log.info("Toute l'équipe vers le %s : %s cliquent aussi sur le soleil en %s", side, ", ".join(names), cell)
+        if again:
+            log.info("Nouvel essai du principal (soleil en %s%s) : %s, encore sur la carte de départ, recliquent aussi",
+                     cell, ", bas de la case" if spot else "", ", ".join(again))
+
+    def _clear_for_click(self, member: Member, frame: Frame) -> bool:
+        """Avant de recliquer le soleil d'un suiveur : menu d'un personnage ouvert (fermé d'un clic à côté qui l'écarte
+        de la case : close_context_menu ; Échap ne le ferme pas), ou fenêtre connue par-dessus la carte (fermée). False
+        si une fenêtre vient d'être fermée : pas de clic sur cette capture."""
+        if find_context_menu(frame) is not None:
+            if not close_context_menu(member.game, frame):
+                escape_menu(member.game)
+            return False  # il s'est écarté : le soleil au prochain essai, sur une capture fraîche
+        if member.popups.describe(frame) is not None and member.popups.handle(frame, self._since_combat()):
+            return False
+        return True
+
+    def _since_combat(self) -> float | None:
+        return None if self._combat_ended_at is None else time.monotonic() - self._combat_ended_at
 
     def _follow(self) -> None:
         crossings, self._crossings = self._crossings, []
@@ -465,13 +681,21 @@ class TeamBot:
             passed.append(name)
             log.warning("%s est passé sans le principal (resté sur sa carte) : il le rejoindra par son trajet", name)
             self._lost.add(name)
-            label = read_map_label(frame)
-            if label is not None and label.readable and label.coords is not None:
-                self._seen_at[name] = label.coords
-            elif self._dispatch_to is not None:
-                self._seen_at[name] = self._dispatch_to
+            self._note_seen(name, read_map_label(frame), self._dispatch_to)
         if passed and self.roamer is not None and self._dispatch_side is not None:
             self._leader_left_behind(passed)
+
+    def _note_seen(self, name: str, label: MapLabel | None, expected: tuple[int, int] | None) -> None:
+        """Carte d'un suiveur perdu, pour son trajet (_regroup) : coordonnées lues ; lues en partie, complétées par
+        `expected` (merge_reading) ; nom illisible : `expected` (carte où mène le soleil pris). 20/10 : Pesopepe,
+        « 11,-?3 », sans carte notée : le bot s'est arrêté faute de savoir où il était."""
+        seen = expected
+        if label is not None and label.readable and label.coords is not None:
+            seen = label.coords
+        elif label is not None and label.readable and expected is not None:
+            seen = merge_reading(label.text, expected)[0]
+        if seen is not None:
+            self._seen_at[name] = seen
 
     def _leader_left_behind(self, passed: list[str]) -> None:
         """Des suiveurs ont pris le soleil, pas le principal : ce soleil marche (pas de mur), il n'est plus noté bloqué.
@@ -490,31 +714,40 @@ class TeamBot:
             self.finished = True
 
     def follow(self, crossing: Crossing) -> None:
-        """Les suiveurs prennent le soleil que le principal vient de prendre : déjà partis avec lui (_dispatch), ou
-        clic dans chaque fenêtre maintenant ; puis vérification de l'arrivée de chacun, fenêtre après fenêtre."""
+        """Les suiveurs prennent le soleil que le principal vient de prendre : déjà partis avec lui (_dispatch, dans
+        l'ordre de leurs clics), ou clic dans chaque fenêtre maintenant ; puis vérification de l'arrivée de chacun,
+        fenêtre après fenêtre."""
         dispatched, self._dispatched = self._dispatched, {}
-        walking = []
+        walking = [(self.by_name[name], *sent) for name, sent in dispatched.items()]
+        before = crossing.before.coords or self._departure
         for member in self.followers:
-            if member.name in dispatched:
-                walking.append((member, *dispatched[member.name]))
+            if member.name in dispatched or member.name in self._lost:
+                # Perdu : il rejoint par son propre trajet (_regroup). 23/10 : 6 suiveurs restés en 11,-27, noms de carte
+                # illisibles des deux côtés, ont cliqué le soleil du principal sur leur carte à eux (vers 10,-27).
                 continue
             frame = member.game.look(park=False)
             if read_scene(frame).phase is not Phase.OUT_OF_COMBAT:
                 self._round_due = True  # combat (agression) : pris en charge au tour des fenêtres
                 continue
             label = read_map_label(frame)
-            if label is not None and label.readable:
-                if crossing.after.readable and label.same_map(crossing.after):
-                    continue  # déjà sur la carte d'arrivée
-                if crossing.before.readable and not label.same_map(crossing.before):
-                    log.warning("%s n'est pas sur la carte que quitte le principal (il est sur %s) : il ne le suit pas",
-                                member.name, label.describe())
-                    if label.coords is not None:
-                        self._seen_at[member.name] = label.coords
-                    continue
+            if _reads_as(label, self._arrival(crossing), crossing.after):
+                continue  # déjà sur la carte d'arrivée
+            if _reads_as(label, before, crossing.before) is False:
+                log.warning("%s n'est pas sur la carte que quitte le principal (il est sur %s) : il ne le suit pas",
+                            member.name, label.describe())
+                if label.coords is not None:
+                    self._seen_at[member.name] = label.coords
+                continue
             self._click_sun(member, frame, crossing, 0)
             walking.append((member, frame, time.monotonic()))
         self._wait_followers(walking, crossing)
+
+    def _arrival(self, crossing: Crossing) -> tuple[int, int] | None:
+        """Coordonnées de la carte d'arrivée du principal : lues (ou complétées par son chemin, brain/travel.py), à
+        défaut celles où il se croit (roamer.traveler.coords)."""
+        if crossing.after.coords is not None:
+            return crossing.after.coords
+        return self.roamer.traveler.coords if self.roamer is not None else None
 
     def _click_sun(self, member: Member, frame: Frame, crossing: Crossing, spot: int) -> None:
         point, spread = _click_spot(frame, crossing.cell, spot % 4)  # centre, bas, pointes gauche et droite, encore
@@ -524,20 +757,28 @@ class TeamBot:
         else:
             member.game.click(point, spread)
 
+    def _reclick(self, walk: _Walk, frame: Frame, crossing: Crossing) -> None:
+        walk.spot += 1
+        self._click_sun(walk.member, frame, crossing, walk.spot)
+        walk.clicked = time.monotonic()
+        walk.still_since = None  # immobilité à revoir à partir du regard suivant
+
     def _wait_followers(self, walking: list[tuple[Member, Frame, float]], crossing: Crossing) -> None:
         """Arrivée des suiveurs, regardés à tour de rôle (ils marchent en même temps). Comme pour le principal
-        (brain/travel.py) : arrivé quand tout le décor a changé et que la carte lue est celle du principal (ou, nom
-        illisible, que le décor ne bouge plus). Encore sur la carte de départ au bout de RECLICK_EVERY s : nouveau clic
-        sur le soleil, à un autre endroit de la case (un personnage passait dessus : 03/10, recliqué 12 s plus tard
-        seulement). Un menu ouvert à la place (quelqu'un sur le soleil) est fermé et la case recliquée ailleurs."""
-        # [membre, décor de départ, heure du clic, endroit de la case, décor précédent, vue du mouvement, dernier mouvement]
-        pending = {member.name: [member, _scene(before), clicked, 0, None, None, clicked]
-                   for member, before, clicked in walking}
-        leader_view: Frame | None = None  # carte où est arrivé le principal, pour juger les noms illisibles au décor
+        (brain/travel.py) : arrivé quand tout le décor a changé et que la carte lue est celle du principal (_reads_as) ;
+        sinon, une fois le décor stable, quand c'est celui du principal (captures fraîches). Encore sur la carte de
+        départ : nouveau clic sur le soleil, à un autre endroit de la case (un personnage passait dessus : 03/10,
+        recliqué 12 s plus tard seulement), au plus tôt RECLICK_EVERY s après le clic et après FOLLOWER_STILL s
+        d'immobilité vue, décor revu sur une capture fraîche juste avant ; après FOLLOWER_RECLICKS reclics, son propre
+        trajet. Un menu ouvert à la place (quelqu'un sur le soleil) est fermé et la case recliquée ailleurs ; une
+        fenêtre connue (Menu principal ouvert par un Échap) est fermée avant tout reclic."""
+        pending = {member.name: _Walk(member, _scene(before), clicked) for member, before, clicked in walking}
+        target = self._arrival(crossing)
+        leader_view: Frame | None = None  # carte où est arrivé le principal, pour juger au décor
         deadline = time.monotonic() + self.travel_settings.walk_timeout
         while pending and time.monotonic() < deadline:
-            for name, state in list(pending.items()):
-                member, departure, clicked, spot, previous = state[:5]
+            for name, walk in list(pending.items()):
+                member = walk.member
                 frame = member.game.look(park=False)
                 if read_scene(frame).phase is not Phase.OUT_OF_COMBAT:
                     log.info("Combat pendant le trajet de %s", name)
@@ -545,64 +786,105 @@ class TeamBot:
                     del pending[name]
                     continue
                 if find_context_menu(frame) is not None:
-                    escape_menu(member.game)  # Échap seulement ; Menu principal ouvert par erreur : refermé
-                    state[3] = spot = spot + 1
-                    self._click_sun(member, frame, crossing, spot)
-                    state[2], state[4] = time.monotonic(), None
+                    if not walk.menu_saved:
+                        walk.menu_saved = True
+                        path = member.game.recorder.save(frame.image, "suiveur_menu", lossless=True)
+                        log.info("%s : menu ouvert au lieu de la marche (quelqu'un sur le soleil ?) (capture : %s)",
+                                 name, path)
+                    # Souvent lui-même, arrivé par ce soleil (21/10) : un clic à côté ferme le menu et l'écarte de la
+                    # case (Échap ne le ferme pas), puis le soleil de nouveau, au centre.
+                    if not close_context_menu(member.game, frame):
+                        escape_menu(member.game)
+                    walk.spot = -1  # _reclick : le centre de la case
+                    self._reclick(walk, member.game.look(park=False), crossing)
+                    continue
+                popup = member.popups.describe(frame)
+                if popup is not None and member.popups.handle(frame, self._since_combat()):
+                    # 20/10, Vertdepomme : un Échap a ouvert le Menu principal, six reclics sont tombés dedans (~25 s).
+                    log.info("%s : %s pendant l'attente des suiveurs, fermée avant tout reclic", name, popup)
+                    walk.previous = walk.motion = walk.still_since = None  # décor caché : regards à refaire
                     continue
                 view = _scene(frame)
-                changed = _gap(view, departure) > SCENE_CHANGED
-                stable = previous is not None and _gap(view, previous) < SCENE_STABLE
-                state[4] = view
+                changed = _gap(view, walk.departure) > SCENE_CHANGED
+                stable = walk.previous is not None and _gap(view, walk.previous) < SCENE_STABLE
+                walk.previous = view
                 motion = _motion_view(frame)
-                if state[5] is not None and _motion(motion, state[5]) >= self.travel_settings.motion_cells:
-                    state[6] = time.monotonic()
-                state[5] = motion
+                now = time.monotonic()
+                if walk.still_since is None or (walk.motion is not None and
+                                                _motion(motion, walk.motion) >= self.travel_settings.motion_cells):
+                    walk.still_since = now  # premier regard, ou il bouge
+                walk.motion = motion
                 if not changed:
                     # Reclic seulement s'il ne bouge pas : 11/10, Imthebest, plus lent, arrivait en 5,-16 quand le
                     # reclic est parti ; tombé sur la nouvelle carte, il l'a fait descendre en 5,-15.
-                    now = time.monotonic()
-                    if now - clicked >= RECLICK_EVERY and now - state[6] >= FOLLOWER_STILL:
-                        state[3] = spot = spot + 1
-                        self._click_sun(member, frame, crossing, spot)
-                        state[2] = time.monotonic()
+                    if now - walk.clicked >= RECLICK_EVERY and now - walk.still_since >= FOLLOWER_STILL:
+                        self._still_follower(walk, crossing, pending)
                     continue  # en chemin
                 label = read_map_label(frame)
-                if label is not None and label.readable and crossing.after.readable:
-                    if label.same_map(crossing.after):
-                        log.info("%s a suivi le principal (%s)", name, label.describe())
-                        self._lost.discard(name)
-                        del pending[name]
-                    elif stable:
-                        log.warning("%s est arrivé sur %s, pas sur la carte du principal", name, label.describe())
-                        self._lost.add(name)
-                        if label.coords is not None:
-                            self._seen_at[name] = label.coords
-                        del pending[name]
-                elif stable:
-                    # Nom illisible (27 % des arrivées de suiveurs n'étaient pas vérifiées, bilan du 12/10) : même décor
-                    # que le principal, revu une fois sur des captures fraîches avant de le déclarer perdu.
-                    if leader_view is None:
-                        leader_view = self.leader.game.look(park=False)
-                    if same_map(frame, leader_view) or same_map(member.game.look(park=False),
-                                                                  self.leader.game.look(park=False)):
-                        log.info("%s a suivi le principal (nom de carte illisible, même décor)", name)
-                        self._lost.discard(name)
-                    else:
-                        log.warning("%s a changé de carte, mais pas le même décor que le principal : il le rejoindra "
-                                    "par son trajet", name)
-                        self._lost.add(name)  # position inconnue : pas devinée (le regroupement le dira)
+                if _reads_as(label, target, crossing.after):
+                    log.info("%s a suivi le principal (%s)", name, label.describe())
+                    self._lost.discard(name)
                     del pending[name]
+                    continue
+                if not stable:
+                    continue  # chargement de la carte
+                # Nom illisible (27 % des arrivées de suiveurs n'étaient pas vérifiées, bilan du 12/10), lu en partie ou
+                # autrement que chez le principal (20/10, 11,-23) : même décor que le principal, revu une fois sur des
+                # captures fraîches avant de le déclarer perdu.
+                if leader_view is None:
+                    leader_view = self.leader.game.look(park=False)
+                read = label is not None and label.readable
+                if same_map(frame, leader_view) or same_map(member.game.look(park=False),
+                                                              self.leader.game.look(park=False)):
+                    log.info("%s a suivi le principal (%s, même décor)", name,
+                             f"lu « {label.text} »" if read else "nom de carte illisible")
+                    self._lost.discard(name)
+                elif read:
+                    log.warning("%s est arrivé sur %s, pas sur la carte du principal (autre décor)", name,
+                                label.describe())
+                    self._lost.add(name)
+                    self._note_seen(name, label, target or self._dispatch_to)
+                else:
+                    log.warning("%s a changé de carte, mais pas le même décor que le principal : il le rejoindra "
+                                "par son trajet", name)
+                    self._lost.add(name)  # position inconnue : pas devinée (le regroupement revoit le décor)
+                del pending[name]
             if pending:
                 self.leader.game.sleep(0.2)
-        for name, (member, *_rest) in pending.items():
-            path = member.game.recorder.save(member.game.look().image, "suiveur_bloque", lossless=True)
-            log.warning("%s n'a pas suivi le principal (capture : %s) : il le rejoindra par son propre trajet", name,
-                        path)
-            self._lost.add(name)
-            start = crossing.before.coords if crossing.before.readable else None
-            if start or self._departure:
-                self._seen_at[name] = start or self._departure  # resté sur la carte de départ
+        for walk in pending.values():
+            self._left_behind(walk.member, crossing,
+                              f"toujours pas arrivé après {self.travel_settings.walk_timeout:.0f} s")
+
+    def _still_follower(self, walk: _Walk, crossing: Crossing, pending: dict[str, _Walk]) -> None:
+        """Suiveur immobile sur la carte de départ (_wait_followers) : décor revu sur une capture fraîche, puis reclic ;
+        après FOLLOWER_RECLICKS reclics, son propre trajet (rattrapage) plutôt que d'attendre travel.walk_timeout."""
+        member = walk.member
+        fresh = member.game.look(park=False)
+        if _gap(_scene(fresh), walk.departure) > SCENE_CHANGED:
+            return  # il arrive : pas de reclic (jugé au regard suivant)
+        if find_context_menu(fresh) is not None or member.popups.describe(fresh) is not None:
+            return  # menu ou fenêtre : fermés au regard suivant, avant tout clic
+        if walk.reclicks >= FOLLOWER_RECLICKS:
+            del pending[member.name]
+            self._left_behind(member, crossing, f"immobile sur la carte de départ après {walk.reclicks} reclics", fresh)
+            return
+        if walk.reclicks == 0:
+            path = member.game.recorder.save(fresh.image, "suiveur_reclic", lossless=True)
+            log.info("%s ne bouge pas, toujours sur la carte de départ : je reclique le soleil (capture : %s)",
+                     member.name, path)
+        walk.reclicks += 1
+        self._reclick(walk, fresh, crossing)
+
+    def _left_behind(self, member: Member, crossing: Crossing, why: str, frame: Frame | None = None) -> None:
+        """Suiveur qui n'a pas suivi : perdu, resté sur la carte de départ ; il rejoindra par son propre trajet."""
+        image = (frame if frame is not None else member.game.look()).image
+        path = member.game.recorder.save(image, "suiveur_bloque", lossless=True)
+        log.warning("%s n'a pas suivi le principal (%s ; capture : %s) : il le rejoindra par son propre trajet",
+                    member.name, why, path)
+        self._lost.add(member.name)
+        start = crossing.before.coords if crossing.before.readable else None
+        if start or self._departure:
+            self._seen_at[member.name] = start or self._departure  # resté sur la carte de départ
 
     def _mark_lost(self, member: Member, frame: Frame | None = None) -> None:
         """Suiveur pas sur la carte du principal : perdu ; sa carte est notée si elle se lit."""
@@ -652,12 +934,29 @@ class TeamBot:
             return True
         target = self.roamer.traveler.coords
         if target is None:
+            # 23/10 : au départ, nom de carte du principal illisible ; parti aussitôt sans les 6 suiveurs restés sur la
+            # carte voisine. Sa position d'abord (lue, sinon demandée au jeu : « /p %pos% »).
+            self.roamer.traveler.look()
+            target = self.roamer.traveler.coords
+        if target is None:
             return True  # carte du principal inconnue : rien pour guider les autres
         for name in sorted(self._lost):
             member = self.by_name[name]
             journey = self._rejoin.get(name)
             if journey is None or journey.goal != target:
                 start = self._seen_at.get(name)
+                if start is None and same_map(member.game.look(park=False), self.leader.game.look(park=False)):
+                    # 20/10, 11,-23 : Pesopepe cru perdu (« 11,-?3 » lu), carte inconnue, le bot arrêté ; il était sur
+                    # la carte du principal. Son décor est revu avant de s'arrêter faute de savoir où il est.
+                    log.info("%s est en fait sur la carte du principal (même décor) : il n'a pas besoin de trajet", name)
+                    self._lost.discard(name)
+                    continue
+                if start is None:
+                    # 23/10 : Pombro, nom de carte illisible au départ, le bot arrêté ; sa position demandée au jeu.
+                    start = PositionAsker(member.game, name).ask()
+                    if start is not None:
+                        log.info("%s : position donnée par le jeu (« /p %%pos%% ») : %s,%s", name, *start)
+                        self._seen_at[name] = start
                 if start is None:
                     log.warning("%s n'est pas sur la carte du principal et je ne sais pas où il est (nom de carte "
                                 "illisible) : je m'arrête (amène-le sur la carte du principal, puis relance)", name)
@@ -693,6 +992,8 @@ class TeamBot:
     def _fight(self, host: Member) -> None:
         """Un combat de l'équipe, du placement jusqu'à la fin ; les fenêtres de résultat sont fermées au tour des
         fenêtres qui suit."""
+        self._in_fight = True  # erreur d'ici : rattrapée sans arrêter le bot (safe_step)
+        self._progress("combat lancé")
         shared = MapMemory()  # même carte pour tous : ce qu'un personnage en voit sert aux autres (trou caché, 03/10)
         for member in self.members:
             member.ai.new_combat()  # nouvelle carte de combat : obstacles et mode tactique à revoir
@@ -724,8 +1025,10 @@ class TeamBot:
                            [(m.name, m.ai.fight_report()) for m in fighters])
         if self.max_fights and self.fights >= self.max_fights:
             self._stop_reason = f"{self.fights} combat(s), le maximum demandé"
+        self._result_unseen = end is None and bool(fighters)
         if end is not None:
             self._close_results(*end, fighters)
+        self._in_fight = False
 
     def _placement(self, host: Member) -> list[Member]:
         """Les autres rejoignent le combat de celui qui l'a lancé, puis Prêt dans chaque fenêtre, la sienne en dernier.
@@ -734,6 +1037,8 @@ class TeamBot:
         selon l'ordre de jeu (_seat_team, team/placement.py), une fois tout le monde arrivé."""
         log.info("Placement : combat de %s", host.name)
         hint = recent_click(host)  # près du groupe attaqué : l'épée est là
+        # 21/10 : épées déjà là avant son clic d'attaque (sa capture d'avant ce clic) : d'autres combats, écartés.
+        self.joiner.ignore_swords_before(getattr(host.game, "map_click_frame", None), hint)
         others = [m for m in self.members if m is not host]
         # Tous rejoignent d'abord, l'un après l'autre sans s'attendre (cases tirées au hasard par le jeu).
         asked = [m for m in others if self.joiner.ask(m, hint)]
@@ -894,7 +1199,13 @@ class TeamBot:
             host.game.recorder.save(annotate(frame, cells=set(enemies), marks=marks), "placement_equipe")
 
     def _ready(self, member: Member) -> None:
-        """Un seul appui : un second annulerait le premier."""
+        """Un seul appui : un second annulerait le premier.
+
+        TODO (20/10, fenêtre sourde aux touches, S3 à S8) : F1 « Prêt » peut être ignoré comme F1 de fin de tour. Le
+        remède serait un clic sur le bouton Prêt quand la fenêtre est sourde (brain/recovery.is_deaf), mais il faut
+        d'abord savoir ce qui change à l'écran après Prêt (bouton qui change d'aspect ? encadré du portrait ?) : rien
+        n'est encore validé sur des captures, et un second Prêt annulerait le premier. Pas de clic ici en attendant :
+        captures de placement avant et après Prêt à relever (une fenêtre qui a reçu F1, une qui l'a ignoré)."""
         frame = member.game.look(park=False)
         scene = read_scene(frame)
         if scene.phase is not Phase.PLACEMENT:
@@ -905,7 +1216,7 @@ class TeamBot:
         elif scene.ready_button is not None:
             log.info("Placement : je clique sur Prêt")
             member.game.click(scene.ready_button, frame.layout.spread(*READY_SPREAD))
-        member.game.sleep(0.1)
+        member.game.sleep(0.03)
 
     def _wait_combat(self, host: Member) -> bool:
         """Jusqu'au début du combat (timeline affichée). Entre Prêt et la timeline, l'écran ressemble quelques secondes
@@ -949,12 +1260,12 @@ class TeamBot:
         if signals is not None:
             signals.new_fight()  # notifications d'avant les tours (hors combat : invitations, échanges) ignorées
         while True:
-            if self.deadline is not None and time.monotonic() >= self.deadline + OVERTIME:
-                log.warning("Durée de la session dépassée de %.0f min en plein combat : j'arrête le bot, le combat "
-                            "continue sans lui", OVERTIME / 60)
-                self._stop_reason = "durée de la session dépassée en plein combat"
-                self.finished = True
-                return None
+            if self.deadline is not None and time.monotonic() >= self.deadline + OVERTIME and not self._overtime_warned:
+                # Jamais d'arrêt en plein combat (21/10 : avant, le bot s'arrêtait ici, l'équipe restait sans lui).
+                self._overtime_warned = True
+                log.warning("Durée de la session dépassée de %.0f min en plein combat : je finis ce combat, puis la "
+                            "session s'arrête", OVERTIME / 60)
+                self._stop_reason = self._stop_reason or "durée de la session dépassée"
             frame = watcher.game.look(park=False)
             scene = read_scene(frame)
             self._report(watcher, frame, scene)
@@ -1138,6 +1449,7 @@ class TeamBot:
             # Avec leur nom : le journal du combat dit qui gêne (« je ne me mets pas devant Imthebest »).
             options["team_cells"] = lambda: {cell: name for name, cell in self._cells.items() if name != member.name}
         member.ai.play_turn(self.my_team or scene.current_team, **options)
+        self._progress("tour joué")
         self._early = None
         self._just_played = (member.name, time.monotonic())
         if getattr(member.ai, "turns_not_passed", 0) >= STUCK_TURNS:
@@ -1235,6 +1547,8 @@ class TeamBot:
 
     def _fight_over(self) -> None:
         log.info("Combat terminé")
+        self._progress("combat fini")
+        self._fight_errors = 0
         self._combat_ended_at = time.monotonic()
         self._last_team = self.my_team or self._last_team
         if self.learn_team:

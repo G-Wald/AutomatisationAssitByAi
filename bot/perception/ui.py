@@ -19,6 +19,11 @@ from bot.perception.layout import MAP_BOTTOM, SCENE_LEFT, Layout, Point
 READY_ZONE, READY_SPREAD = (1700, 690, 1918, MAP_BOTTOM), (35, 8)  # bouton « Prêt » du placement
 END_TURN_ZONE, END_TURN_SPREAD = (1400, 930, 1505, 1008), (12, 7)  # bouton de fin de tour (flèche sous la minimap)
 TIMELINE_ZONE = (SCENE_LEFT, 640, 1888, MAP_BOTTOM)  # portraits des combattants (sans les flèches de défilement)
+# Timeline déplaçable (23/10, Tainéla 5,-30 : combat dans le coin bas-droit, l'équipe cachée sous les portraits, 4 morts
+# sans un sort) : le ▲ de son onglet orange (à droite des portraits) la met en haut de la carte, le ▼ la remet en bas.
+TIMELINE_ZONE_TOP = (1040, 40, 1888, 175)
+TIMELINE_TAB_BOTTOM, TIMELINE_TAB_TOP = (1889, 706, 1916, 777), (1889, 72, 1916, 143)
+TIMELINE_UP, TIMELINE_DOWN = (1903, 714), (1904, 139)  # ▲ (timeline en bas), ▼ (timeline en haut)
 RING_CENTER, RING_RADII, RING_SPLIT_Y = (1328, 903), (60, 118), 935  # anneau autour de la minimap
 SPELL_SLOTS_X, SPELL_SLOTS_STEP, SPELL_ROWS_Y = 1533, 51, (904.5, 956.5)
 SPELL_EXTRA_SLOT = (1476.5, 904.5)  # bouton à gauche de la barre de sorts, visible en combat
@@ -57,13 +62,27 @@ def find_end_turn_button(frame: Frame) -> Point | None:
     return _center(max(big, key=lambda b: b.area)) if big else None
 
 
+def timeline_at_top(frame: Frame) -> bool:
+    """Timeline en haut de la carte (onglet orange en haut à droite plutôt qu'en bas)."""
+    def share(box: tuple[int, int, int, int]) -> float:
+        crop = frame.crop(frame.layout.box(*box))
+        return float(orange_mask(crop).mean()) if crop.size else 0.0
+
+    return share(TIMELINE_TAB_TOP) > max(0.4, share(TIMELINE_TAB_BOTTOM))
+
+
+def timeline_zone(frame: Frame) -> tuple[int, int, int, int]:
+    """Où sont les portraits de la timeline, en bas (par défaut) ou en haut de la carte."""
+    return frame.layout.box(*(TIMELINE_ZONE_TOP if timeline_at_top(frame) else TIMELINE_ZONE))
+
+
 def current_fighter_team(frame: Frame) -> str | None:
     """Équipe du combattant qui joue : son portrait est encadré d'orange, sa barre de vie a la couleur de l'équipe.
 
     None hors combat (pas de timeline).
     """
     layout = frame.layout
-    box = layout.box(*TIMELINE_ZONE)
+    box = timeline_zone(frame)
     for blob in find_blobs(orange_mask(frame.crop(box)), offset=box[:2]):
         if layout.length(50) <= blob.w <= layout.length(72) and layout.length(58) <= blob.h <= layout.length(82):
             portrait = frame.crop((blob.x, blob.y, blob.x + blob.w, blob.y + blob.h))

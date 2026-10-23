@@ -23,9 +23,14 @@ log = logging.getLogger(__name__)
 
 POSITION_COMMAND = "/p %pos%"
 # « (Groupe) Nom : [x,y] » ; l'OCR lit parfois « ; » pour « : » ou ajoute des espaces dans les crochets.
-POSITION_LINE = re.compile(r"\(Groupe\)\s*(?P<name>[^:;]+?)\s*[:;]\s*\[\s*(?P<x>-?\d+)\s*[,.]\s*(?P<y>-?\d+)\s*\]")
+POSITION_LINE = re.compile(r"\(Groupe\)\s*(?P<name>[^:;]+?)\s*[:;]\s*\[\s*(?P<x>-?\d+)\s*[,.]\s*(?P<y>-?\d+)\s*(?P<close>\])?")
+# 23/10 : « [11,-27] » lu « [11,-271 » aux deux agrandissements, crochet fermant pris pour un 1 ; Pombro cru introuvable,
+# le bot arrêté. Sans crochet, un dernier 1 n'est retiré que si le nombre entier est impossible (au-delà de MAX_COORD) :
+# « [6,21 » reste refusé (6,21 existe).
+MAX_COORD = 120
 INPUT_FROM_BOTTOM = 23  # px de référence : milieu de la zone de saisie du chat, au-dessus du bas de la fenêtre
 LINES_HEIGHT = 130  # px de référence : bas du chat lu (les dernières lignes, au-dessus de la zone de saisie)
+LOWER_PANE_TOP = 392  # px de référence : haut du chat du dessous (sous le séparateur des deux zones du chat)
 READ_ZOOMS = (3, 4)  # agrandissements lus : 2 fois, l'OCR prenait parfois le crochet « ] » pour un 1
 
 
@@ -35,11 +40,12 @@ def chat_input_point(frame: Frame) -> Point:
     return round(layout.map_box[0] / 2), round(layout.height - layout.length(INPUT_FROM_BOTTOM))
 
 
-def last_lines_image(frame: Frame, zoom: float = 3) -> np.ndarray:
-    """Bas du chat du dessous (sans la zone de saisie), agrandi `zoom` fois pour l'OCR."""
+def last_lines_image(frame: Frame, zoom: float = 3, whole: bool = False) -> np.ndarray:
+    """Bas du chat du dessous (sans la zone de saisie), agrandi `zoom` fois pour l'OCR ; `whole` : tout le chat du
+    dessous, depuis son séparateur (juste après la connexion, presque vide, ses lignes sont en haut)."""
     layout = frame.layout
     bottom = round(layout.height - layout.length(2 * INPUT_FROM_BOTTOM))
-    top = max(0, round(bottom - layout.length(LINES_HEIGHT)))
+    top = round(layout.length(LOWER_PANE_TOP)) if whole else max(0, round(bottom - layout.length(LINES_HEIGHT)))
     crop = frame.image[top:bottom, 0 : layout.map_box[0]]
     return cv2.resize(crop, None, fx=zoom, fy=zoom, interpolation=cv2.INTER_CUBIC)
 
@@ -132,21 +138,42 @@ def find_text(frame: Frame, box: tuple[int, int, int, int], wanted: str, zoom: f
 
 def parse_position(lines: list[str], name: str | None = None) -> tuple[int, int] | None:
     """Coordonnées de la dernière ligne « (Groupe) Nom : [x,y] » (de `name` s'il est donné)."""
-    for line in reversed(lines):
+    # 23/10 : l'OCR coupe parfois la ligne après le nom (« ...Koalaloupour : » puis « [10,-28] ») : chaque ligne, puis
+    # recollée à la suivante, de la dernière à la première.
+    candidates = []
+    for index, line in enumerate(lines):
+        candidates.append(line)
+        if index + 1 < len(lines):
+            candidates.append(f"{line} {lines[index + 1]}")
+    for line in reversed(candidates):
         match = POSITION_LINE.search(line)
-        if match and (name is None or match["name"].strip().lower() == name.lower()):
-            return int(match["x"]), int(match["y"])
+        if not match or (name is not None and match["name"].strip().lower() != name.lower()):
+            continue
+        x, y = match["x"], match["y"]
+        if match["close"] is None:
+            if not (y.endswith("1") and abs(int(y)) > MAX_COORD and y.strip("-")[:-1]):
+                continue
+            y = y[:-1]
+        return int(x), int(y)
     return None
 
 
 def read_position(frame: Frame, name: str | None = None) -> tuple[int, int] | None:
     """Position lue deux fois (agrandie 3 et 4 fois), gardée seulement si les deux lectures concordent : agrandie 2 fois,
-    « [6,2] » était parfois lu « [6,21 » (crochet pris pour un 1, 16/10), une autre carte qui existe."""
-    found = set()
-    for zoom in READ_ZOOMS:
-        lines = ocr_lines(last_lines_image(frame, zoom))
-        found.add(parse_position(lines, name) if lines else None)
-    return found.pop() if len(found) == 1 else None
+    « [6,2] » était parfois lu « [6,21 » (crochet pris pour un 1, 16/10), une autre carte qui existe. Rien dans les
+    dernières lignes : tout le chat du dessous (21/10, juste après la connexion : « (Groupe) Koalaloupour : [11,-28] »
+    sous le message de bienvenue, en haut du chat presque vide ; trajet arrêté faute de position de départ). Une
+    lecture vide ne contredit pas l'autre (23/10 : agrandie 3 fois, « [18:45] (Groupe) Koalaloupour : [10,-28] » coupée
+    en trois lignes ; trajet arrêté) ; deux positions différentes, rien."""
+    for whole in (False, True):
+        found = set()
+        for zoom in READ_ZOOMS:
+            lines = ocr_lines(last_lines_image(frame, zoom, whole))
+            found.add(parse_position(lines, name) if lines else None)
+        found.discard(None)
+        if len(found) == 1:
+            return found.pop()
+    return None
 
 
 # --- Chat de combat (zone du haut) : « Nom lance Sort. » ---------------------------------------------------------

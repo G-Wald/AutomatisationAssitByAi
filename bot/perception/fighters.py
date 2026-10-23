@@ -9,6 +9,7 @@ Une telle tache est découpée en cherchant, sur chaque case qu'elle couvre, une
 et vide à l'intérieur (les cases de placement, colorées en entier, forment aussi de grandes taches).
 """
 
+import math
 from collections.abc import Sequence
 from dataclasses import dataclass
 
@@ -87,14 +88,16 @@ SPRITE_HALF_W, SPRITE_UP, SPRITE_DOWN = 0.55, 3.8, 0.35
 # l'ennemi en (23, 31), 9 px de sa case sous les portraits).
 CELL_SPOTS = ((0, 0), (0, 0.5), (-0.7, 0), (0.7, 0), (0, -0.5), (0, 0.8), (0, -0.8))  # coins à 0,7 : hors du corps
 # d'un voisin de devant
+AWAY = 0.4  # en demi-hauteurs de case (~10 px) : écart minimal à un clic déjà fait sur la case (`away`)
 
 
-def clear_point(grid: Grid, cell: Cell, fighters: list[Fighter],
-                hidden: Sequence[Box] = ()) -> tuple[tuple[float, float], tuple[float, float]]:
+def clear_point(grid: Grid, cell: Cell, fighters: list[Fighter], hidden: Sequence[Box] = (),
+                away: Sequence[tuple[float, float]] = ()) -> tuple[tuple[float, float], tuple[float, float]]:
     """Point (et demi-étendue du clic) pour viser la case `cell` sans toucher le corps d'un combattant : un clic sur
     un personnage le vise lui, pas la case (03/10 : cases en diagonale derrière un personnage difficiles à atteindre).
     Le centre de la case s'il est dégagé, sinon le bas, la gauche, la droite ou le haut du losange, puis ses pointes.
-    `hidden` : rectangles de l'interface par-dessus la carte (portraits de la timeline), évités de même."""
+    `hidden` : rectangles de l'interface par-dessus la carte (portraits de la timeline), évités de même. `away` :
+    clics déjà faits sur cette case, à plus de AWAY demi-hauteurs de chacun si un endroit dégagé le permet."""
     x, y = grid.center(cell)
     hw, hh = grid.half_w, grid.half_h
 
@@ -103,14 +106,16 @@ def clear_point(grid: Grid, cell: Cell, fighters: list[Fighter],
                    and f.y - SPRITE_UP * hh <= py <= f.y + SPRITE_DOWN * hh for f in fighters) \
             or any(x0 - sx <= px <= x1 + sx and y0 - sy <= py <= y1 + sy for x0, y0, x1, y1 in hidden)
 
+    clear = []
     for dx, dy in CELL_SPOTS:
         point = (x + dx * hw, y + dy * hh)
         # Pointes : losange étroit (7 px de demi-largeur à 0,86), clic serré.
         spread = grid.click_spread() if (dx, dy) == (0, 0) else (hw * 0.12, hh * 0.12) if abs(dy) < 0.8 \
             else (hw * 0.06, hh * 0.06)
         if not covered(*point, *spread):
-            return point, spread
-    return (x, y), grid.click_spread()
+            clear.append((point, spread))
+    far = [c for c in clear if all(math.dist(c[0], a) > AWAY * hh for a in away)]
+    return (far or clear or [((x, y), grid.click_spread())])[0]
 
 
 def _is_arc(blob: Blob, layout: Layout) -> bool:

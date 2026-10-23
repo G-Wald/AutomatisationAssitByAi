@@ -16,6 +16,7 @@ from bot.perception.spellsheet import read_sheet
 from bot.perception.sight import (in_line_only, range_center, line_of_sight, read_blocks, read_range, read_terrain, sight_agreement,
                                   timeline_portraits)
 from bot.perception.templates import match_template
+from bot.perception.timeline import challenge_icons
 from bot.perception.ui import (
     PA_BUBBLE,
     TACTICAL_OFF,
@@ -743,3 +744,22 @@ def test_mouse_moved_away_inside_the_flash_scene_never_in_the_chat():
         layout = Layout(width, height)
         for x, y in (scene_park_point(layout) for _ in range(300)):
             assert layout.map_box[0] <= x < width and layout.map_box[3] <= y < height
+
+
+@pytest.mark.parametrize("name, count", [("challenge_icone_dinarpepe", 1), ("challenge_deux_icones", 2),
+                                         ("combat_cercles_colles", 1), ("combat_mon_tour", 0), ("combat_portee_sort", 0)])
+def test_challenge_icons_over_the_map(name, count):
+    # 20/10 : icônes des challenges (carrés orange, pourcentage dessous) en haut à gauche de la carte, par-dessus des
+    # cases : jamais cliquées pour viser une case.
+    icons = challenge_icons(load_frame(name))
+    assert len(icons) == count
+    assert all(x1 - x0 < 90 and y1 - y0 < 110 for x0, y0, x1, y1 in icons)
+
+
+def test_click_point_avoids_a_challenge_icon():
+    from bot.perception.fighters import clear_point
+
+    frame = load_frame("challenge_icone_dinarpepe")
+    icons = challenge_icons(frame)
+    (px, py), _ = clear_point(frame.grid, (2, 8), [], icons)
+    assert not any(x0 <= px <= x1 and y0 <= py <= y1 for x0, y0, x1, y1 in icons)

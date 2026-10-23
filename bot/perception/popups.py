@@ -15,7 +15,7 @@ import cv2
 import numpy as np
 
 from bot.perception.blobs import find_blobs
-from bot.perception.colors import UI_BEIGE, UI_BEIGE_DARK, near
+from bot.perception.colors import UI_BEIGE, UI_BEIGE_DARK, near, orange_mask
 from bot.perception.frame import Frame
 from bot.perception.layout import REF_HEIGHT, Box, Point
 from bot.perception.templates import ASSETS_DIR, load_template, match_template
@@ -34,6 +34,11 @@ class PopupSpec:
     key: str = ""  # ... ou touche qui la ferme
     threshold: float = 0.85
     title_above: float = 120  # px de référence au-dessus de la surface beige où chercher le titre (`detect`)
+    detect_also: tuple[str, ...] = ()  # autres modèles du même titre (autre qualité graphique du jeu)
+    # Titre OU bouton au seuil suffit si l'autre atteint au moins pair_threshold (0 : les deux au seuil). 20/10
+    # (journal 201321) : résultat du combat à 0,874 (titre) et 0,88 (bouton) sur la capture JPEG, pas reconnu sur la
+    # capture du jeu : resté ouvert, l'équipe a cherché des groupes derrière lui.
+    pair_threshold: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -41,12 +46,13 @@ class PopupMatch:
     spec: PopupSpec
     close_point: Point | None  # None : fermer avec la touche
     close_spread: tuple[float, float] = (0.0, 0.0)  # zone de clic aléatoire dans le bouton
+    box: Box | None = None  # surface beige de la fenêtre
 
 
 def load_popup_specs(path: Path = POPUPS_FILE) -> list[PopupSpec]:
     with path.open(encoding="utf-8") as f:
         entries = (yaml.safe_load(f) or {}).get("popups") or []
-    return [PopupSpec(**entry) for entry in entries]
+    return [PopupSpec(**{**entry, "detect_also": tuple(entry.get("detect_also") or ())}) for entry in entries]
 
 
 QUIT_TEXT = "Cette action va quitter ta partie en cours"
@@ -77,26 +83,94 @@ def find_quit_dialog_no(frame: Frame) -> Point | None:
 def find_known_popup(frame: Frame, specs: list[PopupSpec]) -> PopupMatch | None:
     """Fenêtre connue ouverte. On ne cherche ses modèles qu'autour d'une grande surface beige (une fenêtre) :
     les chercher sur tout l'écran prenait 0,2 s, à chaque coup d'œil. Le titre n'est cherché que dans le haut de la
-    surface (son bandeau est juste au-dessus du fond beige) : une étendue de sable ne coûte presque rien."""
+    surface (son bandeau est juste au-dessus du fond beige) : une étendue de sable ne coûte presque rien.
+
+    Types de fenêtre dans l'ordre de popups.yaml (celle du dessus d'abord), surfaces beiges ensuite : 20/10 (journaux
+    205623 et 211515), « Informations — Tu passes niveau 14 » ouverte par-dessus le résultat du combat ; la plus grande
+    surface (le résultat) passait d'abord, « Fermer » était cliqué sous la fenêtre du niveau, sans effet, et l'équipe
+    restait bloquée derrière les deux fenêtres."""
     margin = round(frame.layout.length(120))
-    for x0, y0, x1, y1 in _beige_windows(frame, min_fill=WINDOW_FILL):
-        box = (max(0, x0 - margin), max(0, y0 - margin), min(frame.layout.width, x1 + margin),
-               min(frame.layout.height, y1 + 2 * margin))  # le bouton « Fermer » est sous la fenêtre
-        for spec in specs:
-            # 16/10, « Combats en cours » : seul le bas de la fenêtre est du beige des fenêtres, le titre est 340 px plus
-            # haut (title_above de la fenêtre dans popups.yaml).
-            above = round(frame.layout.length(spec.title_above))
-            title = (max(0, x0 - margin), max(0, y0 - above), min(frame.layout.width, x1 + margin),
-                     min(frame.layout.height, y0 + margin))
-            if match_template(frame, spec.detect, box=title, threshold=spec.threshold) is None:
-                continue
-            if spec.key:
-                return PopupMatch(spec, None)
-            button = match_template(frame, spec.close, box=box, threshold=spec.threshold)
-            if button is not None:
-                height, width = load_template(spec.close).shape[:2]
-                return PopupMatch(spec, button[0], frame.layout.spread(width * 0.3, height * 0.25))
+    windows = _beige_windows(frame, min_fill=WINDOW_FILL)
+    for spec in specs:
+        for window in windows:
+            found = _match_popup(frame, spec, window, margin)
+            if found is not None:
+                return found
     return None
+
+
+def _match_popup(frame: Frame, spec: PopupSpec, window: Box, margin: int) -> PopupMatch | None:
+    x0, y0, x1, y1 = window
+    box = (max(0, x0 - margin), max(0, y0 - margin), min(frame.layout.width, x1 + margin),
+           min(frame.layout.height, y1 + 2 * margin))  # le bouton « Fermer » est sous la fenêtre
+    # 16/10, « Combats en cours » : seul le bas de la fenêtre est du beige des fenêtres, le titre est 340 px plus
+    # haut (title_above de la fenêtre dans popups.yaml).
+    above = round(frame.layout.length(spec.title_above))
+    title = (max(0, x0 - margin), max(0, y0 - above), min(frame.layout.width, x1 + margin),
+             min(frame.layout.height, y0 + margin))
+    low = min(spec.pair_threshold or spec.threshold, spec.threshold)
+    title_score = max((found[1] for name in (spec.detect, *spec.detect_also)
+                       if (found := match_template(frame, name, box=title, threshold=low)) is not None), default=None)
+    if title_score is None:
+        return None
+    if spec.key:
+        return PopupMatch(spec, None, box=window) if title_score >= spec.threshold else None
+    button = match_template(frame, spec.close, box=box, threshold=low)
+    if button is None or max(title_score, button[1]) < spec.threshold:
+        return None  # l'un des deux au moins doit être sûr
+    height, width = load_template(spec.close).shape[:2]
+    return PopupMatch(spec, button[0], frame.layout.spread(width * 0.3, height * 0.25), window)
+
+
+# Diagnostic d'une fenêtre qui revient sans cesse, ou d'une surface beige inconnue (20/10) : boutons de fermeture
+# connus cherchés plus largement, puis la croix orange du bandeau de titre. « Ok » d'abord : la fenêtre du niveau
+# supérieur s'ouvre par-dessus le résultat du combat, dont le « Fermer » ne répond pas tant qu'elle est là.
+GENERIC_BUTTONS = ("informations_ok.png", "challenge_fermer_x.png", "fin_de_combat_fermer.png")
+GENERIC_THRESHOLD = 0.75
+TITLE_CROSS_SIZE = (16, 34)  # px de référence : côté de la croix orange (26 px sur le résultat du combat, 20/10)
+TITLE_CROSS_BAND = (60, 12)  # px de référence au-dessus et au-dessous du haut de la surface beige : bandeau du titre
+
+
+def find_generic_close(frame: Frame, window: Box | None = None) -> tuple[Point, str] | None:
+    """Bouton qui ferme une fenêtre qu'on ne sait pas (ou plus) fermer : « Fermer », « Ok » ou la croix de « Challenge
+    en cours » au seuil GENERIC_THRESHOLD, cherchés autour de la surface beige `window` (sinon de chacune des grandes
+    surfaces beiges) ; à défaut, la croix orange en haut à droite du bandeau de titre. (point, ce que c'est), None sans
+    rien de sûr. Jamais rien sur la carte elle-même : seulement des boutons orange de l'interface."""
+    layout = frame.layout
+    margin = round(layout.length(120))
+    windows = [window] if window is not None else _beige_windows(frame, min_fill=WINDOW_FILL)
+    for x0, y0, x1, y1 in windows:
+        box = (max(0, x0 - margin), max(0, y0 - margin), min(layout.width, x1 + margin),
+               min(layout.height, y1 + 2 * margin))
+        for name in GENERIC_BUTTONS:
+            found = match_template(frame, name, box=box, threshold=GENERIC_THRESHOLD)
+            if found is not None:
+                return found[0], name
+        cross = find_title_cross(frame, (x0, y0, x1, y1))
+        if cross is not None:
+            return cross, "croix orange du titre"
+    return None
+
+
+def find_title_cross(frame: Frame, window: Box) -> Point | None:
+    """Croix orange en haut à droite du bandeau de titre d'une fenêtre (à droite du « _ » orange qui la réduit) :
+    la tache orange carrée la plus à droite du bandeau, juste au-dessus de la surface beige."""
+    layout = frame.layout
+    x0, y0, x1, y1 = window
+    up, down = (round(layout.length(v)) for v in TITLE_CROSS_BAND)
+    side = round(layout.length(40))
+    band = (max(0, x0 - side), max(0, y0 - up), min(layout.width, x1 + side), min(layout.height, y0 + down))
+    low, high = (layout.length(v) for v in TITLE_CROSS_SIZE)
+    # Dans le quart droit du bandeau seulement : les jauges d'XP orange du résultat du combat dépassent à gauche de
+    # « Informations » posée dessus (20/10), pas de croix là.
+    right = x1 - (x1 - x0) / 4
+    squares = [b for b in find_blobs(orange_mask(frame.crop(band)), offset=band[:2], close=3)
+               if low <= b.w <= high and low <= b.h <= high and abs(b.w - b.h) <= layout.length(6) and b.fill >= 0.5
+               and b.center[0] >= right]
+    if not squares:
+        return None
+    cross = max(squares, key=lambda b: b.x)
+    return round(cross.center[0]), round(cross.center[1])
 
 
 def find_context_menu(frame: Frame) -> Box | None:

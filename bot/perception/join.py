@@ -4,37 +4,52 @@ Quand un combat commence, les autres joueurs de la carte voient une épée à l'
 fanions de l'équipe (flèches, hache...) et un cercle au sol (violet, cyan...). Un clic sur l'épée ouvre un petit menu :
 « Combat » (titre, brun foncé) puis « Rejoindre » (beige). Son infobulle donne le chef de l'équipe (« Jesuisleking(12) »).
 
-L'épée se reconnaît PAR PARTIES (assets/epee_combat.png, découpé dans tests/fixtures/rejoindre_epee.png, même échelle
-que les captures de référence), jamais par ce qui l'entoure : ni les fanions (selon l'équipe), ni le cercle au sol (violet
-ou cyan selon le combat), ni le décor. Chaque partie est comparée sur ses pixels intérieurs seulement (masque réduit
-d'un pixel : les bords se mêlent au fond) :
-- le pommeau (anneau orange à cœur sombre) : 0,85 à 1,0 sur les épées réelles du 01/10 (PNJ debout dessus, fleur
-  blanche derrière), 0,60 au plus sur 150 captures sans épée ;
-- la garde (orange, pierre sombre) : 0,93 à 1,0, quand le pommeau est caché ;
-et entre les deux, la poignée : une colonne orange d'au moins 15 lignes sur 24 (couleur, donc quel que soit le fond),
-présente sur toutes les épées, absente sous tous les faux pommeaux. Le 01/10, le modèle entier (pommeau + poignée + garde
-+ début des fanions) ne donnait plus que 0,57 sur une épée à cercle cyan devant une fleur.
-Survolée par la souris, l'épée s'éclaircit (0,55) : on écarte la souris si elle ne se voit pas.
-Quelqu'un debout sur l'épée (le 01/10, un PNJ) en cache la garde : on clique d'abord sur le pommeau, au-dessus des
-têtes (le clic sur la garde avait touché le PNJ : menu « Parler »). L'épée de l'équipe des monstres (en bois, avec un
-cadenas) n'a pas ce dessin : elle n'est pas reconnue, et c'est voulu, on ne la rejoint pas. L'épée d'un combat qu'on
-ne peut pas rejoindre (« équipe fermée ou limitée au groupe du joueur principal », le 04/10) est beige, sans orange :
-pas reconnue non plus.
+L'épée se reconnaît PAR PARTIES QUI VOTENT, jamais par ce qui l'entoure : ni les fanions (selon l'équipe), ni le cercle
+au sol (violet ou cyan selon le combat), ni le décor. Les parties, chacune comparée sur ses pixels intérieurs seulement
+(masque réduit d'un pixel : les bords se mêlent au fond) :
+- le pommeau (anneau orange à cœur sombre), lignes 1 à 14 de assets/epee_combat.png (découpé dans
+  tests/fixtures/rejoindre_epee.png, même échelle que les captures de référence) ;
+- la garde (orange, pierre sombre), lignes 38 à 54 du même modèle ;
+- la lame (21/10), assets/epee_lame.png, découpée dans tests/fixtures/epee_cercle_cyan_fleur.png (lignes 50 à 92,
+  colonnes -2 à 16 du coin du modèle de l'épée) : le corps de la lame (peu saturé et clair, ou orange au talon), sa
+  plus grande composante, et son contour sombre d'un pixel ; le fond (herbe, cercle cyan) n'en fait pas partie ;
+- l'icône des 3 personnages beiges (assets/epee_icone_groupe.png, sans doute l'option « groupe » du combat) qui
+  accompagne l'épée : son haut 38 px au-dessus du haut du pommeau, centrée sur la poignée ; ou, quand elle ne tient pas
+  au-dessus (épée tout en haut de la carte, 04/10 : icône en y = 97), 108 px sous lui (sous la pointe de la lame) ;
+- la poignée orange, entre le pommeau et la garde : une colonne orange étroite (2 à 3 px, bordée de sombre) sur au
+  moins 15 lignes sur 24 (couleur, donc quel que soit le fond).
+Les cartes de scores sont calculées une fois par partie sur la zone cherchée. Chaque pic d'une partie au-dessus de son
+seuil propose une origine (le coin haut-gauche du modèle de l'épée) ; pour chaque origine, on relit le score des autres
+parties à leur place, à 3 px près. Une partie au-dessus de son seuil est un vote (0,70 pour le pommeau, la garde et la
+lame ; 0,74 pour l'icône), la poignée orange aussi. L'épée est prise avec AU MOINS 2 VOTES : une partie seule ne suffit
+jamais (la lame atteint 0,74 sans épée, sur des pierres claires).
 
-Épée tout en haut de la carte (04/10, groupe attaqué en y = 57) : pommeau coupé par le bord de l'écran, garde sous le
-texte blanc du nom de la carte (pommeau 0,54, garde 0,41) ; aucun des 3 suiveurs n'avait rejoint. Repère de secours :
-la petite icône des 3 personnages beiges (assets/epee_icone_groupe.png, sans doute l'option « groupe » du combat)
-qui accompagne l'épée : son haut 38 px au-dessus du haut du pommeau, centrée sur la poignée ; ou, quand elle ne tient
-pas au-dessus, 108 px sous lui (sous la pointe de la lame). Elle donne 0,87 à 1,0 sur les 18 captures où elle est
-(épées orange et beiges), 0,72 au plus sur 544 captures sans elle. Une épée n'y est prise que si sa poignée orange
-(étroite) est là où l'icône la place : aucune épée prise à tort sur 854 captures sans épée orange (journaux du 04/10,
-dont les 10 à épée beige et icône), ni sur 4 000 icônes collées au hasard sur 50 d'entre elles.
-Poignée cachée par un monstre debout devant l'épée (11/10 : un Champ Champ ; les 3 suiveurs ne l'ont pas trouvée) :
-l'icône (0,95) et le pommeau (0,78) au même endroit suffisent, sans la poignée. Deux repères indépendants qui tombent
-au même pixel près : jamais vu sans épée (pommeau 0,60 et icône 0,72 au plus sans elle).
-Les points de clic doivent tomber sur l'épée visible : dans la carte (pas au-dessus du bord de l'écran), pas sur le
-texte du nom de la carte (blanc ombré de noir, perception/maplabel.py) ; dans l'ordre pommeau, poignée, garde, puis
-le milieu de la lame (entre les deux lignes du nom de la carte quand l'épée est tout en haut). Les lignes de la
+Pourquoi (20/10, journaux 203456, 205623, 211515) : sur 25 captures où l'épée se voyait, l'ancienne règle (pommeau ou
+garde à 0,75 ET poignée orange, ou icône à 0,80 ET poignée) n'en trouvait que 4 ; les 7 suiveurs restaient dehors :
+- épée devant un monstre orange (203456, 0011 à 0020) : la poignée se mêle à l'orange du monstre (pas de poignée
+  étroite), alors que pommeau 0,79, garde 0,91, lame 0,96 et icône 0,75 sont là ;
+- épée tout en haut (211515, 0114 à 0122) : pommeau hors de l'écran, garde sous le nom de la carte (0,20), mais lame
+  0,76, icône (sous l'épée) 0,78 et poignée ;
+- épée sous la fenêtre « Résultat du combat » du combat précédent (205623, 0248) : seules le bas de la garde (0,72) et
+  la lame (0,97) dépassent.
+Les votes en trouvent 23 sur 25, sans aucune épée prise à tort sur 251 captures sans combat (journaux et
+tests/fixtures) ni sur 12 captures « epee_introuvable » où l'épée était partie. Les 2 manquées sont cachées : la
+fenêtre « Résultat du combat » sur l'icône, l'épée éclaircie par la souris (211515, 0118) ; le menu de Flash ouvert
+par-dessus (205623, 0247). Le suiveur ferme ses fenêtres et écarte la souris avant de chercher de nouveau
+(team/join.py).
+Ancien cas couvert : poignée cachée par un monstre debout devant (11/10, un Champ Champ) : icône (0,95) et pommeau
+(0,78) font 2 votes.
+
+Refus voulus : l'épée de l'équipe des monstres (en bois, avec un cadenas) n'a pas ce dessin, on ne la rejoint pas ;
+l'épée d'un combat qu'on ne peut pas rejoindre (« équipe fermée ou limitée au groupe du joueur principal », le 04/10)
+est beige, sans orange : son icône seule (1,0) ne fait qu'un vote.
+Survolée par la souris, l'épée s'éclaircit (0,55) : on écarte la souris si elle ne se voit pas.
+
+Les points de clic sont SEULEMENT sur les parties qui ont voté (21/10 : on ne clique pas sur une partie qu'on ne voit
+pas, cachée par un monstre ou par un personnage), dans l'ordre : pommeau (au-dessus des têtes : le 01/10, le clic sur
+la garde avait touché un PNJ debout sur l'épée, menu « Parler »), poignée, milieu de la lame, garde en dernier. Ils
+doivent tomber sur l'épée visible : dans la carte (pas au-dessus du bord de l'écran), pas sur le texte du nom de la
+carte (blanc ombré de noir, perception/maplabel.py ; 04/10, épée sous « Astrub (Champs d'Astrub) ») ; les lignes de la
 poignée cachées par ce texte ne comptent pas dans sa vérification.
 
 Le menu ne se reconnaît pas à sa surface beige (une seule entrée beige, trop petite pour find_context_menu) : on y
@@ -43,7 +58,7 @@ cherche directement le mot « Rejoindre » (assets/menu_rejoindre.png : 0,99 sur
 """
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import lru_cache
 
 import cv2
@@ -54,10 +69,26 @@ from bot.perception.layout import Box, Point
 from bot.perception.maplabel import LABEL_BOX, text_glyphs
 from bot.perception.templates import ASSETS_DIR, match_template
 
-SWORD = "epee_combat.png"
-# Parties du modèle (lignes) : pommeau, poignée, garde ; colonne de la poignée.
+SWORD, BLADE, ICON = "epee_combat.png", "epee_lame.png", "epee_icone_groupe.png"
+# Parties du modèle de l'épée (lignes) : pommeau, poignée, garde ; colonne de la poignée.
 POMMEL_ROWS, HANDLE_ROWS, GUARD_ROWS, HANDLE_X = (1, 14), (13, 38), (38, 54), 7
-PART_THRESHOLD = 0.75
+BLADE_AT = (-2, 50)  # du coin du modèle de l'épée au coin du modèle de la lame
+# Du coin haut-gauche de l'icône à celui du modèle de l'épée (mesuré à 1 px près sur 3 épées) : icône au-dessus du
+# pommeau (cas normal) ; icône sous la lame quand l'épée est tout en haut de la carte (04/10 : icône en y = 97), ce
+# second cas n'étant envisagé que pour une icône assez haute.
+ICON_ABOVE, ICON_BELOW, ICON_BELOW_TOP = (12, 38), (12, -108), 170
+# Parties qui votent, comparées à un modèle : où est le coin de leur modèle, du coin de celui de l'épée (l'icône a deux
+# places possibles), et leur seuil. 20/10, sur 25 épées et 253 captures sans combat : la lame atteint 0,74 sans épée
+# (pierres claires), l'icône 0,72 ; aucune origine n'a 2 parties au-dessus de ces seuils sans épée.
+PARTS = ("pommel", "guard", "blade", "icon")
+PART_AT = {"pommel": ((0, POMMEL_ROWS[0]),), "guard": ((0, GUARD_ROWS[0]),), "blade": (BLADE_AT,),
+           "icon": ((-ICON_ABOVE[0], -ICON_ABOVE[1]), (-ICON_BELOW[0], -ICON_BELOW[1]))}
+THRESHOLDS = {"pommel": 0.70, "guard": 0.70, "blade": 0.70, "icon": 0.74}
+PART_NAMES = {"pommel": "pommeau", "handle": "poignée", "blade": "lame", "guard": "garde", "icon": "icône"}
+VOTES = 2  # parties vues au même endroit (la poignée orange en est une) : jamais une seule
+AGREE = 3  # px de référence : écart toléré entre la place d'une partie et son pic
+PEAKS = 30  # pics de chaque partie essayés comme origine
+ZONE_REACH = (40, 150)  # autour de la zone cherchée (centres des épées) : où sont leurs parties (icône, lame)
 HANDLE_MIN = 0.6  # part des lignes de la poignée où l'on voit de l'orange (0,81 à 0,85 sur les épées du 01/10)
 # 04/10 : lignes de la poignée visibles au moins (dans la carte, hors du texte du nom de la carte) pour en juger, sur
 # 25 ; les 25 se voyaient sur l'épée du 04/10 en haut de l'écran (pommeau coupé, poignée juste au-dessus du texte).
@@ -68,31 +99,25 @@ HANDLE_SEEN = 10
 # timeline (1 sur 2 000) passaient pour des poignées.
 HANDLE_WIDE, HANDLE_THIN = 6, 5.0
 SWORD_CLICK = (-1.5, 16)  # du centre du modèle au milieu de la garde (repère de référence)
-# Où cliquer, dans l'ordre, du centre du modèle : pommeau (au-dessus des têtes), poignée, garde, puis (04/10) le milieu
-# de la lame, sous la garde : seule partie visible avec la poignée quand l'épée est sous le nom de la carte (pommeau
-# hors de l'écran, garde sous le texte) ; demi-étendue du clic.
-SWORD_POINTS = (((-3, -20), (3, 3)), ((-2.5, -5), (1, 4)), (SWORD_CLICK, (6, 3)), ((-3, 40), (2, 3)))
-SWORD_SPREAD = (6, 3)  # la garde fait une dizaine de pixels de haut
+# Où cliquer, du centre du modèle, dans l'ordre : (partie, décalage, demi-étendue du clic). Pommeau (au-dessus des
+# têtes), poignée, milieu de la lame (04/10 : seule partie visible avec la poignée quand l'épée est sous le nom de la
+# carte ; 20/10, 205623 : la seule cliquable derrière des personnages), la garde en dernier (cachée par qui est dessus).
+SWORD_POINTS = (("pommel", (-3, -20), (3, 3)), ("handle", (-2.5, -5), (1, 4)), ("blade", (-3, 40), (2, 3)),
+                ("guard", SWORD_CLICK, (6, 3)))
 JOIN_ENTRY, JOIN_SPREAD = "menu_rejoindre.png", (22, 5)
 MAX_SWORDS = 5  # plusieurs combats sur la carte (d'autres joueurs) : on garde les meilleurs
-# 04/10 : icône des 3 personnages qui accompagne l'épée (repère de secours, voir plus haut). Seuil : 0,87 à 1,0 sur
-# les 18 captures où elle est, 0,72 au plus sur 544 captures sans elle (journaux du 04/10, tests/fixtures, captures).
-ICON, ICON_THRESHOLD = "epee_icone_groupe.png", 0.8
-# Du coin haut-gauche de l'icône à celui du modèle de l'épée (mesuré à 1 px près sur 3 épées) : icône au-dessus du
-# pommeau (cas normal) ; icône sous la lame quand l'épée est tout en haut de la carte (04/10 : icône en y = 97), ce
-# second cas n'étant envisagé que pour une icône assez haute.
-ICON_ABOVE, ICON_BELOW, ICON_BELOW_TOP = (12, 38), (12, -108), 170
-ICON_REACH = (30, 130)  # autour de la zone de recherche de l'épée : où chercher son icône (au-dessus ou en dessous)
 TEXT_MARGIN = 2  # autour des lettres du nom de la carte : leur ombre noire
-AGREE = 3  # icône et pommeau (ou garde) au même endroit : écart toléré sur le coin du modèle (repère de référence)
 
 
 @dataclass(frozen=True)
 class Sword:
     center: Point  # centre du modèle (du pommeau à la garde)
     click: Point  # milieu de la garde
-    score: float
+    score: float  # la partie vue la plus ressemblante
     points: tuple[tuple[Point, tuple[float, float]], ...] = ()  # (point, demi-étendue) à cliquer, dans l'ordre
+    parts: tuple[str, ...] = ()  # parties vues (qui ont voté), dont « handle » pour la poignée orange
+    scores: dict[str, float] = field(default_factory=dict, hash=False)  # score de chaque partie à sa place
+    point_parts: tuple[str, ...] = ()  # la partie de chaque point de `points`
 
 
 @lru_cache
@@ -116,61 +141,19 @@ def _part(name: str, rows: tuple[int, int], scale: float) -> tuple[np.ndarray, n
     return template, mask
 
 
+def _template(part: str, scale: float) -> tuple[np.ndarray, np.ndarray]:
+    if part == "pommel":
+        return _part(SWORD, POMMEL_ROWS, scale)
+    if part == "guard":
+        return _part(SWORD, GUARD_ROWS, scale)
+    name = BLADE if part == "blade" else ICON
+    return _part(name, (0, _asset(name).shape[0]), scale)
+
+
 def sword_orange(image: np.ndarray) -> np.ndarray:
     """Orange du pommeau, de la poignée et de la garde (pas le jaune des toits de chaume : vert plus fort)."""
     b, g, r = (image[:, :, i].astype(np.int16) for i in range(3))
     return (r >= 190) & (g >= 90) & (g <= 175) & (b <= 90) & (r - g >= 50)
-
-
-def _matches(frame: Frame, box: Box, template: np.ndarray, mask: np.ndarray, threshold: float,
-             limit: int) -> list[tuple[float, int, int]]:
-    """(score, x, y) du coin haut-gauche du modèle, pour chaque endroit de `box` où il ressemble, du meilleur au moins
-    bon ; un seul par endroit (à la taille du modèle près)."""
-    region = frame.crop(box)
-    th, tw = template.shape[:2]
-    if region.shape[0] < th or region.shape[1] < tw:
-        return []
-    scores = cv2.matchTemplate(region, template, cv2.TM_CCOEFF_NORMED, mask=mask)
-    scores = np.nan_to_num(scores, nan=-1.0, posinf=-1.0, neginf=-1.0)  # zone unie : division par zéro
-    found = []
-    while len(found) < limit:
-        _, score, _, (x, y) = cv2.minMaxLoc(scores)
-        if score < threshold:
-            break
-        found.append((float(score), box[0] + x, box[1] + y))
-        scores[max(0, y - th) : y + th, max(0, x - tw) : x + tw] = -1.0  # la même chose, à quelques pixels près
-    return found
-
-
-def _part_matches(frame: Frame, box: Box, rows: tuple[int, int]) -> list[tuple[float, int, int]]:
-    """(score, x, y) du coin haut-gauche du MODÈLE ENTIER, pour chaque endroit où la partie `rows` ressemble."""
-    layout = frame.layout
-    template, mask = _part(SWORD, rows, round(layout.scale, 2))
-    top = round(layout.length(rows[0]))
-    return [(score, x, y - top) for score, x, y in _matches(frame, box, template, mask, PART_THRESHOLD, 3 * MAX_SWORDS)]
-
-
-def _icon_matches(frame: Frame, box: Box) -> list[tuple[float, int, int]]:
-    """(score, x, y) du coin haut-gauche de l'icône des 3 personnages, près de `box` (elle est au-dessus de l'épée,
-    ou en dessous)."""
-    layout = frame.layout
-    template, mask = _part(ICON, (0, _asset(ICON).shape[0]), round(layout.scale, 2))
-    left, top, right, bottom = layout.map_box
-    rx, ry = (round(layout.length(v)) for v in ICON_REACH)
-    near = (max(left, box[0] - rx), max(top, box[1] - ry), min(right, box[2] + rx), min(bottom, box[3] + ry))
-    return _matches(frame, near, template, mask, ICON_THRESHOLD, 2 * MAX_SWORDS)
-
-
-def _icon_candidates(frame: Frame, box: Box) -> list[tuple[float, int, int]]:
-    """(score de l'icône, x, y) du coin haut-gauche du modèle de l'épée, là où chaque icône la place."""
-    layout = frame.layout
-    found = []
-    for score, x, y in _icon_matches(frame, box):
-        offsets = [ICON_ABOVE]
-        if y - layout.map_box[1] < layout.length(ICON_BELOW_TOP):
-            offsets.append(ICON_BELOW)  # épée trop haute pour avoir son icône au-dessus d'elle
-        found += [(score, x + round(layout.length(dx)), y + round(layout.length(dy))) for dx, dy in offsets]
-    return found
 
 
 class _LabelText:
@@ -220,6 +203,87 @@ def _handle_seen(frame: Frame, x: int, y: int, text: _LabelText) -> bool:
     return seen.sum() >= layout.length(HANDLE_SEEN) and handle.sum() >= HANDLE_MIN * seen.sum()
 
 
+class _Maps:
+    """Cartes de scores de chaque partie sur `zone` (une fois par partie), et score d'une partie pour une épée dont
+    le modèle aurait son coin haut-gauche en (x, y)."""
+
+    def __init__(self, frame: Frame, zone: Box) -> None:
+        self.frame, self.zone = frame, zone
+        layout = frame.layout
+        scale = round(layout.scale, 2)
+        region = frame.crop(zone)
+        self.maps: dict[str, np.ndarray | None] = {}
+        self.sizes: dict[str, tuple[int, int]] = {}
+        for part in PARTS:
+            template, mask = _template(part, scale)
+            self.sizes[part] = template.shape[:2]
+            if region.shape[0] < template.shape[0] or region.shape[1] < template.shape[1]:
+                self.maps[part] = None
+                continue
+            scores = cv2.matchTemplate(region, template, cv2.TM_CCOEFF_NORMED, mask=mask)
+            self.maps[part] = np.nan_to_num(scores, nan=-1.0, posinf=-1.0, neginf=-1.0)  # zone unie : division par 0
+        self.offsets = {part: [(round(layout.length(dx)), round(layout.length(dy))) for dx, dy in PART_AT[part]]
+                        for part in PARTS}
+        self.below_top = layout.map_box[1] + layout.length(ICON_BELOW_TOP)
+        self.tolerance = max(1, round(layout.length(AGREE)))
+        self.text = _LabelText(frame)
+
+    def _allowed(self, part: str, index: int, part_y: int) -> bool:
+        """L'icône n'est sous l'épée que si elle ne tient pas au-dessus : épée tout en haut de la carte."""
+        return part != "icon" or index == 0 or part_y < self.below_top
+
+    def score(self, part: str, x: int, y: int) -> float:
+        """Meilleur score de la partie à sa place pour une épée en (x, y), à quelques pixels près ; -1 hors de la zone."""
+        scores = self.maps[part]
+        best = -1.0
+        if scores is None:
+            return best
+        t = self.tolerance
+        for index, (dx, dy) in enumerate(self.offsets[part]):
+            px, py = x + dx - self.zone[0], y + dy - self.zone[1]
+            if not self._allowed(part, index, y + dy):
+                continue
+            x0, y0 = max(0, px - t), max(0, py - t)
+            x1, y1 = min(scores.shape[1], px + t + 1), min(scores.shape[0], py + t + 1)
+            if x0 < x1 and y0 < y1:
+                best = max(best, float(scores[y0:y1, x0:x1].max()))
+        return best
+
+    def peaks(self, part: str) -> list[tuple[float, int, int]]:
+        """(score, x, y) : coins du modèle de l'épée proposés par les pics de la partie au-dessus de son seuil, du
+        meilleur au moins bon ; un pic par endroit (à la taille du modèle de la partie près)."""
+        scores = self.maps[part]
+        if scores is None:
+            return []
+        scores = scores.copy()
+        th, tw = self.sizes[part]
+        found = []
+        for _ in range(PEAKS):
+            _, score, _, (px, py) = cv2.minMaxLoc(scores)
+            if score < THRESHOLDS[part]:
+                break
+            x, y = px + self.zone[0], py + self.zone[1]
+            found += [(float(score), x - dx, y - dy) for index, (dx, dy) in enumerate(self.offsets[part])
+                      if self._allowed(part, index, y)]
+            scores[max(0, py - th) : py + th, max(0, px - tw) : px + tw] = -1.0
+        return found
+
+    def best(self, part: str) -> float:
+        """Meilleur score de la partie dans la zone (journal : pourquoi l'épée n'est pas vue)."""
+        scores = self.maps[part]
+        return -1.0 if scores is None or not scores.size else float(scores.max())
+
+    def handle(self, x: int, y: int) -> bool:
+        return _handle_seen(self.frame, x, y, self.text)
+
+
+def _zone(frame: Frame, box: Box) -> Box:
+    """Où chercher les parties des épées dont le centre est dans `box` : la carte autour (icône, pointe de la lame)."""
+    left, top, right, bottom = frame.layout.map_box
+    rx, ry = (round(frame.layout.length(v)) for v in ZONE_REACH)
+    return max(left, box[0] - rx), max(top, box[1] - ry), min(right, box[2] + rx), min(bottom, box[3] + ry)
+
+
 def _visible(frame: Frame, point: Point, spread: tuple[float, float], text: _LabelText | None) -> bool:
     """Le clic (point et demi-étendue) tombe dans la carte, et pas sur le nom de la carte (`text`)."""
     left, top, right, bottom = frame.layout.map_box
@@ -230,38 +294,51 @@ def _visible(frame: Frame, point: Point, spread: tuple[float, float], text: _Lab
 
 
 def find_fight_swords(frame: Frame, box: Box | None = None) -> list[Sword]:
-    """Épées de combat visibles sur la carte : un pommeau ou une garde (de la plus ressemblante à la moins
-    ressemblante), sinon (04/10) l'icône des 3 personnages qui les accompagne ; et la poignée orange là où il faut."""
+    """Épées de combat dont le centre est dans `box` (toute la carte par défaut) : au moins 2 parties vues au même
+    endroit (pommeau, garde, lame, icône des 3 personnages, poignée orange), en partant des pics les plus
+    ressemblants. Chacune avec ses points de clic, sur les parties vues seulement."""
     layout = frame.layout
     box = box or layout.map_box
+    maps = _Maps(frame, _zone(frame, box))
     width, height = (round(layout.length(v)) for v in _asset(SWORD).shape[1::-1])
-    text = _LabelText(frame)
-    parts = sorted(_part_matches(frame, box, POMMEL_ROWS) + _part_matches(frame, box, GUARD_ROWS), reverse=True)
-    icons = sorted(_icon_candidates(frame, box), reverse=True)
-    tolerance = layout.length(AGREE)
-
-    def agree(x: int, y: int, found: list[tuple[float, int, int]]) -> bool:
-        return any(abs(x - fx) <= tolerance and abs(y - fy) <= tolerance for _, fx, fy in found)
-
+    origins = sorted((o for part in PARTS for o in maps.peaks(part)), reverse=True)
+    # 21/10, Calanques 8,-27 : épée tout en haut, pommeau hors de l'écran, garde et icône (dessous) vues ; son centre
+    # au-dessus du bord : écartée, les 7 suiveurs restés dehors. Au bord haut de la carte, centre jusqu'à une demi-épée
+    # au-dessus.
+    top = box[1] - height / 2 if box[1] <= layout.map_box[1] else box[1]
     swords: list[Sword] = []
-    for score, x, y in parts + icons:
+    for _, x, y in origins:
         cx, cy = x + width / 2, y + height / 2
+        if not (box[0] <= cx < box[2] and top <= cy < box[3]):
+            continue
         if any(abs(cx - s.center[0]) + abs(cy - s.center[1]) < height for s in swords):
             continue
-        if not _handle_seen(frame, x, y, text) and not (agree(x, y, parts) and agree(x, y, icons)):
+        scores = {part: maps.score(part, x, y) for part in PARTS}
+        seen = [part for part in PARTS if scores[part] >= THRESHOLDS[part]]
+        if maps.handle(x, y):
+            seen.append("handle")
+        if len(seen) < VOTES:
             continue
 
         def at(offset: tuple[float, float]) -> Point:
             return round(cx + layout.length(offset[0])), round(cy + layout.length(offset[1]))
 
-        points = [(at(offset), layout.spread(*spread)) for offset, spread in SWORD_POINTS]
+        points = [(part, at(offset), layout.spread(*spread)) for part, offset, spread in SWORD_POINTS if part in seen]
         # Les points visibles ; à défaut, ceux de la carte même sous le texte, jamais au-delà du bord de l'écran.
-        visible = [(p, s) for p, s in points if _visible(frame, p, s, text)]
-        visible = visible or [(p, s) for p, s in points if _visible(frame, p, s, None)]
-        swords.append(Sword((round(cx), round(cy)), at(SWORD_CLICK), score, tuple(visible)))
+        visible = [p for p in points if _visible(frame, p[1], p[2], maps.text)]
+        visible = visible or [p for p in points if _visible(frame, p[1], p[2], None)]
+        swords.append(Sword((round(cx), round(cy)), at(SWORD_CLICK), max(scores[p] for p in seen if p in scores),
+                            tuple((p, s) for _, p, s in visible), tuple(seen), scores,
+                            tuple(part for part, _, _ in visible)))
         if len(swords) == MAX_SWORDS:
             break
     return swords
+
+
+def sword_part_scores(frame: Frame, box: Box | None = None) -> dict[str, float]:
+    """Meilleur score de chaque partie de l'épée (pic dans la zone de `box`), pour le journal quand elle n'est pas vue."""
+    maps = _Maps(frame, _zone(frame, box or frame.layout.map_box))
+    return {part: maps.best(part) for part in PARTS}
 
 
 def find_join_entry(frame: Frame) -> Point | None:

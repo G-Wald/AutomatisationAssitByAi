@@ -216,7 +216,11 @@ def test_burst_chains_the_planned_casts_without_new_plans(monkeypatch, caplog, s
 def test_same_gestures_with_or_without_burst_minus_the_checks(monkeypatch, spell, pa, casts):
     plain = Arena(monkeypatch, spell, pa, casts, burst=False).play()
     burst = Arena(monkeypatch, spell, pa, casts).play()
-    assert presses(plain.game) == presses(burst.game) and clicks(plain.game) == clicks(burst.game)
+    assert presses(plain.game) == presses(burst.game) and len(clicks(plain.game)) == len(clicks(burst.game)) == casts
+    # Rafale : la souris reste où elle est ; sans rafale, un autre endroit de la case à chaque sort (21/10).
+    assert len(set(clicks(burst.game))) == 1 and len(set(clicks(plain.game))) == casts
+    assert all(abs(x - clicks(burst.game)[0][0]) <= 40 and abs(y - clicks(burst.game)[0][1]) <= 25
+               for x, y in clicks(plain.game))  # toujours dans la case de la cible
     assert len(plain.plans) == casts + 1 and len(burst.plans) == 2
     # Par relance : ni curseur interdit à revérifier (0,25 s), ni capture complète ni plan (temps réel en plus).
     assert plain.game.clock - burst.game.clock == pytest.approx(0.25 * (casts - 1))

@@ -41,13 +41,29 @@ def _scales(scale: float) -> list[float]:
 
 
 def find_play(image: np.ndarray, scale: float = 1.0) -> Point | None:
-    """Bouton « JOUER » de la page Dofus Retro ; None ailleurs (page d'un autre jeu, launcher pas encore prêt)."""
+    """Bouton « JOUER » de la page Dofus Retro ; None ailleurs (page d'un autre jeu, launcher pas encore prêt). La
+    page est reconnue au sélecteur « Retro », ou (21/10) à l'icône de Dofus Retro en surbrillance dans la barre de
+    gauche : page défilée vers le haut, sélecteur coupé (0,59), « JOUER » pourtant là (0,996) ; le bot s'était arrêté."""
     for factor in _scales(scale):
-        if scaled_match(image, RETRO_VERSION, factor) is not None:
+        if scaled_match(image, RETRO_VERSION, factor) is not None or _retro_selected(image, factor):
             found = scaled_match(image, PLAY, factor)
             if found:
                 return found[0]
     return None
+
+
+SELECTED_SLOT = (105, 95, 51)  # BGR, fond de la case du jeu affiché dans la barre de gauche (les autres : 67, 55, 0)
+SLOT_EDGE_X = 8  # px (échelle 1) : bord gauche de la barre, hors de l'icône
+
+
+def _retro_selected(image: np.ndarray, scale: float) -> bool:
+    """L'icône de Dofus Retro est celle du jeu affiché : sa case de la barre de gauche est éclaircie."""
+    found = scaled_match(image, RETRO_ICON, scale, threshold=0.75)
+    if found is None:
+        return False
+    x, y = round(SLOT_EDGE_X * scale), found[0][1]
+    pixel = image[y, x].astype(int)
+    return int(np.abs(pixel - np.array(SELECTED_SLOT)).max()) <= 20
 
 
 def find_retro_icon(image: np.ndarray, scale: float = 1.0) -> Point | None:

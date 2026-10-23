@@ -30,7 +30,7 @@ from bot.perception.groups import find_group_tooltips
 from bot.perception.placement import Placement, read_placement
 from bot.perception.spellbook import SpellEntry, read_spell_window
 from bot.perception.grid import distance
-from bot.brain.tactics import CombatSpell
+from bot.brain.tactics import CombatSpell, SpellUse
 from bot.perception.sight import Terrain, locate_caster, range_center
 from bot.perception.toolbar import find_creature_button, find_tactical_button
 from bot.perception.popups import load_popup_specs
@@ -1310,3 +1310,115 @@ def test_one_wrong_cell_of_an_in_line_spell_is_not_a_relief_map(monkeypatch):
     monkeypatch.setattr("bot.brain.combat.sight_agreement", lambda *a: 5 / 7)
     ai._learn_range(frame, me, [me], magique)
     assert not ai._map_reliable
+
+
+def test_chained_spell_refused_is_not_cast_again_from_here(monkeypatch):
+    # 21/10 au soir : 2e sort refusé sur la même cible, relancé de la même case : 0 parti sur 10. Un seul clic, refusé d'ici.
+    import time
+
+    frame = load_frame("combat_portee_sort")
+    me, _ = me_and_enemy(frame)
+    target = enemy_in_range(frame)
+    game = FakeGame(frame)
+    game.background = True
+    ai = CombatAI(game, CombatSettings())
+    monkeypatch.setattr(ai, "_confirm_cast", lambda *a: frame)
+    monkeypatch.setattr(ai, "_left_its_cell", lambda *a: False)
+    ai._target_cast_at = time.monotonic() - 1.0  # le sort précédent sur une cible, il y a 1 s
+    assert ai._cast(frame, me, target, [me, target], RED) is not Cast.DONE
+    assert len(clicks(game)) == 1
+
+
+
+def test_second_spell_on_the_same_target_clicks_another_spot_and_retries_at_a_third(monkeypatch):
+    # Utilisateur, 21/10 : le 2e sort pas exactement au même endroit que le précédent. Refusé : un autre endroit
+    # encore, une fois, puis refusé d'ici (refusals_on_hit_target).
+    import math
+
+    frame = load_frame("combat_portee_sort")
+    me, _ = me_and_enemy(frame)
+    target = enemy_in_range(frame)
+    game = FakeGame(frame)
+    game.background = True
+    ai = CombatAI(game, CombatSettings())
+    monkeypatch.setattr(ai, "_left_its_cell", lambda *a: False)
+    monkeypatch.setattr("bot.brain.combat.spell_range_visible", lambda f: True)
+    monkeypatch.setattr(ai, "_confirm_cast", lambda *a: None)  # 1er sort : parti
+    spell = ai.spells[0]
+    assert ai._cast(frame, me, target, [me, target], RED) is Cast.DONE
+    ai._use.record(spell, target.cell)
+    monkeypatch.setattr(ai, "_confirm_cast", lambda *a: frame)  # 2e : refusé, deux fois
+    assert ai._cast(frame, me, target, [me, target], RED) is not Cast.DONE
+    first, second, third = clicks(game)
+    hh = frame.grid.half_h
+    assert math.dist(first, second) > 0.4 * hh and math.dist(third, first) > 0.4 * hh
+    assert math.dist(third, second) > 0.4 * hh
+    assert all(abs(x - target.x) < frame.grid.half_w and abs(y - target.y) < hh for x, y in (second, third))
+
+
+def test_clear_point_away_from_the_clicks_already_made():
+    import math
+
+    from bot.perception.fighters import AWAY, clear_point
+
+    frame = load_frame("combat_portee_sort")
+    grid = frame.grid
+    center, _ = clear_point(grid, (16, 22), [])
+    other, _ = clear_point(grid, (16, 22), [], away=[center])
+    third, _ = clear_point(grid, (16, 22), [], away=[center, other])
+    assert center == grid.center((16, 22))
+    assert math.dist(other, center) > AWAY * grid.half_h and math.dist(third, other) > AWAY * grid.half_h
+
+def test_refusal_on_a_target_already_hit_this_turn_refuses_every_spell_on_it_from_here():
+    from bot.brain.tactics import refusals_on_hit_target
+
+    pieces = CombatSpell(1, "pieces", "Lancer de Pièces", 2, (0, 8), damage=5)
+    pelle = CombatSpell(4, "pelle", "Pelle Fantomatique", 4, (0, 8), damage=8)
+    far = CombatSpell(5, "loin", "Loin", 3, (5, 12), damage=8)
+    boost = CombatSpell(6, "boost", "Chance", 4, (0, 0))  # portée 0 : sur moi
+    use = SpellUse(pa=6)
+    assert refusals_on_hit_target((7, 9), [pieces, pelle, far, boost], use) == set()  # pas touchée : refus ordinaire
+    use.record(pieces, (7, 9))
+    assert refusals_on_hit_target((7, 9), [pieces, pelle, far, boost], use) ==         {("pieces", (7, 9)), ("pelle", (7, 9)), ("loin", (7, 9))}
+    assert refusals_on_hit_target((3, 5), [pieces, pelle], use) == set()  # une autre cible reste permise
+    use.refused |= refusals_on_hit_target((7, 9), [pieces, pelle], use)
+    use.refused.clear()  # un pas (combat.py) : la même cible de nouveau permise
+
+
+def test_spell_refused_long_after_the_previous_one_is_out_of_reach(monkeypatch):
+    frame = load_frame("combat_portee_sort")
+    me, _ = me_and_enemy(frame)
+    target = enemy_in_range(frame)
+    game = FakeGame(frame)
+    game.background = True
+    ai = CombatAI(game, CombatSettings())
+    monkeypatch.setattr(ai, "_confirm_cast", lambda *a: frame)
+    monkeypatch.setattr(ai, "_left_its_cell", lambda *a: False)
+    assert ai._cast(frame, me, target, [me, target], RED) is not Cast.DONE  # premier sort du tour : refusé, comme avant
+    assert len(clicks(game)) == 1  # pas de relance d'ici
+
+
+def test_timeline_read_at_the_top_of_the_map():
+    # 23/10 : timeline montée en haut (▲ de son onglet) ; équipe du tour et portraits lus là aussi.
+    from bot.perception.timeline import timeline_portraits
+    from bot.perception.ui import current_fighter_team, timeline_at_top
+
+    top, bottom = load_frame("combat_timeline_en_haut"), load_frame("combat_equipe_sous_la_timeline")
+    assert timeline_at_top(top) and not timeline_at_top(bottom) and not timeline_at_top(load_frame("combat_mon_tour"))
+    assert current_fighter_team(top) == "red" and len(timeline_portraits(top)) >= 9
+    assert all(y1 < 200 for _, _, _, y1 in timeline_portraits(top))
+
+
+def test_timeline_moved_to_the_other_side_once_per_turn_when_fighters_are_hidden():
+    # 23/10, Tainéla 5,-30 : l'équipe sous les portraits, coin bas-droit ; 4 morts sans un sort.
+    import math
+
+    from bot.perception.ui import TIMELINE_UP
+
+    frame = load_frame("combat_equipe_sous_la_timeline")
+    game = FakeGame(frame)
+    ai = CombatAI(game, CombatSettings())
+    assert ai._move_timeline(frame)
+    (click,) = clicks(game)
+    assert math.dist(click, frame.layout.point(*TIMELINE_UP)) <= 6
+    assert not ai._move_timeline(frame) and len(clicks(game)) == 1  # une fois par tour

@@ -219,6 +219,15 @@ def refusals(refused: CombatSpell, target: Cell, spells: list[CombatSpell], use:
     return same
 
 
+
+def refusals_on_hit_target(target: Cell, spells: list[CombatSpell], use: SpellUse) -> set[tuple[str, Cell]]:
+    """Sort refusé sur `target` alors qu'un autre y est parti ce tour : le jeu y refuse alors tout sort d'ici (21/10,
+    Calanques : relancé de la même case, 0 parti sur 10 ; sur une autre cible 3 sur 3, après un pas 5 sur 6). Entrées
+    pour SpellUse.refused (oubliées après un déplacement) ; rien si la cible n'a pas été touchée ce tour."""
+    if not any(cell == target for _, cell in use.casts_on_target):
+        return set()
+    return {(spell.spell_id, target) for spell in spells if not spell.on_self}
+
 def refused_beyond(refused: CombatSpell, gap: int, spells: list[CombatSpell], use: SpellUse) -> dict[str, int]:
     """Le jeu a refusé `refused` à `gap` cases, plus loin que sa portée (marge d'une carte à relief) : d'ici, il
     refuserait aussi toute case aussi loin ou plus, et de même pour les sorts qui portent moins loin. 11/10 : Gela, 4

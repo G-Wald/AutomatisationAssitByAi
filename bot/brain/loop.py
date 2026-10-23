@@ -76,6 +76,9 @@ class Bot:
         self.roamer = make_roamer(game, self.travel_settings)
         if self.engager is not None and self.roamer is not None:  # zones hors d'atteinte gardées (brain/engage.py)
             self.engager.remember_in(self.roamer.traveler.world, self.roamer.traveler.place)
+        if self.engager is not None:  # Z sans infobulle : clavier sondé par la touche A (fenêtre sourde, 20/10)
+            self.engager.probe_key = self.travel_settings.show_exits_key
+            self.engager.probe_first = self.roamer is not None
         self.finished = False  # test de déplacement ou exploration terminés
         self._empty_searches = 0
         rest_settings = RestSettings.from_settings(settings)
@@ -228,7 +231,9 @@ class Bot:
             elif time.monotonic() >= self._next_engage_at and not self.engager.engage():
                 # Groupe parti avant l'arrivée : on en cherche un autre aussitôt ; aucun groupe : on attend,
                 # ou (mode zone) on passe sur une carte voisine de la zone.
-                self._empty_searches = self._empty_searches + 1 if self.engager.none_found else 0
+                # Z et A sans effet malgré les clics de déblocage (20/10, brain/engage.py) : pas une carte vide.
+                deaf = self.engager.keyboard_ok is False
+                self._empty_searches = self._empty_searches + 1 if self.engager.none_found and not deaf else 0
                 if self.roamer is not None and self._empty_searches >= self.travel_settings.empty_searches:
                     self._empty_searches = 0
                     self.roamer.step()

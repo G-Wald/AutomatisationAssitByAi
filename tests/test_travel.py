@@ -21,6 +21,7 @@ from bot.brain.travel import (
     TravelSettings,
     World,
     ZoneRoamer,
+    _click_spot,
     _parse_map,
     _parse_zone,
 )
@@ -28,6 +29,7 @@ from bot.config import load_settings
 from bot.perception.exits import DELTA, OPPOSITE, Exit, find_marked_exits, find_suns
 from bot.perception.frame import Frame
 from bot.perception.maplabel import learn_digits, read_map_label, unreadable_label
+from bot.perception.popups import find_context_menu
 from conftest import FIXTURES, load_frame
 from test_brain import FakeGame, clicks, presses
 
@@ -66,6 +68,59 @@ def test_escape_that_opens_the_main_menu_closes_it_without_any_click():
     game = FakeGame(load_frame("hors_combat"))  # menu bien fermé par le premier Échap
     escape_menu(game)
     assert presses(game) == ["escape"] and clicks(game) == []
+
+
+def test_main_menu_opened_a_little_late_by_escape_is_still_closed():
+    # 20/10, Vertdepomme : le Menu principal, ouvert par Échap, pas encore affiché au seul regard de 0,3 s ; six reclics
+    # sont tombés dedans (~25 s). Cherché pendant ~1 s : 3 regards espacés de 0,3 s.
+    from bot.brain.travel import escape_menu
+
+    image = np.zeros((1009, 1920, 3), np.uint8)
+    image[180:620, 980:1520] = cv2.imread(str(FIXTURES / "menu_principal.png"))
+    champs = load_frame("hors_combat")
+    game = FakeGame(champs, champs, Frame.of(image), champs)
+    escape_menu(game)
+    assert presses(game) == ["escape", "escape"] and clicks(game) == [] and len(game.parks) == 3
+    game = FakeGame(champs)
+    escape_menu(game)
+    assert presses(game) == ["escape"] and len(game.parks) == 3 and sum(game.slept) == pytest.approx(0.9)
+
+
+def test_team_told_of_every_attempt_of_the_leader_with_the_spot_aimed_at():
+    # 20/10, soleil (27,5) de 5,5 : le principal a recliqué le bas de la case et il est passé ; on_click n'était appelé
+    # qu'au premier essai, ses suiveurs immobiles n'étaient recliqués qu'après son arrivée (~7 s perdues).
+    t = Traveler(FakeGame(load_frame("hors_combat_foret")), fast(), World(None))
+    calls = []
+    t.on_click = lambda side, cell, frame, spot: calls.append((side, cell, spot))
+    frame, label = t.look()
+    assert t.go(frame, label, "droite") is None
+    assert calls == [("droite", (27, 9), 0), ("droite", (27, 9), 1)]
+
+
+
+def test_start_read_elsewhere_than_the_given_position_is_not_a_teleport():
+    # 21/10 : --combat-zone=11,-28, l'équipe restée en 10,-25 : crue téléportée, plus aucun changement de carte.
+    foret = load_frame("hors_combat_foret")
+    t = Traveler(FakeGame(foret, foret), TravelSettings(mode="test", settle=0, start=(11, -28)), World(None))
+    t.look()
+    assert t.coords == (2, 4) and not t.jumped  # au départ, la lecture l'emporte sur la position donnée
+    t.coords = (9, 9)
+    t.look()
+    assert t.jumped  # en route, toujours vu comme un déplacement ailleurs
+
+def test_crossing_reported_with_the_coordinates_completed_by_the_path(without_digit_3):
+    # 20/10, 11,-23 : le principal lisait « 11,-2? » et passait ce nom tel quel à son équipe ; ses suiveurs lisaient
+    # « 11,-23 » : noms différents, 6 suiveurs crus perdus. Coordonnées complétées par le chemin (11,-23).
+    foret, champs = load_frame("hors_combat_foret"), load_frame("hors_combat")
+    t = Traveler(FakeGame(foret, foret, foret, champs, champs), TravelSettings(mode="test", settle=0), World(None))
+    crossings = []
+    t.on_crossed = lambda side, cell, before, after: crossings.append((before, after))
+    frame, label = t.look()
+    t.coords = (3, 3)  # à droite : 4,3 d'après le chemin
+    assert t.go(frame, label, "droite").text == "4,?"
+    ((before, after),) = crossings
+    assert after.text == "4,?" and after.coords == (4, 3) and after.readable
+    assert before.coords == (2, 4)  # lu en entier : tel quel
 
 
 def test_exit_noted_blocked_only_on_a_map_whose_coordinates_were_read(tmp_path):
@@ -303,7 +358,9 @@ def test_exit_noted_blocked_when_the_map_does_not_change():
     frame, label = t.look()
     assert t.go(frame, label, "droite") is None
     first, second = clicks(t.game)  # deux clics sur le soleil, le second ailleurs sur la case
-    assert second[1] > first[1] - 5 and second != first
+    assert second != first
+    cx, cy = frame.grid.center((27, 9))  # case du bord (colonne de droite) : le bas du losange d'abord (21/10)
+    assert abs(first[0] - cx) <= 8 and first[1] - cy >= 9
     assert ("Incarnam 2,4", "droite") in t.blocked_here  # côté d'arrivée inconnu (début du trajet) : ce trajet seulement
 
 
@@ -554,13 +611,18 @@ def test_partly_unreadable_region_does_not_matter():
 
 def test_someone_on_the_sun_menu_closed_then_bottom_of_the_cell_clicked():
     foret, menu, champs = load_frame("hors_combat_foret"), load_frame("hors_combat_menu_personnage"), load_frame("hors_combat")
-    t = traveler(foret, foret, foret, menu, foret, foret, champs, champs)  # carte, recherche avec A, menu ouvert...
+    # 21/10 : souvent soi-même, arrivé par ce soleil ; Échap ne ferme pas ce menu. Un clic à côté le ferme et écarte le
+    # personnage, puis le soleil de nouveau, sans compter d'essai.
+    t = traveler(foret, foret, foret, menu, menu, foret, foret, champs, champs)  # carte, recherche avec A, menu...
     frame, label = t.look()
     assert t.go(frame, label, "droite").coords == (4, 3)
-    assert "escape" in presses(t.game)  # le menu du personnage posé sur le soleil est refermé
-    first, second = clicks(t.game)
+    assert "escape" not in presses(t.game)
+    first, step, again = clicks(t.game)
     cx, cy = frame.grid.center((27, 9))
-    assert abs(second[0] - cx) <= 8 and second[1] - cy >= 9  # bas du losange, sous les pieds du personnage
+    # Case du bord : le bas du losange, sous les pieds du personnage, dès le premier clic (21/10).
+    assert abs(first[0] - cx) <= 8 and first[1] - cy >= 9 and abs(again[0] - cx) <= 8 and again[1] - cy >= 9
+    x0, y0, x1, y1 = find_context_menu(menu)
+    assert not (x0 - 10 <= step[0] <= x1 + 10 and y0 - 50 <= step[1] <= y1 + 10)
 
 
 def test_readable_name_of_the_departure_map_is_not_an_arrival():
@@ -721,3 +783,29 @@ def test_label_read_in_a_taller_window():
     label = read_map_label(Frame.of(image))
     assert label is not None and label.coords == (-1, -19)
     assert label.region_name == "Astrub" and label.zone_name == "Cité d'Astrub"
+
+
+def test_sun_on_an_edge_cell_clicked_on_the_bottom_of_its_diamond_first():
+    # 21/10, Astrub aller-retour : les 9 clics sans effet sur 42 changements de carte, tous sur des soleils de la rangée
+    # du haut, du bas ou de la colonne de gauche, autour du centre ; les reclics, sur le bas du losange, tous partis.
+    from bot.brain.travel import _click_spot
+
+    frame = load_frame("hors_combat_foret")
+    for cell in ((13, 1), (1, 17), (27, 9)):
+        (x, y), spread = _click_spot(frame, cell, 0)
+        cx, cy = frame.grid.center(cell)
+        assert abs(x - cx) < 1 and y - cy >= 0.5 * frame.grid.half_h and spread[1] < 0.15 * frame.grid.half_h
+    (x, y), _ = _click_spot(frame, (13, 15), 0)  # au milieu de la carte : le centre, comme avant
+    assert (round(x), round(y)) == tuple(round(v) for v in frame.grid.center((13, 15)))
+
+
+def test_sun_outlined_on_pale_grass_with_the_grid_off_by_half_a_cell():
+    # 23/10, Tainéla 5,-30 : herbe vert pâle prise pour du contour, et losange du soleil de droite 14 px au-dessus du
+    # centre de la grille ; seule la sortie de gauche (en contrebas, inaccessible) était vue, le trajet arrêté.
+    frame = load_frame("soleil_droite_grille_decalee_herbe_claire")
+    exits = {e.side: e for e in find_marked_exits(frame)}
+    assert set(exits) == {"gauche", "droite"} and exits["droite"].cell == (27, 25)
+    x, y = exits["droite"].point
+    assert abs(x - 1868) <= 4 and abs(y - 630) <= 4  # le losange vu, pas la case de la grille (y 643)
+    (cx, cy), _ = _click_spot(frame, (27, 25), 1, exits["droite"].point)
+    assert abs(cy - 630) < 0.6 * frame.grid.half_h + 2  # même le bas du losange reste dans la case vue

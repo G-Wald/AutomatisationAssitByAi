@@ -42,6 +42,7 @@ def _hover_disturbs(frame: Frame) -> bool:
 
 class Game:
     background = False  # premier plan, sauf Game(..., background=True)
+    deaf_until = 0.0  # fenêtre sourde aux touches jusqu'à cette heure (brain/recovery.py ; par personnage : MemberGame)
 
     def __init__(self, window: GameWindow, control: StopControl, recorder: Recorder,
                  human: Human = Human(), act: bool = True, background: bool = False) -> None:

@@ -1,7 +1,8 @@
 """Fenêtre de lancement, sans l'affichage : choix de l'utilisateur, ligne de commande du bot, validation, choix
-mémorisés (data/gui.json), fenêtres du jeu ouvertes et processus du bot. L'affichage (tkinter) : bot/gui/app.py.
+mémorisés (data/gui.json), fenêtres du jeu ouvertes, personnages à supprimer et processus du bot. L'affichage
+(tkinter) : bot/gui/app.py.
 
-Les choix deviennent les options de bot/__main__.py. Les réglages qui n'en ont pas (rafale, mode d'attente...)
+Les choix deviennent les options de bot/__main__.py. Les réglages qui n'en ont pas (rafale, mode d'attente, captures...)
 passent par --set section.cle=valeur (lu par bot/config.py : parse_override), seulement quand le choix diffère de
 config/settings.yaml : tant qu'on ne touche pas à ces réglages, la ligne de commande n'utilise que les autres options.
 """
@@ -38,16 +39,20 @@ MODES = {
     "zone": "Combat en zone",
     "aller": "Déplacement",
     "explore": "Exploration",
-    "test": "Test de déplacement",
     "donjon": "Farm de donjon",
-    "recolte": "Récolte (métier)",
+    "test": "Test de déplacement",  # dans le cadre « Tests et diagnostic » de la fenêtre
 }
-SOON = ("recolte",)  # prévus, pas encore programmés : bouton grisé
 COMBAT_MODES = ("carte", "zone")  # les seuls où le bot attaque des groupes (--combat-only)
 WORLDS = {"incarnam": "Incarnam", "douze": "Monde des Douze"}  # clés de --monde (WORLDS de bot/brain/travel.py)
-WAIT_MODES = ("fixe", "condition")
+WAIT_MODES = ("fixe", "condition")  # timing.wait_mode : pas dans la fenêtre, seulement par data/gui.json et --set
 # Début de session (--lecture, session.mode ; READING_MODES de bot/brain/memory.py) : lire à l'écran, ou reprendre.
 READINGS = {"controle": "Contrôler (lire les sorts et les caractéristiques)", "memoire": "Reprendre la dernière session"}
+# Captures gardées dans logs/ (logs.images, par --set) : le bot regarde toujours l'écran.
+IMAGES = {"toutes": "toutes", "problemes": "problèmes seulement", "aucune": "aucune"}
+# Reprise d'un farm de donjon (--donjon NOM:ETAPE, NOM:salles:N) : "" au début, chacun situé d'après son décor ;
+# une étape de l'entrée (STEPS de bot/team/dungeon.py) ; « salles » : l'équipe déjà passée, aux combats de la salle N.
+RESUMES = {"": "début", "entree": "entrée (dehors)", "dalle": "salle des dalles", "soleil": "soleil",
+           "pnj": "PNJ", "salles": "salles, à partir de la salle"}
 DEFAULT_TITLE = "- Dofus Retro"
 # Serveurs proposés (--serveur) ; la liste complète des serveurs Rétro sera ajoutée une fois la source approuvée.
 SERVERS = ("Allisteria",)
@@ -55,11 +60,12 @@ DEFAULT_SERVER = "Allisteria"
 COORDS = re.compile(r"^\s*(-?\d+)\s*,\s*(-?\d+)\s*$")
 OPTION = re.compile(r"""add_argument\(\s*["'](--[\w-]+)["']""")
 STOP_GRACE = 8.0  # secondes laissées au bot pour s'arrêter après la touche d'arrêt, avant de terminer son processus
+NOT_REMEMBERED = ("title",)  # choix jamais repris de data/gui.json : toujours ceux de config/settings.yaml
 
 
 @dataclass(frozen=True)
 class Choices:
-    """Ce qui est coché dans la fenêtre ; les coordonnées restent du texte (« X,Y ») tel que tapé."""
+    """Ce qui est coché dans la fenêtre ; les coordonnées et les nombres restent du texte tel que tapé."""
 
     mode: str = "carte"  # voir MODES
     zone_xy: str = ""  # combat en zone : carte de la sous-zone (--combat-zone) ; vide : --zone, carte lue à l'écran
@@ -68,22 +74,27 @@ class Choices:
     explore_from: str = ""  # exploration : carte de départ (--position) ; vide : lue à l'écran
     donjon: str = ""  # farm de donjon : clé du donjon dans config/donjons_entree.yaml (--donjon), « incarnam »
     passages: str = "1"  # farm de donjon : passages complets (--passages)
+    resume: str = ""  # farm de donjon : reprise (RESUMES), « --donjon incarnam:dalle » ; vide : au début
+    resume_room: str = "1"  # farm de donjon, reprise aux salles : numéro de la salle (« --donjon incarnam:salles:2 »)
     combat_only: bool = False  # --combat-only : le bot n'attaque pas les groupes, il joue les combats lancés à la main
     observe: bool = False  # --observe : aucun clic, aucune touche
     monde: str = "incarnam"  # --monde
-    team: bool = False  # --equipe
+    team: bool = False  # --equipe ; dans la fenêtre, déduit des personnages (team_names), pas coché
     leader: str = ""  # --principal ; en solo : la fenêtre de ce personnage (--title), vide : la première trouvée
     notifications: bool = False  # --notifications (mode équipe)
     burst: bool = False  # combat.burst (--set)
-    wait_mode: str = "fixe"  # timing.wait_mode (--set)
+    wait_mode: str = "fixe"  # timing.wait_mode (--set) ; pas de case dans la fenêtre
     reading: str = "controle"  # --lecture : début de session, sorts et caractéristiques lus (controle) ou repris (memoire)
+    combats: str = ""  # --combats : s'arrêter après N combats ; vide : sans limite
+    minutes: str = ""  # --minutes : s'arrêter après M minutes ; vide : sans limite
+    images: str = "toutes"  # logs.images (--set) : captures gardées (IMAGES)
     verbose: bool = False  # --verbose
     background: bool = False  # --arriere-plan : gestes envoyés aux fenêtres du jeu, souris et clavier libres
     screen: str = "auto"  # --ecran : écran où les fenêtres du jeu sont placées et agrandies (window.ecran)
     connect: bool = False  # --connexion : connecte les fenêtres restées à l'écran de connexion, reconnecte pendant le jeu
     server: str = DEFAULT_SERVER  # --serveur : serveur choisi à la connexion
     characters: str = ""  # --personnages : personnages cochés, « Gela-[A13],Brawli-[Gal] »
-    title: str = DEFAULT_TITLE  # window.title : partie du titre des fenêtres du jeu (--title)
+    title: str = DEFAULT_TITLE  # window.title de config/settings.yaml, toujours (pas de champ dans la fenêtre)
 
 
 def default_choices(settings: dict) -> Choices:
@@ -96,6 +107,7 @@ def default_choices(settings: dict) -> Choices:
     destination = travel.get("destination")
     wait_mode = str((settings.get("timing") or {}).get("wait_mode") or "").strip().lower()
     reading = _plain(str((settings.get("session") or {}).get("mode") or ""))
+    images = _plain(str((settings.get("logs") or {}).get("images") or ""))
     return Choices(
         mode=mode if mode in ("zone", "aller", "explore", "test") else "carte",
         aller_to=destination.strip() if isinstance(destination, str) else "",
@@ -107,6 +119,7 @@ def default_choices(settings: dict) -> Choices:
         burst=bool(combat.get("burst", False)),
         wait_mode=wait_mode if wait_mode in WAIT_MODES else "fixe",
         reading=reading if reading in READINGS else "controle",
+        images=images if images in IMAGES else "toutes",
         background=bool((settings.get("window") or {}).get("arriere_plan", False)),
         screen=_screen_setting((settings.get("window") or {}).get("ecran", "auto")),
         connect=bool((settings.get("connexion") or {}).get("auto", False)),
@@ -131,6 +144,11 @@ def coords_text(text: str) -> str:
     """Coordonnées telles que le bot les attend (« 5,-18 », sans espace) ; le texte tel quel s'il est illisible."""
     coords = parse_coords(text)
     return f"{coords[0]},{coords[1]}" if coords else text.strip()
+
+
+def number_text(text: str) -> str:
+    """« 1,5 » -> « 1.5 » : virgule décimale tolérée, le bot attend un point (--minutes)."""
+    return text.strip().replace(",", ".")
 
 
 def known_dungeons(path: Path = DUNGEONS_PATH) -> dict[str, tuple[str, str]]:
@@ -164,6 +182,17 @@ def detect_windows(title_part: str) -> list[str]:
     return [window.title for window in find_windows(title_part)] if title_part.strip() else []
 
 
+def team_names(characters: str, open_names: list[str]) -> tuple[str, ...]:
+    """Personnages joués ensemble : les cochés (ils limitent l'équipe : --personnages), sinon, sans case cochée, ceux
+    des fenêtres ouvertes ; jeu en équipe à partir de 2 (sinon : solo)."""
+    return parse_names(characters) or tuple(open_names)
+
+
+def plays_as_team(characters: str, open_names: list[str]) -> bool:
+    """La valeur `team` des choix dans la fenêtre : 2 personnages cochés ou plus, sinon 2 fenêtres ouvertes ou plus."""
+    return len(team_names(characters, open_names)) >= 2
+
+
 def overrides(choices: Choices, settings: dict) -> list[tuple[str, object]]:
     """Réglages de config/settings.yaml à remplacer au lancement (--set) : seulement ceux qui diffèrent des choix."""
     base = default_choices(settings)
@@ -180,6 +209,8 @@ def overrides(choices: Choices, settings: dict) -> list[tuple[str, object]]:
         changed.append(("combat.burst", choices.burst))
     if choices.wait_mode != base.wait_mode:
         changed.append(("timing.wait_mode", choices.wait_mode))
+    if choices.images != base.images:
+        changed.append(("logs.images", choices.images))
     if not choices.background and base.background:
         changed.append(("window.arriere_plan", False))  # pas d'option pour le premier plan quand le réglage dit oui
     return changed
@@ -204,8 +235,18 @@ def _coords_option(name: str, text: str) -> str:
     return f"{name}={coords_text(text)}"
 
 
+def dungeon_argument(choices: Choices) -> str:
+    """Valeur de --donjon : « incarnam », « incarnam:dalle » (reprise à une étape de l'entrée) ou « incarnam:salles:2 »
+    (l'équipe déjà passée, aux combats de la salle 2), lue par bot/__main__.py."""
+    key = choices.donjon.strip()
+    if choices.resume == "salles":
+        return f"{key}:salles:{choices.resume_room.strip()}"
+    return f"{key}:{choices.resume}" if choices.resume else key
+
+
 def build_args(choices: Choices, settings: dict) -> list[str]:
     """Options de `python -m bot` pour ces choix (à vérifier d'abord avec validate)."""
+    base = default_choices(settings)
     args = ["--monde", choices.monde]
     if choices.mode == "zone":
         args.append(_coords_option("--combat-zone", choices.zone_xy) if choices.zone_xy.strip() else "--zone")
@@ -220,7 +261,7 @@ def build_args(choices: Choices, settings: dict) -> list[str]:
     elif choices.mode == "test":
         args.append("--travel-test")
     elif choices.mode == "donjon":
-        args += ["--donjon", choices.donjon.strip()]
+        args += ["--donjon", dungeon_argument(choices)]
         if choices.passages.strip() != "1":
             args += ["--passages", choices.passages.strip()]
     if choices.mode in COMBAT_MODES and choices.combat_only:
@@ -232,29 +273,33 @@ def build_args(choices: Choices, settings: dict) -> list[str]:
         args.append("--equipe")
         if leader:
             args += _option("--principal", leader)
-        if choices.notifications:
+        if choices.notifications and not base.notifications:  # sinon : celui de team.turn_signal
             args.append("--notifications")
     title = choices.title.strip()
     if title and leader and not choices.team:
         title = window_title(leader, title)  # solo : la fenêtre de ce personnage, pas la première trouvée
-    if title and title != default_choices(settings).title:
+    if title and title != base.title:
         args += _option("--title", title)
-    if choices.reading != default_choices(settings).reading:
+    if choices.reading != base.reading:
         args += ["--lecture", choices.reading]  # seulement s'il diffère de session.mode
+    if choices.combats.strip():
+        args += ["--combats", choices.combats.strip()]
+    if choices.minutes.strip():
+        args += ["--minutes", number_text(choices.minutes)]
     if choices.verbose:
         args.append("--verbose")
-    if choices.background and not default_choices(settings).background:
+    if choices.background and not base.background:
         args.append("--arriere-plan")
-    if choices.screen.strip().lower() != default_choices(settings).screen:
+    if choices.screen.strip().lower() != base.screen:
         args += ["--ecran", choices.screen.strip().lower()]
     if choices.connect:
-        if not default_choices(settings).connect:
+        if not base.connect:
             args.append("--connexion")
-        if choices.server.strip() and choices.server.strip() != default_choices(settings).server:
+        if choices.server.strip() and choices.server.strip() != base.server:
             args += _option("--serveur", choices.server.strip())
-        names = parse_names(choices.characters)
-        if names and names != parse_names(default_choices(settings).characters):
-            args += _option("--personnages", ",".join(names))
+    names = parse_names(choices.characters)
+    if names:  # toujours : ils limitent aussi l'équipe jouée (connection_settings de bot/__main__.py)
+        args += _option("--personnages", ",".join(names))
     for key, value in overrides(choices, settings):
         args += ["--set", format_override(key, value)]
     return args
@@ -270,6 +315,21 @@ def _check_coords(errors: list[str], what: str, label: str, text: str, required:
         errors.append(f"{what} : coordonnées {label} attendues sous la forme X,Y en nombres entiers (ex. 5,-18), "
                       f"pas « {text.strip()} »")
     return coords
+
+
+def _check_limits(errors: list[str], choices: Choices) -> None:
+    """S'arrêter après N combats (entier ≥ 1) ou M minutes (nombre > 0) ; champ vide : sans limite."""
+    combats = choices.combats.strip()
+    if combats and (not combats.isdigit() or int(combats) < 1):
+        errors.append(f"S'arrêter après : nombre de combats attendu (1, 2, 3...), pas « {combats} »")
+    minutes = number_text(choices.minutes)
+    if minutes:
+        try:
+            ok = 0 < float(minutes) < float("inf")
+        except ValueError:
+            ok = False
+        if not ok:
+            errors.append(f"S'arrêter après : nombre de minutes attendu (30, 1,5...), pas « {choices.minutes.strip()} »")
 
 
 def _setting_names(value) -> list[str]:
@@ -308,8 +368,6 @@ def validate(choices: Choices, settings: dict, titles: list[str] | None = None,
         errors.append(f"L'écran {screen} n'est plus branché ({screens} écran(s)) : choisis-en un autre")
     if choices.mode not in MODES:
         errors.append(f"Mode inconnu : {choices.mode!r}")
-    elif choices.mode in SOON:
-        errors.append(f"{MODES[choices.mode]} : pas encore disponible")
     elif choices.mode == "zone":
         _check_coords(errors, "Combat en zone", "de la carte", choices.zone_xy)
     elif choices.mode == "aller":
@@ -327,24 +385,35 @@ def validate(choices: Choices, settings: dict, titles: list[str] | None = None,
         errors.append(f"Mode d'attente inconnu : {choices.wait_mode!r} ({' ou '.join(WAIT_MODES)})")
     if choices.reading not in READINGS:
         errors.append(f"Début de session inconnu : {choices.reading!r} ({' ou '.join(READINGS)})")
+    if choices.images not in IMAGES:
+        errors.append(f"Captures inconnues : {choices.images!r} ({', '.join(IMAGES)})")
+    _check_limits(errors, choices)
     title, leader = choices.title.strip(), choices.leader.strip()
     if not title:
-        errors.append(f"Titre des fenêtres du jeu vide (d'habitude « {DEFAULT_TITLE} »)")
+        errors.append(f"Titre des fenêtres du jeu vide : renseigne window.title dans config/settings.yaml "
+                      f"(d'habitude « {DEFAULT_TITLE} »)")
     if choices.team and not leader:
-        errors.append("Mode équipe : choisis le personnage principal")
+        errors.append("Jeu en équipe : choisis le personnage principal")
     if choices.connect and not choices.server.strip():
         errors.append("Connexion automatique : choisis le serveur")
+    if choices.observe and choices.connect:
+        errors.append("Observation : aucun clic, la connexion automatique serait ignorée : décoche l'une des deux")
     if titles is not None and title and not choices.connect:  # connexion : les fenêtres seront connectées par le bot
         names = character_names(titles, title)
+        opened = {name.lower() for name in names}
         where = f"titre contenant « {title} »"
+        missing = [name for name in parse_names(choices.characters) if name.lower() not in opened]
         if choices.team and not names:
-            errors.append(f"Mode équipe : aucune fenêtre de personnage ouverte ({where}) : lance et connecte les jeux, "
-                          "puis clique sur Actualiser")
+            errors.append(f"Jeu en équipe : aucune fenêtre de personnage ouverte ({where}) : lance et connecte les "
+                          "jeux, puis clique sur Actualiser")
         elif not titles:
             errors.append(f"Aucune fenêtre du jeu ouverte ({where}) : lance le jeu, puis clique sur Actualiser")
-        elif leader and leader.lower() not in {name.lower() for name in names}:
+        elif leader and leader.lower() not in opened:
             errors.append(f"« {leader} » n'a pas de fenêtre ouverte (personnages : {', '.join(names) or 'aucun'}) : "
                           "choisis-en un autre, ou clique sur Actualiser")
+        elif missing:
+            errors.append(f"Sans fenêtre ouverte : {', '.join(missing)} : décoche-les, ou coche « Connexion "
+                          "automatique »")
     if options is not None:
         needed = dict.fromkeys(arg.split("=")[0] for arg in build_args(choices, settings) if arg.startswith("--"))
         for option in needed:
@@ -371,9 +440,42 @@ def _check_dungeon(errors: list[str], choices: Choices, dungeons: dict[str, tupl
         errors.append(f"Farm de donjon : {name} est dans le monde « {WORLDS.get(world, world)} » : choisis-le dans "
                       "Monde")
     if not choices.team:
-        errors.append("Farm de donjon : en mode équipe seulement (coche « Mode équipe »)")
+        errors.append("Farm de donjon : en équipe seulement (coche au moins 2 personnages, ou ouvre leurs fenêtres)")
     if not choices.passages.strip().isdigit() or int(choices.passages) < 1:
         errors.append(f"Farm de donjon : nombre de passages attendu (1, 2, 3...), pas « {choices.passages.strip()} »")
+    if choices.resume not in RESUMES:
+        errors.append(f"Farm de donjon : reprise inconnue : {choices.resume!r} ({', '.join(filter(None, RESUMES))})")
+    elif choices.resume == "salles" and (not choices.resume_room.strip().isdigit() or int(choices.resume_room) < 1):
+        errors.append(f"Farm de donjon : numéro de la salle attendu (1, 2, 3...), pas « {choices.resume_room.strip()} »")
+
+
+def _setting_list(value) -> list[str]:
+    """Un réglage qui donne un ou plusieurs noms (texte seul ou liste) -> noms en minuscules."""
+    return [name.lower() for name in _setting_names(value)]
+
+
+def deletion_problems(name: str, checked: list[str], open_names: list[str], leader: str, running: bool,
+                      settings: dict) -> list[str]:
+    """Ce qui empêche de supprimer ce personnage de la fenêtre (et de mettre son fichier de côté) ; [] si rien. Sans
+    tenir compte des majuscules. config/settings.yaml n'est jamais réécrit : c'est à l'utilisateur de l'en retirer."""
+    key, shown = name.strip().lower(), f"« {name.strip()} »"
+    problems: list[str] = []
+    if running:
+        problems.append("Le bot tourne : arrête-le d'abord")
+    if key in {n.lower() for n in checked}:
+        problems.append(f"{shown} est coché : décoche-le d'abord")
+    if key in {n.lower() for n in open_names}:
+        problems.append(f"{shown} a une fenêtre du jeu ouverte")
+    if key == leader.strip().lower():
+        problems.append(f"{shown} est le personnage principal : choisis-en un autre")
+    team = settings.get("team") or {}
+    places = [where for where, value in (("connexion.personnages", (settings.get("connexion") or {}).get("personnages")),
+                                         ("team.members", team.get("members")), ("team.leader", team.get("leader")))
+              if key in _setting_list(value)]
+    if places:
+        problems.append(f"{shown} figure dans config/settings.yaml ({', '.join(places)}) : retire-le de "
+                        "config/settings.yaml")
+    return problems
 
 
 def main_options(path: Path = MAIN_PATH) -> frozenset[str] | None:
@@ -405,12 +507,14 @@ def display_command(args: list[str], root: Path = ROOT) -> str:
 
 
 def _allowed(name: str, value) -> bool:
-    return {"mode": lambda: value in MODES and value not in SOON, "monde": lambda: value in WORLDS,
-            "wait_mode": lambda: value in WAIT_MODES, "reading": lambda: value in READINGS}.get(name, lambda: True)()
+    return {"mode": lambda: value in MODES, "monde": lambda: value in WORLDS, "wait_mode": lambda: value in WAIT_MODES,
+            "reading": lambda: value in READINGS, "images": lambda: value in IMAGES,
+            "resume": lambda: value in RESUMES}.get(name, lambda: True)()
 
 
 def load_choices(path: Path, defaults: Choices) -> Choices:
-    """Derniers choix mémorisés ; `defaults` pour ce qui manque ou n'est plus valable (fichier absent, abîmé...)."""
+    """Derniers choix mémorisés ; `defaults` pour ce qui manque ou n'est plus valable (fichier absent, abîmé...), et
+    toujours pour le titre des fenêtres (window.title de config/settings.yaml)."""
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -419,6 +523,8 @@ def load_choices(path: Path, defaults: Choices) -> Choices:
         return defaults
     kept = {}
     for field in fields(Choices):
+        if field.name in NOT_REMEMBERED:
+            continue
         value, default = data.get(field.name), getattr(defaults, field.name)
         if type(value) is type(default) and _allowed(field.name, value):
             kept[field.name] = value
@@ -427,7 +533,8 @@ def load_choices(path: Path, defaults: Choices) -> Choices:
 
 def save_choices(choices: Choices, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(asdict(choices), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    data = {name: value for name, value in asdict(choices).items() if name not in NOT_REMEMBERED}
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
 def stop_key(settings: dict) -> str:

@@ -12,10 +12,13 @@ import time
 from collections.abc import Callable
 
 from bot.brain.game import Game
+from bot.brain.recovery import capture_once
 from bot.perception.frame import Frame
 from bot.perception.layout import Point
-from bot.perception.popups import (FLASH_CLOSE_CLEARANCE, PopupSpec, find_flash_menu, flash_close_point, find_known_popup, find_npc_dialog,
+from bot.perception.popups import (FLASH_CLOSE_CLEARANCE, PopupMatch, PopupSpec, find_context_menu, find_flash_menu,
+                                   find_generic_close, flash_close_point, find_known_popup, find_npc_dialog,
                                    find_quit_dialog_no, find_unknown_window)
+from bot.state.scene import Phase, read_scene
 
 log = logging.getLogger(__name__)
 
@@ -25,6 +28,55 @@ RECLICK_AFTER = 0.8  # la même fenêtre revue avant ce délai : elle se ferme p
 # de suite (il tomberait sur la carte) ; ensuite, nouvel essai (01/10 : un clic de fin de combat n'avait pas pris)
 FLASH_CLICKS = 2  # clics sous la barre de sorts pour fermer le menu de Flash, avant d'abandonner
 FLASH_CLOSE_WAIT = 1.0  # clic -> menu de Flash disparu
+# Même fenêtre revue moins de REPEAT_WINDOW s après sa fermeture : la fermeture n'a pas pris (20/10, S11 et S15 :
+# « Fermer » du résultat cliqué sous « Informations », sans effet, encore et encore). À REPEAT_DIAGNOSE fois, bouton
+# cherché autrement (perception.popups.find_generic_close) ; à REPEAT_GIVE_UP, la fenêtre est notée bloquée jusqu'au
+# tour des fenêtres suivant (new_round), avec un avertissement et une capture.
+REPEAT_WINDOW = 15.0
+REPEAT_DIAGNOSE = 3
+REPEAT_GIVE_UP = 6
+
+
+# Menu d'un personnage (« Baffer, Organiser mon magasin... ») : barre de titre sombre de MENU_TITLE px de référence
+# au-dessus des entrées beiges ; le clic qui le ferme, à MENU_STEP cases à côté de lui, jamais à moins de EDGE_KEEP
+# cases du bord de la carte (un soleil y ferait changer de carte).
+MENU_TITLE = 38
+MENU_STEP = 1.5
+EDGE_KEEP = 2
+MENU_CLOSE_WAIT = 0.6  # clic -> menu disparu
+
+
+def close_context_menu(game: Game, frame: Frame) -> bool:
+    """Menu d'un personnage ouvert par un clic, hors combat : fermé d'un clic sur la carte à côté de lui, qui déplace
+    aussi le personnage. 21/10, Calanques 11,-27 : l'équipe arrivée sur la case du soleil par lequel elle repartait,
+    chacun a cliqué sur lui-même (la touche E cache les autres joueurs, pas soi) ; Échap ne ferme pas ce menu (il ouvre
+    le Menu principal derrière), 8 fenêtres bloquées jusqu'à la fin de la session. Utilisateur : cliquer ailleurs pour
+    déplacer le personnage, puis le soleil. Jamais le menu de Flash (close_flash_menu). False sans menu à fermer."""
+    if find_flash_menu(frame) is not None or read_scene(frame).phase is not Phase.OUT_OF_COMBAT:
+        return False
+    box = find_context_menu(frame)
+    if box is None:
+        return False
+    layout, grid = frame.layout, frame.grid
+    x0, y0, x1, y1 = box
+    title = y0 - layout.length(MENU_TITLE)
+    step_x, step_y = MENU_STEP * 2 * grid.half_w, MENU_STEP * 2 * grid.half_h
+    left, top, right, bottom = layout.map_box
+    keep_x, keep_y = EDGE_KEEP * 2 * grid.half_w, EDGE_KEEP * 2 * grid.half_h
+    candidates = [(x0 - step_x, title), (x1 + step_x, title), (x0, title - step_y), (x0, y1 + step_y),
+                  (x1 + step_x, y1), (x0 - step_x, y1)]
+    points = [grid.center(grid.cell_at(x, y)) for x, y in candidates
+              if left + keep_x <= x <= right - keep_x and top + keep_y <= y <= bottom - keep_y]
+    spread = (grid.half_w * 0.15, grid.half_h * 0.15)
+    for point in points[:2]:
+        log.info("Menu d'un personnage ouvert (Échap ne le ferme pas) : je clique sur la carte à côté, en (%d, %d), "
+                 "ce qui le déplace hors de sa case", *point)
+        game.click(point, spread)
+        game.sleep(MENU_CLOSE_WAIT)
+        if find_context_menu(game.look(park=False)) is None:
+            return True
+    log.warning("Menu d'un personnage toujours ouvert après %d clic(s) à côté", min(2, len(points)))
+    return True
 
 
 def close_flash_menu(game: Game, frame: Frame, around: Point | None = None) -> bool:
@@ -87,6 +139,14 @@ class PopupCloser:
         self._flash_failures = 0  # fermetures du menu de Flash ratées d'affilée
         self._seen_unknown = False
         self._closed: tuple[str, float] | None = None  # dernière fenêtre fermée, et quand
+        self._repeats = 0  # fois de suite où la dernière fenêtre fermée est revenue (REPEAT_WINDOW)
+        self.blocked: str | None = None  # fenêtre qu'on n'arrive pas à fermer : laissée jusqu'au tour suivant
+
+    def new_round(self) -> None:
+        """Nouveau tour des fenêtres (team/loop.py) : une fenêtre notée bloquée est retentée."""
+        self.blocked = None
+        if self._repeats >= REPEAT_GIVE_UP:
+            self._repeats = REPEAT_DIAGNOSE  # retentée directement par le diagnostic, sans tout recompter
 
     def closed_elsewhere(self, name: str) -> None:
         """La fenêtre `name` vient d'être fermée sans passer par ici (clic refait dans chaque fenêtre de l'équipe) :
@@ -121,17 +181,8 @@ class PopupCloser:
             return True
         known = find_known_popup(frame, self.specs)
         if known:
-            if self._closed is not None and self._closed[0] == known.spec.name \
-                    and (left := RECLICK_AFTER - (time.monotonic() - self._closed[1])) > 0:
-                self.game.sleep(left)  # encore à l'écran : soit elle se ferme, soit le clic n'a pas pris (nouvel essai)
-                return True
-            log.info("Fenêtre « %s » : je la ferme", known.spec.name)
-            if known.close_point:
-                self.game.click(known.close_point, known.close_spread)
-            else:
-                self.game.press(known.spec.key)
-            self._closed = (known.spec.name, time.monotonic())
-            self.game.sleep(AFTER_CLOSE)
+            return self._close_known(frame, known)
+        if close_context_menu(self.game, frame):
             return True
 
         if find_unknown_window(frame) is None:
@@ -153,4 +204,42 @@ class PopupCloser:
         log.info("J'essaie de la fermer avec %s (essai %d/%d)", self.unknown_key.upper(), self._attempts, MAX_ATTEMPTS)
         self.game.press(self.unknown_key)
         self.game.sleep(0.8)
+        return True
+
+    def _close_known(self, frame: Frame, known: PopupMatch) -> bool:
+        name = known.spec.name
+        if self.blocked == name:
+            return False  # déjà signalée : pas d'autre essai avant le tour des fenêtres suivant
+        now = time.monotonic()
+        again = self._closed is not None and self._closed[0] == name
+        if again and (left := RECLICK_AFTER - (now - self._closed[1])) > 0:
+            self.game.sleep(left)  # encore à l'écran : soit elle se ferme, soit le clic n'a pas pris (nouvel essai)
+            return True
+        self._repeats = self._repeats + 1 if again and now - self._closed[1] < REPEAT_WINDOW else 0
+        if self._repeats >= REPEAT_GIVE_UP:
+            self.blocked = name
+            path = capture_once(self.game, frame.image, "fenetre_qui_ne_se_ferme_pas")
+            log.warning("Fenêtre « %s » revenue %d fois de suite après sa fermeture : je la laisse jusqu'au prochain "
+                        "tour des fenêtres. Ferme-la toi-même si elle reste%s", name, self._repeats,
+                        f", et envoie-moi la capture : {path}" if path else "")
+            return False
+        if self._repeats >= REPEAT_DIAGNOSE:
+            generic = find_generic_close(frame, known.box)
+            if generic is not None:
+                point, what = generic
+                log.info("Fenêtre « %s » revenue %d fois après sa fermeture : j'essaie un autre bouton (%s) en "
+                         "(%d, %d)", name, self._repeats, what, *point)
+                self.game.click(point, frame.layout.spread(4, 3))
+                self._closed = (name, time.monotonic())
+                self.game.sleep(AFTER_CLOSE)
+                return True
+            log.info("Fenêtre « %s » revenue %d fois après sa fermeture, et aucun autre bouton sûr : je la referme "
+                     "comme d'habitude", name, self._repeats)
+        log.info("Fenêtre « %s » : je la ferme", name)
+        if known.close_point:
+            self.game.click(known.close_point, known.close_spread)
+        else:
+            self.game.press(known.spec.key)
+        self._closed = (name, time.monotonic())
+        self.game.sleep(AFTER_CLOSE)
         return True

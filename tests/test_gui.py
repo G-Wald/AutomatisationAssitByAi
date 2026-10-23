@@ -2,6 +2,7 @@
 processus du bot (un petit script Python à sa place), et option --set (bot/config.py)."""
 
 import argparse
+import json
 import sys
 import time
 from dataclasses import replace
@@ -11,9 +12,11 @@ import pytest
 from bot.brain.travel import WORLDS as TRAVEL_WORLDS
 from bot.config import apply_overrides, load_settings, parse_override
 from bot.brain.memory import READING_MODES
-from bot.gui.launch import (MAIN_PATH, READINGS, WORLDS, BotProcess, Choices, build_args, character_names, coords_text,
-                            default_choices, display_command, format_override, known_dungeons, load_choices,
-                            main_options, overrides, parse_coords, save_choices, validate, window_title)
+from bot.gui.launch import (IMAGES, MAIN_PATH, READINGS, RESUMES, WORLDS, BotProcess, Choices, build_args,
+                            character_names, coords_text, default_choices, deletion_problems, display_command,
+                            dungeon_argument, format_override, known_dungeons, load_choices, main_options, overrides,
+                            parse_coords, plays_as_team, save_choices, team_names, validate, window_title)
+from bot.team.dungeon import STEPS as DUNGEON_STEPS
 
 SETTINGS = {
     "window": {"title": "- Dofus Retro"},
@@ -85,8 +88,113 @@ def test_characters_from_the_interface():
     assert default_choices(settings).characters == "Gela-[A13]"
     args = build_args(Choices(connect=True, characters="Gela-[A13],Brawli-[Gal]"), settings)
     assert args[args.index("--personnages") + 1] == "Gela-[A13],Brawli-[Gal]"
-    assert "--personnages" not in build_args(Choices(connect=True, characters="Gela-[A13]"), settings)  # celui du réglage
-    assert "--personnages" not in build_args(Choices(characters="Gela-[A13],X"), settings)  # sans connexion
+    # Toujours transmis, même celui du réglage et sans connexion : ils limitent l'équipe jouée (connection_settings
+    # de bot/__main__.py, qui en fait team.members).
+    assert "--personnages" in build_args(Choices(connect=True, characters="Gela-[A13]"), settings)
+    args = build_args(Choices(characters="Gela-[A13],X"), settings)
+    assert args[args.index("--personnages") + 1] == "Gela-[A13],X" and "--connexion" not in args
+    assert "--personnages" not in build_args(Choices(), settings)
+
+
+def test_team_follows_the_characters():
+    # Plus de case « Mode équipe » : en équipe dès 2 personnages cochés, sinon (aucun coché) dès 2 fenêtres ouvertes.
+    assert plays_as_team("Gela-[A13],Brawli-[Gal]", [])
+    assert plays_as_team("", ["Jesuisleking", "Walitcoin"])
+    assert not plays_as_team("", ["Jesuisleking"])
+    assert not plays_as_team("Walitcoin", ["Jesuisleking", "Walitcoin"])  # un seul coché : l'équipe limitée à lui
+    assert team_names("", ["Jesuisleking", "Walitcoin"]) == ("Jesuisleking", "Walitcoin")
+    errors = validate(choices(team=True, leader="Walitcoin", characters="Walitcoin,Autre"), SETTINGS, TITLES)
+    assert errors == ["Sans fenêtre ouverte : Autre : décoche-les, ou coche « Connexion automatique »"]
+    assert validate(choices(team=True, leader="Walitcoin", characters="Walitcoin,Autre", connect=True), SETTINGS,
+                    TITLES) == []
+
+
+def test_observation_with_connection_is_reported():
+    assert validate(choices(observe=True, connect=True), SETTINGS) == [
+        "Observation : aucun clic, la connexion automatique serait ignorée : décoche l'une des deux"]
+    assert validate(choices(observe=True), SETTINGS) == []
+
+
+def test_session_limits():
+    assert "--combats" not in build_args(choices(), SETTINGS) and "--minutes" not in build_args(choices(), SETTINGS)
+    args = build_args(choices(combats=" 3 ", minutes="1,5"), SETTINGS)
+    assert args[args.index("--combats") + 1] == "3" and args[args.index("--minutes") + 1] == "1.5"
+    assert validate(choices(combats="3", minutes="90"), SETTINGS, options=main_options()) == []
+    assert validate(choices(combats="0"), SETTINGS) == [
+        "S'arrêter après : nombre de combats attendu (1, 2, 3...), pas « 0 »"]
+    assert validate(choices(combats="2.5"), SETTINGS)[0].startswith("S'arrêter après : nombre de combats")
+    for wrong in ("0", "-1", "abc", "inf", "nan"):
+        assert validate(choices(minutes=wrong), SETTINGS) == [
+            f"S'arrêter après : nombre de minutes attendu (30, 1,5...), pas « {wrong} »"], wrong
+    assert {"--combats", "--minutes"} <= main_options()
+
+
+def test_notifications_only_when_not_default():
+    team = {"team": True, "leader": "Jesuisleking", "notifications": True}
+    on = {**SETTINGS, "team": {"enabled": False, "turn_signal": "notifications"}}
+    assert "--notifications" in build_args(choices(**team), SETTINGS)  # réglage : timeline
+    assert "--notifications" not in build_args(replace(default_choices(on), **team), on)  # déjà le réglage
+    assert "team.turn_signal=timeline" in build_args(replace(default_choices(on), **{**team, "notifications": False}),
+                                                     on)
+    assert "--notifications" not in build_args(choices(notifications=True), SETTINGS)  # solo : sans objet
+
+
+def test_title_comes_from_settings(tmp_path):
+    # Plus de champ « Titre des fenêtres » : window.title de config/settings.yaml, jamais celui de data/gui.json.
+    settings = {**SETTINGS, "window": {"title": "- Dofus Retro v1"}}
+    defaults = default_choices(settings)
+    assert defaults.title == "- Dofus Retro v1"
+    path = tmp_path / "gui.json"
+    path.write_text('{"title": "- Autre jeu", "verbose": true}', encoding="utf-8")
+    assert load_choices(path, defaults) == replace(defaults, verbose=True)
+    save_choices(replace(defaults, title="- Autre jeu"), path)
+    assert "title" not in json.loads(path.read_text(encoding="utf-8"))
+    assert "--title" not in build_args(defaults, settings)
+
+
+def test_images_override():
+    assert default_choices({"logs": {"images": "Problèmes"}}).images == "problemes"
+    assert default_choices({}).images == "toutes" and tuple(IMAGES) == ("toutes", "problemes", "aucune")
+    assert overrides(choices(), SETTINGS) == []
+    args = build_args(choices(images="aucune"), SETTINGS)
+    assert args[-2:] == ["--set", "logs.images=aucune"]
+    assert apply_overrides({"logs": {"images": "toutes"}}, [parse_override(args[-1])]) == {"logs": {"images": "aucune"}}
+    few = {**SETTINGS, "logs": {"images": "problemes"}}
+    assert "--set" not in build_args(default_choices(few), few)
+    assert validate(choices(images="quelques"), SETTINGS) == [
+        "Captures inconnues : 'quelques' (toutes, problemes, aucune)"]
+
+
+def test_dungeon_resume_argument():
+    # Reprise du farm de donjon (bot/__main__.py, --donjon) : NOM:ETAPE, ou NOM:salles:N.
+    assert tuple(RESUMES) == ("", *DUNGEON_STEPS, "salles")
+    team = {"team": True, "leader": "Koalaloupour", "mode": "donjon", "donjon": "incarnam"}
+    assert dungeon_argument(choices(**team)) == "incarnam"
+    assert dungeon_argument(choices(**team, resume="dalle")) == "incarnam:dalle"
+    assert dungeon_argument(choices(**team, resume="salles", resume_room=" 3 ")) == "incarnam:salles:3"
+    args = build_args(choices(**team, resume="soleil", passages="2"), SETTINGS)
+    assert args[2:6] == ["--donjon", "incarnam:soleil", "--passages", "2"]
+    assert validate(choices(**team, resume="salles", resume_room="2"), SETTINGS) == []
+    assert validate(choices(**team, resume="salles", resume_room="0"), SETTINGS) == [
+        "Farm de donjon : numéro de la salle attendu (1, 2, 3...), pas « 0 »"]
+    assert validate(choices(**team, resume="porte"), SETTINGS)[0].startswith("Farm de donjon : reprise inconnue")
+    assert dungeon_argument(choices(mode="carte", resume="dalle")) == ":dalle"  # pas utilisé hors du farm de donjon
+    assert "--donjon" not in build_args(choices(resume="dalle"), SETTINGS)
+
+
+def test_deletion_problems():
+    settings = {"connexion": {"personnages": ["Gela-[A13]"]}, "team": {"members": "Brawli-[Gal]", "leader": "Chef"}}
+    assert deletion_problems("Vieux", [], [], "", False, settings) == []
+    assert deletion_problems("vieux", ["Vieux"], [], "", False, {}) == ["« vieux » est coché : décoche-le d'abord"]
+    assert deletion_problems("Vieux", [], ["VIEUX"], "", False, {}) == ["« Vieux » a une fenêtre du jeu ouverte"]
+    assert deletion_problems("Vieux", [], [], "vieux", False, {}) == [
+        "« Vieux » est le personnage principal : choisis-en un autre"]
+    assert deletion_problems("Vieux", [], [], "", True, {}) == ["Le bot tourne : arrête-le d'abord"]
+    assert deletion_problems("gela-[a13]", [], [], "", False, settings) == [
+        "« gela-[a13] » figure dans config/settings.yaml (connexion.personnages) : retire-le de config/settings.yaml"]
+    assert "(team.members)" in deletion_problems("Brawli-[Gal]", [], [], "", False, settings)[0]
+    assert "(team.leader)" in deletion_problems("chef", [], [], "", False, settings)[0]
+    assert len(deletion_problems("Chef", ["Chef"], ["Chef"], "Chef", True, settings)) == 5
 
 
 def test_worlds_match_travel():
@@ -142,7 +250,7 @@ def test_dungeon_farm_errors():
     assert "n'est pas dans config/donjons_entree.yaml" in validate(choices(**team, donjon="bouftou"), SETTINGS)[0]
     assert validate(choices(**team, donjon="incarnam", monde="douze"), SETTINGS)[0].endswith("choisis-le dans Monde")
     assert validate(choices(mode="donjon", donjon="incarnam"), SETTINGS) == [
-        "Farm de donjon : en mode équipe seulement (coche « Mode équipe »)"]
+        "Farm de donjon : en équipe seulement (coche au moins 2 personnages, ou ouvre leurs fenêtres)"]
     assert validate(choices(**team, donjon="incarnam", passages="0"), SETTINGS)[0].startswith(
         "Farm de donjon : nombre de passages")
 
@@ -254,16 +362,17 @@ def test_coordinate_errors():
     assert validate(choices(mode="carte", zone_xy="mauvais"), SETTINGS) == []  # champ d'un autre mode : ignoré
 
 
-def test_harvest_is_not_available_yet():
-    assert validate(choices(mode="recolte"), SETTINGS) == ["Récolte (métier) : pas encore disponible"]
+def test_harvest_mode_is_gone():
+    # Plus de mode « Récolte » (jamais programmé) ; un vieux data/gui.json qui l'a gardé revient au défaut.
+    assert validate(choices(mode="recolte"), SETTINGS) == ["Mode inconnu : 'recolte'"]
 
 
 def test_team_errors():
-    assert validate(choices(team=True), SETTINGS) == ["Mode équipe : choisis le personnage principal"]
+    assert validate(choices(team=True), SETTINGS) == ["Jeu en équipe : choisis le personnage principal"]
     assert "n'a pas de fenêtre ouverte (personnages : Jesuisleking, Walitcoin)" in validate(
         choices(team=True, leader="Autre"), SETTINGS, TITLES)[0]
     assert validate(choices(team=True, leader="Autre"), SETTINGS, ["Dofus Retro v1.49.5"])[0].startswith(
-        "Mode équipe : aucune fenêtre de personnage ouverte")
+        "Jeu en équipe : aucune fenêtre de personnage ouverte")
     assert validate(choices(), SETTINGS, [])[0].startswith("Aucune fenêtre du jeu ouverte")
     assert validate(choices(), SETTINGS, ["Dofus Retro v1.49.5"]) == []  # solo : l'écran de connexion suffit
     assert validate(choices(title=" "), SETTINGS)[0].startswith("Titre des fenêtres du jeu vide")
