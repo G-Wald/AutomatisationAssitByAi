@@ -14,6 +14,7 @@ pixel près (03/10 : 94 infobulles de 26 captures Z) : on en déduit de quel cô
 (under_its_group) et si un bord l'a repoussée (elle n'est plus centrée sur une colonne de cases).
 """
 
+import re
 from dataclasses import dataclass
 
 import cv2
@@ -197,6 +198,27 @@ def under_its_group(tooltip: GroupTooltip, frame: Frame) -> bool | None:
     if (if_above <= ROW_FIT) == (if_under <= ROW_FIT):
         return None
     return if_under <= ROW_FIT
+
+
+LEVEL_ZOOM = 3  # titre « Niveau N » agrandi pour l'OCR de Windows (lu « Niveau 7 » sur les captures du 23/10)
+
+
+def read_group_level(frame: Frame, tooltip: GroupTooltip) -> int | None:
+    """Niveau total du groupe, lu dans le titre « Niveau N » de son infobulle ; None si l'OCR ne le lit pas."""
+    from bot.perception.chat import ocr_available, ocr_lines  # OCR de Windows (chat.py)
+
+    if not ocr_available():
+        return None
+    x0, x1 = round(tooltip.left), round(tooltip.right)
+    y0, y1 = round(tooltip.top), round(2 * tooltip.title_y - tooltip.top + 4)
+    crop = frame.image[max(0, y0):y1, max(0, x0):x1]
+    if crop.size == 0:
+        return None
+    for line in ocr_lines(cv2.resize(crop, None, fx=LEVEL_ZOOM, fy=LEVEL_ZOOM, interpolation=cv2.INTER_CUBIC)):
+        match = re.search(r"Niveau\s*(\d+)", line, re.IGNORECASE)
+        if match:
+            return int(match.group(1))
+    return None
 
 
 def find_group_tooltips(frame: Frame) -> list[GroupTooltip]:

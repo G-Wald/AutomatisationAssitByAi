@@ -39,7 +39,7 @@ from bot.brain.recovery import capture_once, keyboard_answers, mark_deaf, mark_h
 from bot.debug.draw import annotate
 from bot.perception.frame import Frame
 from bot.perception.groups import (OFF_COLUMN, TITLE_SHIFT, GroupTooltip, can_be_under_its_group, column_offset,
-                                   find_group_tooltips, under_its_group)
+                                   find_group_tooltips, read_group_level, under_its_group)
 from bot.perception.layout import Layout, Point
 from bot.perception.popups import find_context_menu, find_flash_menu, find_small_menu
 from bot.perception.templates import match_template
@@ -128,6 +128,7 @@ class EngageSettings:
     enabled: bool = True
     show_groups_key: str = "z"
     max_monsters: int = 8  # groupes plus gros ignorés (lignes de l'infobulle)
+    max_level: int = 0  # groupes de niveau total plus haut ignorés (titre « Niveau N » de l'infobulle) ; 0 : sans limite
     pause_between_fights: tuple[float, float] = (1.5, 2.5)
     retry_delay: float = 10.0  # attente quand aucun groupe n'est attaquable
     # Arrière-plan : bouton du clic direct sur le groupe (engage.clic_sonde). Gauche : à côté, le personnage y marche ;
@@ -144,6 +145,7 @@ class EngageSettings:
             enabled=bool(engage.get("enabled", cls.enabled)),
             show_groups_key=engage.get("show_groups_key") or cls.show_groups_key,
             max_monsters=int(engage.get("max_monsters", cls.max_monsters)),
+            max_level=int(engage.get("max_level", cls.max_level) or 0),
             pause_between_fights=tuple(float(v) for v in engage.get("pause_between_fights", cls.pause_between_fights)),
             retry_delay=float(engage.get("retry_delay", cls.retry_delay)),
             probe_click=probe_click,
@@ -411,6 +413,8 @@ class Engager:
                 return False
         self.groups_seen = len(seen)
         tooltips = [t for t in seen if t.monsters <= self.settings.max_monsters]
+        if self.settings.max_level:
+            tooltips = self._not_too_strong(frame, tooltips)
         self.game.recorder.save(frame.image, "groupes_z", quality=92)  # capture brute, pour réanalyse
         firsts = [points[0] for points in (hover_points(t, frame) for t in tooltips) if points]  # 1er survol prévu
         self.game.recorder.save(
@@ -476,6 +480,20 @@ class Engager:
         self.missed = any(not self._skipped_now(t, frame) for t in tooltips)
         self.none_found = not self.missed
         return False
+
+    def _not_too_strong(self, frame: Frame, tooltips: list[GroupTooltip]) -> list[GroupTooltip]:
+        """Groupes de niveau total au plus engage.max_level (23/10 : zones à choisir pour l'équipe, Porkass jusqu'au
+        niveau 30 par monstre). Niveau illisible : gardé, et dit."""
+        kept = []
+        for tooltip in tooltips:
+            level = read_group_level(frame, tooltip)
+            if level is not None and level > self.settings.max_level:
+                log.info("Groupe de niveau %d laissé (engage.max_level : %d)", level, self.settings.max_level)
+                continue
+            if level is None:
+                log.debug("Niveau du groupe illisible : je le garde")
+            kept.append(tooltip)
+        return kept
 
     def _candidates(self, tooltips: list[GroupTooltip], frame: Frame) -> list[GroupTooltip]:
         """Groupes à essayer : pas ceux ratés récemment, sauf s'il n'y a qu'eux sur la carte et qu'ils l'ont été il y a

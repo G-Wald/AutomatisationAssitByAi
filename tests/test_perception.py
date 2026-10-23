@@ -763,3 +763,13 @@ def test_click_point_avoids_a_challenge_icon():
     icons = challenge_icons(frame)
     (px, py), _ = clear_point(frame.grid, (2, 8), [], icons)
     assert not any(x0 <= px <= x1 and y0 <= py <= y1 for x0, y0, x1, y1 in icons)
+
+
+@pytest.mark.skipif(not __import__("bot.perception.chat", fromlist=["x"]).ocr_available(), reason="OCR de Windows absent")
+def test_group_level_read_in_its_tooltip_title():
+    # 23/10 : engage.max_level écarte les groupes trop forts pour l'équipe (Porkass jusqu'au niveau 30 par monstre).
+    from bot.perception.groups import find_group_tooltips, read_group_level
+
+    frame = load_frame("groupe_niveau_7")
+    (tooltip,) = find_group_tooltips(frame)
+    assert read_group_level(frame, tooltip) == 7

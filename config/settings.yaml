@@ -64,6 +64,7 @@ engage:                    # hors combat : attaquer les groupes de monstres (dé
   enabled: true
   show_groups_key: "z"     # touche qui affiche l'infobulle de tous les groupes de la carte
   max_monsters: 8          # ignore les groupes plus gros (lignes de monstres de l'infobulle)
+  max_level: 70            # ignore les groupes de niveau total plus haut (« Niveau N » de l'infobulle) ; 0 : sans limite (23/10)
   pause_between_fights: [1.5, 2.5]   # secondes entre la fin d'un combat et l'attaque suivante
   retry_delay: 5          # secondes avant de rechercher quand aucun groupe n'est attaquable, ou que tous ceux de la
                           # carte viennent d'être ratés (introuvables, clic sans menu « Attaquer ») : retentés à 10 s
