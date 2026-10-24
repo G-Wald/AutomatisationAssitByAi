@@ -436,6 +436,13 @@ class Traveler:
             log.info("Coordonnées lues « %s »%s (capture : %s)", label.text,
                      f", carte {expected[0]},{expected[1]} d'après le chemin" if expected else " : position inconnue", path)
 
+    @property
+    def passages(self) -> "Passages":
+        """Référence des passages de la région (vus en jeu, puis référence complétée), chargée une fois."""
+        if getattr(self, "_passages", None) is None or self._passages_region != self.region:
+            self._passages, self._passages_region = Passages.load(self.region), self.region
+        return self._passages
+
     def key(self, label: MapLabel | None = None) -> str | None:
         """« Région x,y » de la carte actuelle (région : réglage travel.region)."""
         return World.key(self.region, self.coords)
@@ -482,6 +489,12 @@ class Traveler:
         reference = {side: cells[0] for side, cells in info.suns.items()} if info else {}
         for side, cells in (info.client_suns.items() if info else ()):
             reference.setdefault(side, cells[0])  # case donnée par le client (soleil « conditionnel »)
+        if self.coords is not None and self._sure_here():
+            passages = self.passages
+            for side in DELTA:
+                cell = passages.sun_cell(self.coords, side)
+                if cell is not None:
+                    reference.setdefault(side, cell)  # référence complétée (data/references), un seul soleil du côté
         merged = {**reference, **known}  # ce que le bot a vu prime sur les références
         for side in [s for s in merged if self.world.several(key, s)]:
             del merged[side]  # plusieurs soleils de ce côté (rempart) : la case gardée ne dit pas lequel est le nôtre
@@ -1320,7 +1333,12 @@ class ZoneRoamer:
 
 # Itinéraire (Journey._cost) : passage jamais pris, et entrée dans une autre zone que celles du départ et de l'arrivée.
 UNCONFIRMED_COST, ZONE_COST = 2.0, 2.0
+# Référence complétée (data/references, tools/reference_complete.py : sorties StarLoco contrôlées sur les cartes
+# officielles, 482 passages sur 482 d'accord avec ce que le bot a vu, 24/10) : passage de la référence, et côté sans
+# aucune sortie connue d'une carte que la référence décrit.
+REFERENCE_COST, NO_EXIT_COST = 1.2, 6.0
 PASSAGES_DIR = PROJECT_DIR / "config" / "monde" / "passages"
+REFERENCES_DIR = PROJECT_DIR / "data" / "references"
 
 
 class Passages:
@@ -1329,10 +1347,15 @@ class Passages:
     chiffrées (docs/rapports/cles_cartes.md), on ne sait par où l'on passe qu'en y étant allé. Gardée à part de la
     mémoire, qu'une lecture ratée peut fausser (23/10 : 5,-30 droite notée « bloquée » à tort).
 
-    Format : {"x,y": {"sorties": {côté: "x,y" | "bloquée"}, "bloquees_depuis": {côté d'arrivée: [côtés]}}}."""
+    Format : {"x,y": {"sorties": {côté: "x,y" | "bloquée"}, "bloquees_depuis": {côté d'arrivée: [côtés]}}}.
 
-    def __init__(self, maps: dict | None = None) -> None:
+    `reference` : la référence complétée (data/references/<région>.json, locale, non versionnée ; sorties d'un
+    émulateur contrôlées sur les cartes officielles : tools/reference_complete.py), au format {"x,y": {"sorties":
+    {côté: {"vers": "x,y", "cases": [[i, j], ...]}}, "bloquees_depuis": {...}}} ; ce qui a été vu en jeu prime."""
+
+    def __init__(self, maps: dict | None = None, reference: dict | None = None) -> None:
         self.maps = maps or {}
+        self.reference = reference or {}
 
     @staticmethod
     def path(region: str | None) -> Path:
@@ -1342,11 +1365,13 @@ class Passages:
     @classmethod
     def load(cls, region: str | None) -> "Passages":
         path = cls.path(region)
-        if not path.exists():
-            return cls()
-        return cls(json.loads(path.read_text(encoding="utf-8")))
+        maps = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+        reference_path = REFERENCES_DIR / path.name
+        reference = json.loads(reference_path.read_text(encoding="utf-8")) if reference_path.exists() else {}
+        return cls(maps, reference)
 
-    def exits(self, coords: tuple[int, int]) -> dict[str, tuple[int, int] | str]:
+    def seen(self, coords: tuple[int, int]) -> dict[str, tuple[int, int] | str]:
+        """Sorties vues en jeu (référence des passages)."""
         out = {}
         for side, dest in ((self.maps.get(f"{coords[0]},{coords[1]}") or {}).get("sorties") or {}).items():
             if dest == BLOCKED:
@@ -1357,10 +1382,34 @@ class Passages:
                     out[side] = where
         return out
 
+    def referenced(self, coords: tuple[int, int]) -> dict[str, tuple[int, int]]:
+        """Sorties de la référence complétée ; {} si elle ne décrit pas la carte."""
+        out = {}
+        for side, exit_ in ((self.reference.get(f"{coords[0]},{coords[1]}") or {}).get("sorties") or {}).items():
+            where = _coords_of(f"x {exit_.get('vers', '')}")
+            if where is not None:
+                out[side] = where
+        return out
+
+    def describes(self, coords: tuple[int, int]) -> bool:
+        return f"{coords[0]},{coords[1]}" in self.reference
+
+    def exits(self, coords: tuple[int, int]) -> dict[str, tuple[int, int] | str]:
+        return {**self.referenced(coords), **self.seen(coords)}  # ce qui a été vu en jeu prime
+
+    def sun_cell(self, coords: tuple[int, int], side: str) -> tuple[int, int] | None:
+        """Case du soleil d'un côté d'après la référence complétée, s'il n'y en a qu'un (sinon : rempart, la recherche
+        à l'écran choisit)."""
+        cells = (((self.reference.get(f"{coords[0]},{coords[1]}") or {}).get("sorties") or {}).get(side) or {}).get("cases")
+        return tuple(cells[0]) if cells and len(cells) == 1 else None
+
     def blocked_from(self, coords: tuple[int, int], entry: str | None) -> set[str]:
         if not entry:
             return set()
-        return set(((self.maps.get(f"{coords[0]},{coords[1]}") or {}).get("bloquees_depuis") or {}).get(entry) or [])
+        key = f"{coords[0]},{coords[1]}"
+        seen = ((self.maps.get(key) or {}).get("bloquees_depuis") or {}).get(entry) or []
+        computed = ((self.reference.get(key) or {}).get("bloquees_depuis") or {}).get(entry) or []
+        return set(seen) | set(computed)
 
 
 class Journey:
@@ -1506,11 +1555,14 @@ class Journey:
         region = self.traveler.region
         dest_key = World.key(region, dest)
         if self.world.destination(World.key(region, coords), side) == dest_key \
-                or self.passages.exits(coords).get(side) == dest:
+                or self.passages.seen(coords).get(side) == dest:
             return 1.0
+        if self.passages.referenced(coords).get(side) == dest:
+            return REFERENCE_COST
         zone = self.traveler.atlas.zone
         here_zone, dest_zone = zone(region, coords), zone(region, dest)
-        return UNCONFIRMED_COST + (ZONE_COST if dest_zone != here_zone and dest_zone not in self._zones_ok else 0.0)
+        unknown = NO_EXIT_COST if self.passages.describes(coords) else UNCONFIRMED_COST
+        return unknown + (ZONE_COST if dest_zone != here_zone and dest_zone not in self._zones_ok else 0.0)
 
     def _known(self, coords: tuple[int, int]) -> bool:
         """Carte des références, ou déjà vue."""

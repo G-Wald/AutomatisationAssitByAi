@@ -841,3 +841,21 @@ def test_passages_reference_exported_from_the_memory_without_losing_a_known_pass
     passages = Passages(out)
     assert passages.exits((5, -30)) == {"droite": (6, -30), "bas": "bloquée"}
     assert passages.blocked_from((5, -30), "droite") == {"gauche"} and passages.blocked_from((5, -30), None) == set()
+
+
+def test_completed_reference_used_after_what_was_seen_in_game():
+    # 24/10 : référence complétée (data/references, StarLoco contrôlé sur les cartes officielles) : passages et cases des
+    # soleils ; ce qui a été vu en jeu prime ; blocages selon le côté d'arrivée calculés sur les cases praticables.
+    from bot.brain.travel import Passages
+
+    seen = {"5,-30": {"sorties": {"bas": "bloquée"}, "bloquees_depuis": {"haut": ["bas"]}}}
+    reference = {"5,-30": {"sorties": {"droite": {"vers": "6,-30", "cases": [[27, 25]]},
+                                       "gauche": {"vers": "4,-30", "cases": [[1, 29], [1, 7]]},
+                                       "bas": {"vers": "5,-29", "cases": [[13, 31]]}},
+                           "bloquees_depuis": {"droite": ["gauche"]}}}
+    passages = Passages(seen, reference)
+    assert passages.exits((5, -30)) == {"droite": (6, -30), "gauche": (4, -30), "bas": "bloquée"}
+    assert passages.sun_cell((5, -30), "droite") == (27, 25)
+    assert passages.sun_cell((5, -30), "gauche") is None  # deux soleils de ce côté : la recherche à l'écran choisit
+    assert passages.blocked_from((5, -30), "droite") == {"gauche"} and passages.blocked_from((5, -30), "haut") == {"bas"}
+    assert passages.describes((5, -30)) and not passages.describes((0, 0))
