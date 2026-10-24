@@ -70,3 +70,5 @@ def _without_local_reference(monkeypatch, tmp_path):
     """La référence complétée (data/references) est locale, non versionnée : les tests ne dépendent pas de sa présence
     (ceux qui en ont besoin construisent la leur)."""
     monkeypatch.setattr("bot.brain.travel.REFERENCES_DIR", tmp_path / "references")
+    monkeypatch.setattr("bot.brain.arena.ARENA_DIR", tmp_path / "references")
+    monkeypatch.setattr("bot.brain.arena.Arenas._loaded", None)

@@ -58,6 +58,7 @@ from bot.brain.engine import (
     cast_blocker,
     plan_turn,
 )
+from bot.brain.arena import Arena, Arenas
 from bot.brain.game import Game
 from bot.brain.recovery import is_deaf, mark_deaf, mark_heard, report_episode, unlock_click
 from bot.brain.spellbook import SpellBook
@@ -114,6 +115,7 @@ ALLY_RANGE_BONUS = 2
 MAX_CASTS_PER_TURN = 5  # garde-fou
 RELIEF_MARGIN = 4  # cases de marge sur la portée prévue, sur une carte à plusieurs niveaux
 RELIEF_MIN_WRONG = 2  # cases à portée mal prédites, au moins, pour croire la carte à relief (une seule : animation, ombre)
+ARENA_TRIES = 6  # essais de reconnaissance de la carte officielle par combat (_recognize_arena)
 # Arrière-plan, 2e rangée de la barre (cases 8 à 14) : Ctrl+1 à Ctrl+7 ne passent pas (l'état de Ctrl est celui du
 # vrai clavier) et un clic gauche sur la case ne sélectionne pas le sort (Épée du destin, 11/10). Le jeu leur donne un
 # 2e raccourci, « 1 » à « 7 » (Raccourcis clavier, capture de l'utilisateur du 11/10) : touches du pavé numérique.
@@ -318,10 +320,23 @@ class MapMemory:
     # diminuée des dégâts attendus de chaque sort parti. Le moteur s'en sert pour achever un ennemi et pour que toute
     # l'équipe tape le plus entamé (03/10). Oubliée quand l'ennemi quitte sa case (déplacé, poussé, mort).
     life: dict[Cell, int] = field(default_factory=dict)
+    # Carte officielle reconnue (brain/arena.py) : ses blocs et trous font foi pour tout le combat ; l'écran ne sert
+    # plus qu'à voir les combattants (24/10 : 1388 captures, aucun bloc officiel lu comme du sol, 1513 sols lus blocs).
+    arena: Arena | None = None
+    arena_tries: int = 0
+
+    def adopt(self, arena: Arena) -> None:
+        self.arena = arena
+        self.obstacles = set(arena.blocks)
+        self.unwalkable = set(arena.unwalkable)
+        self.known = True
 
     def learn_terrain(self, terrain: Terrain, fighters: list[Fighter]) -> None:
         """Carte propre : une case revue comme du sol n'est plus un obstacle (un chiffre de dégâts ou une animation
         posés dessus un instant ne la bloquent pas pour le reste du combat)."""
+        if self.arena is not None:
+            self.seen |= terrain.seen | {f.cell for f in fighters}
+            return
         self.obstacles = (self.obstacles - terrain.seen) | terrain.blocks
         self.unwalkable = (self.unwalkable - terrain.seen) | terrain.blocks | terrain.holes
         self.seen |= terrain.seen | {f.cell for f in fighters}
@@ -329,6 +344,9 @@ class MapMemory:
 
     def learn_range(self, view: RangeView) -> None:
         free = view.castable | view.no_sight
+        if self.arena is not None:
+            self.seen |= free | view.obstacles
+            return
         # Paroi teintée par la portée (côté d'un plateau ou d'une fosse) : pas un bloc, même lue bloc avant (17/10).
         self.obstacles = (self.obstacles - free - view.walls) | view.obstacles
         self.unwalkable = (self.unwalkable - free) | view.obstacles
@@ -338,7 +356,7 @@ class MapMemory:
     def unseen(self, cells: set[Cell]) -> set[Cell]:
         """Terrain lu, les cases jamais vues depuis le début du combat (cachées par le corps d'un combattant) : pas de
         marche, ce sont peut-être des trous (03/10 : l'Enutrof a voulu aller sur un trou caché derrière un allié)."""
-        return cells - self.seen if self.known else set()
+        return cells - self.seen if self.known and self.arena is None else set()
 
     def keep_life(self, enemies: set[Cell]) -> None:
         """Seule reste la vie des ennemis encore sur leur case : un autre a pu prendre celle d'un ennemi parti."""
@@ -1074,7 +1092,25 @@ class CombatAI:
                 self._warned_not_tactical = True
                 log.warning("Carte hors mode tactique : obstacles inconnus, déplacements estimés sans eux")
         elif not spell_range_visible(frame):
-            self.map.learn_terrain(read_terrain(frame, fighters), fighters)
+            terrain = read_terrain(frame, fighters)
+            self._recognize_arena(terrain=terrain)
+            self.map.learn_terrain(terrain, fighters)
+
+    def _recognize_arena(self, terrain: Terrain | None = None, placed: set[Cell] | None = None) -> None:
+        """Carte officielle du combat (brain/arena.py), reconnue au terrain lu ou aux cases de placement ; ARENA_TRIES
+        essais par combat (la reconnaissance compare toutes les cartes du jeu)."""
+        if self.map.arena is not None or self.map.arena_tries >= ARENA_TRIES:
+            return
+        arenas = Arenas.load()
+        if not len(arenas):
+            return
+        self.map.arena_tries += 1
+        arena = arenas.by_terrain(terrain) if terrain is not None else arenas.by_placement(placed or set())
+        if arena is not None:
+            self.map.adopt(arena)
+            log.info("Carte du combat reconnue %s : %s (référence officielle : %d blocs, %d trous) ; obstacles et "
+                     "lignes de vue d'après le jeu", "au terrain" if terrain is not None else "au placement",
+                     arena.coords, len(arena.blocks), len(arena.holes))
 
     @property
     def _watching(self) -> bool:
@@ -2014,7 +2050,11 @@ class CombatAI:
             return ""
         grid = frame.grid
         standing = [Fighter(team, *grid.center(c), c) for team, cells in placement.occupied.items() for c in cells]
-        blockers = read_blocks(frame, standing) if tactical_mode(frame) else None
+        self._recognize_arena(placed=set().union(*placement.free.values(), *placement.occupied.values()))
+        if self.map.arena is not None:
+            blockers = set(self.map.arena.blocks)  # carte officielle : même les blocs cachés par l'interface
+        else:
+            blockers = read_blocks(frame, standing) if tactical_mode(frame) else None
         wanted = reach_range(self.spells, self._use) or self.settings.spell_range
         clean = len(mine) == 1 and all(distance(next(iter(mine)), c) > 2 for c in placement.occupied[other])
         if clean:
