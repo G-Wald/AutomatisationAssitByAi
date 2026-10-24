@@ -59,3 +59,18 @@ revoir pour utiliser les zaaps (premier plan, ou menu de l'objet). Le zaap de 1,
   bloqué depuis 50 min s'est fini ;
 - `--combat-zone` donné hors de la zone : le bot restait sur place ; il fait maintenant le trajet, sans combat en
   chemin (position demandée au jeu si le nom de carte est illisible).
+
+## Heure de tests avant le merge (24/10, 15:05 → 16:10)
+
+| Zone | Combats | Morts | Placements contrôlés | Hors référence |
+|---|---|---|---|---|
+| Prairie des Blops (-4,-27, -4,-25, -4,-24) | 7 | 0 | 4 | 0 |
+| Orée de la forêt des Abraknydes (-4,-19, -6,-19, -7,-20) | 4 gagnés + 1 en cours | 0 | 4 (dont 12 sur 12 en -7,-20) | 0 |
+
+Corrigé pendant l'heure : la reconnaissance des cartes de plaine (avance relative sur la suivante), une fausse
+transformation (barre de sorts relue juste après un refus), les PM illisibles qui empêchaient le repérage par un pas.
+
+Reste faible : les combats où l'équipe est transformée par les monstres d'Halouine (Abraknyde d'Halouine à l'Orée,
+le 24/10 à 15:48) : portraits de la timeline tous pareils (le tour d'un personnage pris pour celui d'un autre),
+cercles pareils, pas sans effet ; le combat traîne (aucun mort, monstres faibles). Le zaap ne s'utilise pas encore
+depuis l'arrière-plan.

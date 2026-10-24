@@ -914,7 +914,8 @@ class CombatAI:
             return None
         team = mine[0].team
         enemies = [f for f in fighters if f.team and f.team != team]
-        pm = read_pm(frame) or 0
+        pm = read_pm(frame)
+        pm = self._max_pm if pm is None else pm  # 24/10, Orée (transformés en Abraknydes) : PM illisibles, pas de pas
         if pm <= 0 or not enemies:
             return None
         self._stepped_turn = self._use.turn
