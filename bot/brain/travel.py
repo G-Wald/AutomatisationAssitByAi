@@ -625,6 +625,9 @@ class Traveler:
         Soleil vu mais inatteignable : bloqué seulement pour qui arrive par le même côté (de l'autre côté d'un rempart,
         il peut marcher) ; côté d'arrivée inconnu (début du trajet) : pour ce trajet seulement. `everywhere` : aucun
         soleil de ce côté, même avec la touche A : bloqué pour tous."""
+        # Toujours pour ce trajet aussi : la référence complétée l'emporte sur un « bloquée » appris (Passages), un échec
+        # vu à l'instant ne doit pas être retenté en boucle (24/10, -1,-21 bas : 25 essais en 4 min).
+        self.blocked_here.add((key, side))
         if self._sure_here(label) and everywhere:
             self.world.link(key, side, BLOCKED)
         elif self._sure_here(label) and self.entry:
@@ -1534,9 +1537,6 @@ class Journey:
                     links.pop(side, None)
             else:
                 links[side] = dest
-        if blocked:
-            for side in self.passages.blocked_from(coords, entry):
-                links.pop(side, None)
         referenced = self.passages.referenced(coords)
         for side, dest in (self.world.maps.get(World.key(region, coords)) or {}).get("sorties", {}).items():
             if dest == BLOCKED:
@@ -1554,6 +1554,10 @@ class Journey:
             for key, side in getattr(self.traveler, "blocked_here", ()):
                 if key == World.key(region, coords):
                     links.pop(side, None)  # bloquée pour ce trajet seulement (carte pas sûre)
+            # Inatteignables selon le côté d'arrivée (référence : calculé sur la carte officielle), après la mémoire qui
+            # remettait le lien appris (24/10, -1,-21 : bas inatteignable en venant du haut, pris quand même).
+            for side in self.passages.blocked_from(coords, entry):
+                links.pop(side, None)
             if not self.passages.describes(coords):  # sinon : calculé sur la carte officielle (blocked_from)
                 for side in self.world.blocked_from(World.key(region, coords), entry):
                     links.pop(side, None)  # inatteignable quand on arrive par ce côté (rempart)
