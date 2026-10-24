@@ -15,6 +15,7 @@ from bot.brain.travel import (
     Traveler,
     TravelSettings,
     World,
+    ZoneRoamer,
     _parse_coords,
     shortest_path,
 )
@@ -311,3 +312,21 @@ def test_goto_option_on_the_command_line(monkeypatch):
     assert parsed(monkeypatch, "--aller=-1,-20").aller == (-1, -20)  # x négatif : avec « = »
     with pytest.raises(SystemExit):
         parsed(monkeypatch, "--aller", "1,1", "--explore")  # un seul mode de déplacement à la fois
+
+
+def test_zone_mode_started_away_from_the_zone_travels_to_it(caplog):
+    # 24/10 : --combat-zone -3,-30 donné depuis Astrub ; le bot a répété « hors de la zone : je reviens » 30 min sans
+    # bouger (aucun côté par où revenir). Il fait maintenant le trajet jusqu'à la carte la plus proche de la zone.
+    caplog.set_level("INFO")
+    atlas = Atlas.load()
+    maps = {m.coords: m.zone for m in atlas.maps.values() if m.region == "Monde des Douze"}
+    sim = GameSim(maps, (4, -11), atlas=atlas)  # Le coin des Tofus
+    sim.region = "Monde des Douze"
+    roamer = ZoneRoamer(sim)
+    sim.pos = (5, -18)  # Cité d'Astrub
+    for _ in range(40):
+        roamer.step()
+        if atlas.zone("Monde des Douze", sim.pos) == "Le coin des Tofus":
+            break
+    assert atlas.zone("Monde des Douze", sim.pos) == "Le coin des Tofus" and not roamer.done
+    assert "Hors de la zone Le coin des Tofus : trajet jusqu'à" in caplog.text

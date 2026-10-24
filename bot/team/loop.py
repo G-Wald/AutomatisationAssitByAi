@@ -38,7 +38,7 @@ from bot.brain.position import PositionAsker
 from bot.brain.recovery import capture_once
 from bot.brain.rest import CHECK_EVERY, STOOL, STOOL_SPREAD, STOOL_ZONE, RestSettings
 from bot.brain.travel import (RECLICK_EVERY, SCENE_CHANGED, SCENE_STABLE, Journey, TravelSettings, Traveler,
-                              escape_menu, make_roamer, merge_reading, same_map)
+                              ZoneRoamer, escape_menu, make_roamer, merge_reading, same_map)
 from bot.brain.travel import _click_spot, _gap, _motion, _motion_view, _scene  # mêmes repères que le principal
 from bot.debug.draw import annotate
 from bot.debug.report import write_fight_report
@@ -526,6 +526,15 @@ class TeamBot:
             self._roam()
             return
         if not self._together_before_fighting():
+            return
+        if isinstance(self.roamer, ZoneRoamer) and (self.roamer.away or (self.roamer.away is None and
+                                                                          self.roamer.locate())):
+            # Hors de la zone : trajet jusqu'à elle d'abord, sans combat en chemin (ZoneRoamer.away).
+            if self._regroup():
+                self.roamer.step()
+                self.engager.new_map()
+                self._follow()
+                self._progress("trajet vers la zone")
             return
         if time.monotonic() < self._next_engage_at or self.engager.engage():
             return  # combat lancé : le placement est vu au tour de boucle suivant
@@ -1088,6 +1097,8 @@ class TeamBot:
         ready: set[str] = set()
         if self.team.place:
             ready = self._seat_team(host, [host] + joined)
+        else:
+            self._note_placement(host)
         if self.auto_ready:
             # 18/10 (utilisateur : un peu d'aléatoire, mais rapide) : le 17/10, les 8 Prêt tombaient toutes les 0,31 s,
             # toujours dans le même ordre. Ordre mélangé, écart tiré au hasard ; le lanceur du combat toujours en dernier.
@@ -1096,6 +1107,20 @@ class TeamBot:
                     self._ready(member)
                     member.game.sleep(random.uniform(*READY_GAP))
         return [host] + joined if self._wait_combat(host) else []
+
+    def _note_placement(self, host: Member) -> None:
+        """Sans placement de l'équipe : les cases de placement lues une fois, pour reconnaître la carte officielle et
+        contrôler ses placements (24/10, utilisateur : vérifier la référence en jeu ; brain/arena.py)."""
+        if getattr(host.ai, "map", None) is None:
+            return
+        frame = self._placement_frame(host)
+        if frame is None:
+            return
+        placement = read_placement(frame)
+        placed = set().union(*placement.free.values(), *placement.occupied.values())
+        if placed:
+            host.ai.map.placed = (placed, frame)
+            host.ai._recognize_arena(placed=placed)
 
     def _placement_frame(self, host: Member) -> Frame | None:
         """Capture du placement lisible dans la fenêtre de `host` : bandeau d'entrée parti, mode tactique (l'herbe

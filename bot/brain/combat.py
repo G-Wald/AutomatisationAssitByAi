@@ -74,7 +74,7 @@ from bot.perception.layout import Point
 from bot.perception.placement import read_placement, standing_cells
 from bot.perception.sight import (RangeView, Terrain, in_line_only, line_of_sight, locate_caster, read_blocks,
                                   range_fit, read_range, read_terrain, sight_agreement)
-from bot.perception.spellbook import slot_greyed
+from bot.perception.spellbook import locate_in_bar, slot_greyed
 from bot.perception.timeline import challenge_icons, timeline_portraits
 from bot.perception.toolbar import ToolbarButton, find_creature_button, find_tactical_button
 from bot.perception.ui import (
@@ -115,6 +115,7 @@ ALLY_RANGE_BONUS = 2
 MAX_CASTS_PER_TURN = 5  # garde-fou
 RELIEF_MARGIN = 4  # cases de marge sur la portée prévue, sur une carte à plusieurs niveaux
 RELIEF_MIN_WRONG = 2  # cases à portée mal prédites, au moins, pour croire la carte à relief (une seule : animation, ombre)
+STEP_PROOF_WAIT = 1.5  # s : marche d'un pas avant de revoir les cercles (_locate_by_step)
 ARENA_TRIES = 6  # essais de reconnaissance de la carte officielle par combat (_recognize_arena)
 # Arrière-plan, 2e rangée de la barre (cases 8 à 14) : Ctrl+1 à Ctrl+7 ne passent pas (l'état de Ctrl est celui du
 # vrai clavier) et un clic gauche sur la case ne sélectionne pas le sort (Épée du destin, 11/10). Le jeu leur donne un
@@ -324,6 +325,8 @@ class MapMemory:
     # plus qu'à voir les combattants (24/10 : 1388 captures, aucun bloc officiel lu comme du sol, 1513 sols lus blocs).
     arena: Arena | None = None
     arena_tries: int = 0
+    placed: tuple = (frozenset(), None)  # cases de placement lues (le plus grand nombre vu) et leur capture
+    placement_checked: bool = False  # contrôle contre la référence fait (CombatAI._check_placements)
 
     def adopt(self, arena: Arena) -> None:
         self.arena = arena
@@ -448,6 +451,7 @@ class CombatAI:
         self._no_proof = False  # _whoami : des cercles de ma couleur, aucun prouvé le mien
         self._timeline_moved = -1  # tour où la timeline a été changée de côté (_move_timeline)
         self._spells_dead = False  # ce tour, aucun sort connu ne s'est sélectionné (transformation : _transformed_turn)
+        self._stepped_turn = -1  # tour du dernier repérage par un pas (_locate_by_step)
         self._shown_view: tuple[Cell, str, RangeView] | None = None  # dernière portée lue : (ma case, sort, cases)
         self._hover_seen = False  # une fiche est déjà apparue au survol pendant cette session
         self._hover_misses = 0  # survols sans fiche : au-delà de HOVER_MISSES, le survol ne sert plus (arrière-plan)
@@ -491,6 +495,7 @@ class CombatAI:
         self._warned_pm = False
         self._warned_pa = False
         self._sight_saved = False
+        self._bar_changed = False  # aucun de mes sorts dans la barre (transformation), vu sur un sort refusé
         self._map_reliable = True  # faux sur une carte à relief : mes cases y sont décalées, le jeu tranche
         self._tactical_tried = False
         self._creature_tried = False
@@ -634,6 +639,13 @@ class CombatAI:
                 if self._spells_dead and self._transformed_turn(frame, fighters, my_team):
                     casts += 1
                 break  # cercles vus, aucun prouvé le mien (déjà dit, capture gardée) : rien sur une supposition
+            if me is not None and (self._spells_dead or self._bar_unknown):
+                # Sorts changés (transformation) mais moi repéré (par mon pas) : les touches 1 à 3 sur l'ennemi.
+                # 24/10 : aucun sort connu dans la barre, le plan visait la case 3 de secours, 30 min de « L'état
+                # Citrouillard est requis » sans un coup.
+                if self._transformed_turn(frame, fighters, my_team, known=me.cell):
+                    casts += 1
+                break
             if me is None or not enemies:
                 if not looked_again:
                     looked_again = True  # une animation (sort, coup, mort) peut cacher un cercle un instant
@@ -801,7 +813,7 @@ class CombatAI:
             # Pas de cercle sur ma case sûre (case inconnue, périmée : 03/10, un monstre m'avait poussé, 3 déplacements
             # ratés de suite) ou case douteuse : repérage, une fois par tour et après chaque déplacement raté.
             self._located, self._doubt = True, False
-            me = self._locate_by_range(frame, mine, fighters) or self._locate_by_hover(mine)
+            me = self._locate_by_range(frame, mine, fighters) or self._locate_by_hover(mine)                 or self._locate_by_step(frame, mine, fighters)
             if me is not None:
                 self._me_sure = self._proven_now = True
                 return me
@@ -889,6 +901,40 @@ class CombatAI:
             return circle
         self._spells_dead = not selected  # aucune touche n'a montré de portée : sorts changés ?
         return None
+
+    def _locate_by_step(self, frame: Frame, mine: list[Fighter], fighters: list[Fighter]) -> Fighter | None:
+        """Moi parmi des cercles tous pareils, quand la portée ne le dit pas (24/10, Astrub 4,-20 : équipe changée en
+        citrouilles par l'événement d'Halloween, serrée ; la portée des sorts cachée sous les cercles des alliés, tous
+        les tours passés sans rien faire) : un pas vers l'ennemi le plus proche, sur une case libre que le plus de mes
+        cercles peuvent atteindre ; le cercle de ma couleur arrivé sur une nouvelle case, c'est moi. Une fois par tour."""
+        if self._stepped_turn == self._use.turn or not mine:
+            return None
+        team = mine[0].team
+        enemies = [f for f in fighters if f.team and f.team != team]
+        pm = read_pm(frame) or 0
+        if pm <= 0 or not enemies:
+            return None
+        self._stepped_turn = self._use.turn
+        taken = {f.cell for f in fighters} | set(self.map.unwalkable)
+
+        def reach(cell: Cell) -> int:
+            return sum(distance(cell, m.cell) <= pm for m in mine)
+
+        cells = [c for c in frame.grid.cells() if c not in taken and reach(c)]
+        if not cells:
+            return None
+        cell = min(cells, key=lambda c: (-reach(c), min(distance(c, e.cell) for e in enemies), c))
+        log.info("Cercles de ma couleur tous pareils : un pas en %s vers l'ennemi ; le cercle qui y arrive, c'est moi",
+                 cell)
+        before = {m.cell for m in mine}
+        self.game.click(*clear_point(frame.grid, cell, fighters))
+        self.game.sleep(STEP_PROOF_WAIT)
+        moved = [f for f in find_fighters(self.game.look()) if f.team == team and f.cell not in before]
+        if len(moved) != 1:
+            log.info("Le pas n'a rien prouvé (%d cercle(s) de ma couleur sur une nouvelle case)", len(moved))
+            return None
+        log.info("Repéré par mon pas : moi en %s", moved[0].cell)
+        return moved[0]
 
     def _locate_by_hover(self, mine: list[Fighter]) -> Fighter | None:
         """Moi parmi les cercles de ma couleur : celui dont la fiche, au survol, porte mon nom (perception/hp.py,
@@ -1085,6 +1131,11 @@ class CombatAI:
             log.warning("Aucun sort de la barre n'est connu (sorts lus dans la fenêtre des sorts et retrouvés dans la "
                         "référence Solomonk) : j'utilise la case %d", self.settings.spell_slot)
 
+    @property
+    def _bar_unknown(self) -> bool:
+        """Sorts lus dans la fenêtre des sorts, mais aucun dans la barre : sorts changés (transformation)."""
+        return self._bar_changed or (self.spellbook is not None and bool(self.spellbook.entries) and not self._spells)
+
     def _learn_blocks(self, frame: Frame, fighters: list[Fighter]) -> None:
         """Blocs et trous lus sur la carte propre (mode tactique, sans portée affichée) : MapMemory.learn_terrain."""
         if not tactical_mode(frame):
@@ -1111,6 +1162,25 @@ class CombatAI:
             log.info("Carte du combat reconnue %s : %s (référence officielle : %d blocs, %d trous) ; obstacles et "
                      "lignes de vue d'après le jeu", "au terrain" if terrain is not None else "au placement",
                      arena.coords, len(arena.blocks), len(arena.holes))
+            self._check_placements()
+
+    def _check_placements(self) -> None:
+        """Contrôle en jeu de la référence (24/10, utilisateur) : les cases de placement lues sont-elles celles de la
+        carte officielle (StarLoco) ? Une case hors de la référence est gardée en capture. Une fois par combat."""
+        placed, frame = self.map.placed
+        arena = self.map.arena
+        if arena is None or not arena.placements or not placed or self.map.placement_checked:
+            return
+        self.map.placement_checked = True
+        official = frozenset().union(*arena.placements)
+        outside = placed - official
+        if outside:
+            path = self.game.recorder.save(frame.image, "placement_hors_reference", lossless=True)
+            log.warning("Placement : %d case(s) lue(s) hors des placements de la référence en %s : %s (capture : %s)",
+                        len(outside), arena.coords, sorted(outside), path)
+        else:
+            log.info("Placement : les %d cases lues sont parmi les %d de la référence en %s", len(placed),
+                     len(official), arena.coords)
 
     @property
     def _watching(self) -> bool:
@@ -1159,7 +1229,7 @@ class CombatAI:
             self._clicks = (self._use.turn, clicks)
         return clicks.setdefault(cell, [])
 
-    def _transformed_turn(self, frame: Frame, fighters: list[Fighter], my_team: str) -> bool:
+    def _transformed_turn(self, frame: Frame, fighters: list[Fighter], my_team: str, known: Cell | None = None) -> bool:
         """Aucun sort connu ne se sélectionne (23/10, Contour d'Astrub : l'équipe changée en Bouftous d'Halouine par
         l'événement d'Halloween, autres sorts dans les cases 1 à 3 ; 40 min de combat sans un coup) : les touches 1 à 3
         essayées ; la portée affichée dit qui je suis (la taille dont le losange, centré sur un de mes cercles, colle le
@@ -1173,12 +1243,14 @@ class CombatAI:
             shown = self._range_frame()
             if shown is None:
                 continue
-            best = None
-            for high in range(1, TRANSFORMED_MAX_RANGE + 1):
+            best = (1.0, known) if known is not None else None
+            for high in (range(1, TRANSFORMED_MAX_RANGE + 1) if known is None else ()):
                 for low in (0, 1):
                     center, score = range_fit(shown, (low, high), self.map.unwalkable, False)
                     if center in mine and score >= 0.5 and (best is None or score > best[0]):
                         best = (score, center)
+            if best is None and self._blind_cast(key, enemies, fighters, mine):
+                return True
             if best is None:
                 path = self.game.recorder.save(shown.image, "transformation_portee", lossless=True)
                 log.info("Sort de la case %s (transformation) : portée affichée, centre sur aucun de mes cercles "
@@ -1191,6 +1263,10 @@ class CombatAI:
             targets = [e for e in enemies if low <= distance(e.cell, me.cell) <= high and (
                 e.cell in view.castable
                 or any((e.cell[0] + dx, e.cell[1] + dy) in view.castable for dx in (-1, 1) for dy in (-1, 1)))]
+            if not targets:
+                # Portée cachée près de l'ennemi (24/10 : Piou en (2, 2), sous le nom de la carte) : à la bonne
+                # distance, le clic est essayé quand même, PA vérifiés (le jeu tranche).
+                targets = [e for e in enemies if low <= distance(e.cell, me.cell) <= high]
             if not targets:
                 self.game.press(self.settings.cancel_key)
                 self._step_toward(shown, me, enemies, fighters, key, high)
@@ -1207,6 +1283,34 @@ class CombatAI:
             after = read_pa(self.game.look())
             if pa is not None and after is not None and after < pa:
                 return True
+        return False
+
+    def _blind_cast(self, key: str, enemies: list[Fighter], fighters: list[Fighter], mine: set[Cell]) -> bool:
+        """Sort `key` sélectionné, ma case inconnue (24/10, Astrub 4,-20 : citrouilles toutes pareilles, la portée
+        cachée sous les cercles des alliés) : le jeu tranche. Un clic sur chaque ennemi, le plus entouré des miens
+        d'abord ; des PA dépensés = sort parti. Jamais un clic ailleurs que sur un ennemi : aucun allié touché."""
+        def around(target: Fighter) -> int:
+            return sum(distance(target.cell, c) <= 1 for c in mine)
+
+        for n, target in enumerate(sorted(enemies, key=lambda e: (-around(e), e.cell))):
+            if n:
+                self.game.press(key)  # un clic hors de portée a désélectionné le sort
+                self.game.sleep(0.3)
+            frame = self.game.look()
+            pa = read_pa(frame)
+            if pa is None or pa <= 0:
+                break
+            point, spread = clear_point(frame.grid, target.cell, fighters)
+            self.game.move(point, spread)
+            self.game.click()
+            self._mouse_away()
+            self.game.sleep(1.2)
+            after = read_pa(self.game.look())
+            if after is not None and after < pa:
+                log.info("Sorts inconnus (transformation ?) : case %s sur %s, ma case inconnue : le sort est parti",
+                         key, _aim_label(target))
+                return True
+        self.game.press(self.settings.cancel_key)
         return False
 
     def _step_toward(self, frame: Frame, me: Fighter, enemies: list[Fighter], fighters: list[Fighter], key: str,
@@ -1572,7 +1676,16 @@ class CombatAI:
             key = self._slot_key(spell.slot)
             log.info("%s non sélectionnable (touche %s) : plus assez de PA, sort en relance ou raccourci différent",
                      spell.name, key or "aucune")
-            self.game.recorder.save(self.game.look().image, "sort_non_selectionnable")
+            after = self.game.look()
+            self.game.recorder.save(after.image, "sort_non_selectionnable")
+            entries = self.spellbook.entries if self.spellbook is not None else []
+            if not self._bar_changed and spell.pa <= self._use.pa and (
+                    not self._spells or (entries and not locate_in_bar(after, entries))):
+                # 24/10 : bot relancé en combat, barre reprise de la session d'avant la transformation (citrouilles) ;
+                # la case 3 visée à chaque tour, 30 min sans un coup. Aucun de mes sorts dans la barre : sorts changés.
+                self._bar_changed = True
+                log.warning("Aucun de mes sorts dans la barre (transformation ?) : touches 1 à 3 sur l'ennemi pour la "
+                            "suite du combat")
             if key.startswith("num"):
                 self._numpad_missed(spell)
             return Cast.NO_SPELL
@@ -2050,7 +2163,10 @@ class CombatAI:
             return ""
         grid = frame.grid
         standing = [Fighter(team, *grid.center(c), c) for team, cells in placement.occupied.items() for c in cells]
-        self._recognize_arena(placed=set().union(*placement.free.values(), *placement.occupied.values()))
+        placed = set().union(*placement.free.values(), *placement.occupied.values())
+        if len(placed) > len(self.map.placed[0]):
+            self.map.placed = (placed, frame)  # gardées pour le contrôle, même si la carte se reconnaît plus tard
+        self._recognize_arena(placed=placed)
         if self.map.arena is not None:
             blockers = set(self.map.arena.blocks)  # carte officielle : même les blocs cachés par l'interface
         else:

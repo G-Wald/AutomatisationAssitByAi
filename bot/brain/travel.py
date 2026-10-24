@@ -1292,6 +1292,10 @@ class ZoneRoamer:
         self.done = False
         self._warned = False
         self._searched: set[str] = set()  # cartes dont tous les soleils ont été cherchés à l'écran
+        self._back: Journey | None = None  # trajet jusqu'à la zone quand on en est loin (_back_to_zone)
+        # Hors de la zone (None : pas encore regardé) : pas de combat en chemin (24/10, retour d'Astrub vers les
+        # Porkass : un groupe attaqué en 4,-20, cité d'Astrub, équipe transformée en citrouilles) ; voir locate.
+        self.away: bool | None = None
         info = traveler.here()  # coordonnées données au lancement : la sous-zone se lit dans les références
         if info is not None and info.zone:
             self.zone_name = info.zone
@@ -1302,6 +1306,43 @@ class ZoneRoamer:
         elif traveler.coords is not None:
             log.warning("Carte %s,%s absente des références de %s : sous-zone d'après le nom lu à l'écran",
                         *traveler.coords, traveler.region)
+
+    def locate(self) -> bool:
+        """Regarde la carte : True si elle est hors de la zone (ou interdite) ; met `away` à jour. Coordonnées
+        illisibles : la position est demandée au jeu (24/10, 4,-20 au nom illisible : le bot s'est cru en -3,-30, la
+        position donnée au lancement, dans la zone, et a attaqué en pleine cité d'Astrub)."""
+        frame, label = self.traveler.look()
+        if label.coords is None:
+            asked = self.traveler.asker.ask() if hasattr(self.traveler, "asker") else None
+            if asked is not None:
+                self.traveler._locate(frame, label, asked)
+                self.traveler._unread_steps = 0
+        here_zone = self._zone_here(label)
+        zone = self.zone_name or here_zone
+        self.away = here_zone != zone or bool(self.traveler.forbidden(self.traveler.coords, here_zone))
+        return self.away
+
+    def _back_to_zone(self) -> None:
+        """Hors de la zone sans côté par où revenir (lancé ailleurs, mort, téléporté) : trajet jusqu'à la carte de la
+        zone la plus proche (Journey), une carte par appel. 24/10 : --combat-zone donné depuis Astrub, le bot est resté
+        30 min sur place à répéter « je reviens »."""
+        if self._back is None:
+            here = self.traveler.coords
+            maps = self.traveler.atlas.zone_maps(self.traveler.region, self.zone_name)
+            if here is None or not maps:
+                log.warning("Hors de la zone %s, et pas de trajet possible (position ou cartes de la zone inconnues) : "
+                            "je m'arrête", self.zone_name)
+                self.done = True
+                return
+            goal = min(maps, key=lambda c: (abs(c[0] - here[0]) + abs(c[1] - here[1]), c))
+            log.info("Hors de la zone %s : trajet jusqu'à %s,%s, sa carte la plus proche", self.zone_name, *goal)
+            self._back = Journey(self.traveler, goal)
+        self._back.step()
+        if self._back.done:
+            if self.traveler.coords != self._back.goal:
+                log.warning("Pas de trajet jusqu'à la zone %s : je m'arrête", self.zone_name)
+                self.done = True
+            self._back = None
 
     def _zone_here(self, label: MapLabel) -> str | None:
         info = self.traveler.here()
@@ -1327,13 +1368,18 @@ class ZoneRoamer:
                      label.describe())
         key = self.traveler.key(label)
         forbidden = self.traveler.forbidden(self.traveler.coords, here_zone)
-        if here_zone != self.zone_name or forbidden:
+        self.away = here_zone != self.zone_name or bool(forbidden)
+        if self.away:
             if key:
                 self.world.visit(key, label, [])
+            if not self.came_from:
+                self._back_to_zone()
+                return
             log.info("Carte %s : je reviens", forbidden or f"hors de la zone {self.zone_name} ({here_zone or 'inconnue'})")
-            if self.came_from and self.traveler.go(frame, label, self.came_from) is not None:
+            if self.traveler.go(frame, label, self.came_from) is not None:
                 self.came_from = None
             return
+        self._back = None
         exits = self.traveler.exits(frame)
         if key:
             self.world.visit(key, label, list(exits.values()))

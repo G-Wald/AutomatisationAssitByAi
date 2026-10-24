@@ -1438,3 +1438,46 @@ def test_no_click_on_a_target_the_shown_range_puts_out_of_sight():
     enemy = {f.cell: f for f in fighters}
     assert ai._no_sight_shown(me, enemy[(10, 14)], ronce) and ai._no_sight_shown(me, enemy[(14, 14)], ronce)
     assert not ai._no_sight_shown(me, enemy[(14, 8)], ronce)  # une voisine à portée : on essaie
+
+
+def test_identical_circles_one_step_toward_the_enemy_tells_which_is_me(monkeypatch):
+    # 24/10, Astrub 4,-20 : équipe changée en citrouilles (Halloween), serrée ; la portée des sorts cachée sous les
+    # cercles des alliés, tous les tours passés. Un pas vers l'ennemi : le cercle qui arrive sur une case nouvelle, moi.
+    frame = load_frame("combat_mon_tour")
+    grid = frame.grid
+    mine = [Fighter(RED, *grid.center(c), c) for c in ((10, 20), (12, 20), (11, 21))]
+    enemy = Fighter(BLUE, *grid.center((18, 20)), (18, 20))
+    game = FakeGame(frame)
+    ai = CombatAI(game, CombatSettings())
+    monkeypatch.setattr("bot.brain.combat.read_pm", lambda frame: 3)
+
+    def seen(_frame):
+        (point,) = clicks(game)
+        arrived = grid.cell_at(*point)
+        return [Fighter(RED, *grid.center(arrived), arrived)] + mine[1:] + [enemy]
+
+    monkeypatch.setattr("bot.brain.combat.find_fighters", seen)
+    me = ai._locate_by_step(frame, mine, mine + [enemy])
+    (point,) = clicks(game)
+    assert me is not None and me.cell == grid.cell_at(*point)
+    assert all(distance(me.cell, m.cell) <= 3 for m in mine)  # case que chacun de mes cercles peut atteindre
+    assert distance(me.cell, enemy.cell) < min(distance(m.cell, enemy.cell) for m in mine)  # vers l'ennemi
+    assert ai._locate_by_step(frame, mine, mine + [enemy]) is None and len(clicks(game)) == 1  # une fois par tour
+
+
+def test_unknown_spell_cast_blind_only_ever_clicks_enemies(monkeypatch):
+    # 24/10, Astrub 4,-20 : citrouilles toutes pareilles, portée cachée sous les alliés. La touche du sort puis un clic
+    # sur chaque ennemi (le plus entouré des miens d'abord) : PA dépensés = parti. Jamais un clic sur un allié.
+    frame = load_frame("combat_mon_tour")
+    grid = frame.grid
+    mine = {(10, 20), (12, 20), (16, 20)}
+    lonely, surrounded = Fighter(BLUE, *grid.center((20, 10)), (20, 10)), Fighter(BLUE, *grid.center((17, 21)), (17, 21))
+    fighters = [Fighter(RED, *grid.center(c), c) for c in mine] + [lonely, surrounded]
+    game = FakeGame(frame)
+    pa = iter([6, 6, 6, 2])  # 1er ennemi : rien ; 2e : parti
+    monkeypatch.setattr("bot.brain.combat.read_pa", lambda frame: next(pa))
+    ai = CombatAI(game, CombatSettings())
+    assert ai._blind_cast("1", [lonely, surrounded], fighters, mine)
+    cells = [grid.cell_at(*point) for point in clicks(game)]
+    assert cells == [surrounded.cell, lonely.cell]  # le plus entouré d'abord, rien d'autre que des ennemis
+    assert presses(game) == ["1"]  # resélectionné après le clic sans effet
