@@ -72,3 +72,4 @@ def _without_local_reference(monkeypatch, tmp_path):
     monkeypatch.setattr("bot.brain.travel.REFERENCES_DIR", tmp_path / "references")
     monkeypatch.setattr("bot.brain.arena.ARENA_DIR", tmp_path / "references")
     monkeypatch.setattr("bot.brain.arena.Arenas._loaded", None)
+    monkeypatch.setattr("bot.brain.travel.ANOMALIES", tmp_path / "anomalies_passages.jsonl")

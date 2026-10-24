@@ -10,8 +10,11 @@ La carte est reconnue d'après ce que montre l'écran, sans les coordonnées : l
 cases de placement. Sans référence (fichiers absents), rien n'est reconnu et le combat lit tout à l'écran, comme avant.
 """
 
+import contextlib
 import json
 import logging
+import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -120,3 +123,30 @@ class Arenas:
             self._placed = [(frozenset().union(*a.placements), a) for a in self.arenas if a.placements]
         found = [arena for places, arena in self._placed if cells <= places]
         return found[0] if len(found) == 1 else None
+
+
+CLIENT_MAPS = Path(os.environ.get("LOCALAPPDATA", "")) / "Ankama" / "Retro" / "resources" / "app" / "retroclient" / "data" \
+    / "maps"  # cartes du jeu installé
+BUILT_MAPS = ARENA_DIR.parent / "client_retro" / "maps"  # copie qui a servi à construire les références
+MAP_FILE = re.compile(r"^(\d+)_(\d+)X?\.swf$")
+
+
+def map_versions(directory: Path) -> dict[int, str]:
+    """Identifiant de carte -> date de sa version, d'après les noms de fichiers (« 10000_0706131721X.swf »)."""
+    versions = {}
+    with contextlib.suppress(OSError):
+        for name in os.listdir(directory):
+            found = MAP_FILE.match(name)
+            if found:
+                versions[int(found.group(1))] = found.group(2)
+    return versions
+
+
+def changed_maps(installed: Path = CLIENT_MAPS, built: Path = BUILT_MAPS) -> list[int]:
+    """Cartes dont le jeu installé a une autre version que celle des références (mise à jour du jeu) : les références
+    (data/references) sont à reconstruire (tools/reference_complete.py, tools/reference_combat.py, après une nouvelle
+    copie du client et des clés). [] si l'un des dossiers manque."""
+    now, then = map_versions(installed), map_versions(built)
+    if not now or not then:
+        return []
+    return sorted(ident for ident, date in now.items() if ident in then and then[ident] != date)

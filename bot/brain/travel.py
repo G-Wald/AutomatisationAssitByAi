@@ -624,16 +624,23 @@ class Traveler:
         if self._sure_here():
             self.world.remember_suns(self.key(), exits)
 
-    def _note_blocked(self, key: str | None, side: str, label: MapLabel, everywhere: bool = False) -> None:
+    def _note_blocked(self, key: str | None, side: str, label: MapLabel, everywhere: bool = False,
+                      tried: list[tuple[int, int]] | None = None) -> bool:
         """Sortie notée bloquée dans data/carte.json, seulement si c'est sûr (_sure_here). 11/10 : des suiveurs, pas
         sur la carte qu'ils croyaient, ont noté bloqués les 4 côtés de 4,-20 ; le trajet suivant était impossible.
 
         Soleil vu mais inatteignable : bloqué seulement pour qui arrive par le même côté (de l'autre côté d'un rempart,
         il peut marcher) ; côté d'arrivée inconnu (début du trajet) : pour ce trajet seulement. `everywhere` : aucun
-        soleil de ce côté, même avec la touche A : bloqué pour tous."""
+        soleil de ce côté, même avec la touche A : bloqué pour tous.
+
+        Passage de la référence complétée (contrôlée en jeu, 24/10) : rien d'appris, c'est une anomalie du bot
+        (_anomaly) ; True dans ce cas. `tried` : cases des soleils essayés."""
         # Toujours pour ce trajet aussi : la référence complétée l'emporte sur un « bloquée » appris (Passages), un échec
         # vu à l'instant ne doit pas être retenté en boucle (24/10, -1,-21 bas : 25 essais en 4 min).
         self.blocked_here.add((key, side))
+        if self.coords is not None and self._sure_here(label) and self.passages.referenced(self.coords).get(side):
+            self._anomaly(side, label, tried or [])
+            return True
         if self._sure_here(label) and everywhere:
             self.world.link(key, side, BLOCKED)
         elif self._sure_here(label) and self.entry:
@@ -646,6 +653,37 @@ class Traveler:
             self.blocked_here.add((key, side))
             log.info("Sortie du %s bloquée pour ce trajet seulement : carte pas sûre (coordonnées pas lues), rien "
                      "d'écrit dans la mémoire", side)
+        return False
+
+    def _anomaly(self, side: str, label: MapLabel, tried: list[tuple[int, int]]) -> None:
+        """Passage officiel raté (24/10, utilisateur : la référence est juste, contrôlée en jeu ; une erreur vient du
+        bot) : pas de « bloquée » appris, seulement évité pour ce trajet. Noté avec sa capture et la cause probable dans
+        data/anomalies_passages.jsonl, pour corriger le bot (perception, soleil choisi, joueur dessus, latence)."""
+        coords = self.coords
+        reachable = self.passages.reachable(coords, side, self.arrival_cell)
+        expected = [tuple(c) for c in reachable] if reachable is not None else \
+            [c for c in [self.passages.sun_cell(coords, side, self.entry, self.arrival_cell)] if c is not None]
+        if not tried:
+            cause = "aucun soleil vu à l'écran, même avec la touche A (perception)"
+        elif expected and not any(distance(c, e) <= SAME_SUN for c in tried for e in expected):
+            cause = f"soleil(s) cliqué(s) {tried} hors de ceux de la référence {expected}"
+        elif self._walked:
+            cause = "le personnage a marché puis s'est arrêté (case d'arrivée supposée fausse ? obstacle mobile ?)"
+        else:
+            cause = "personnage immobile après le clic (clic perdu, menu, joueur sur le soleil, latence ?)"
+        path = self.game.recorder.save(self.game.look().image, "anomalie_passage", lossless=True)
+        log.warning("Anomalie : passage officiel du %s raté en %s,%s (%s) ; pas noté bloqué, évité pour ce trajet "
+                    "(capture : %s)", side, *coords, cause, path)
+        entry = {"quand": time.strftime("%Y-%m-%d %H:%M:%S"), "carte": f"{coords[0]},{coords[1]}", "cote": side,
+                 "vers": "{},{}".format(*self.passages.referenced(coords)[side]), "arrivee_par": self.entry,
+                 "case_arrivee": self.arrival_cell, "soleils_essayes": tried, "soleils_reference": expected,
+                 "cause": cause, "capture": str(path) if path else None}
+        try:
+            ANOMALIES.parent.mkdir(parents=True, exist_ok=True)
+            with ANOMALIES.open("a", encoding="utf-8") as out:
+                out.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        except OSError as error:
+            log.debug("Anomalie non écrite (%s)", error)
 
     def go(self, frame: Frame, label: MapLabel, side: str, exits: dict[str, Exit] | None = None) -> MapLabel | None:
         """Passe sur la carte voisine par le côté `side` ; None si c'est impossible (ou si un combat commence)."""
@@ -673,8 +711,8 @@ class Traveler:
             self.blocked_here.add((self.key(label), side))
             return None
         if exit_ is None:
-            log.info("Pas de sortie vers le %s sur cette carte, même avec la touche A : je la note bloquée", side)
-            self._note_blocked(self.key(label), side, label, everywhere=True)
+            if not self._note_blocked(self.key(label), side, label, everywhere=True):
+                log.info("Pas de sortie vers le %s sur cette carte, même avec la touche A : je la note bloquée", side)
             return None
         before_key, before_coords, entry = self.key(label), self.coords, self.entry
         queue = [exit_] + [e for e in self.candidates.get(side, []) if distance(e.cell, exit_.cell) > SAME_SUN]
@@ -757,9 +795,9 @@ class Traveler:
                 if queue:
                     log.info("Soleil(s) du %s retrouvé(s) à l'écran : %s", side, ", ".join(str(e.cell) for e in queue))
                 frame = self.game.look(park=False)
-        self._note_blocked(before_key, side, label)
-        path = self.game.recorder.save(self.game.look().image, "sortie_bloquee", lossless=True)
-        log.warning("Sortie du %s inutilisable, je la note bloquée (capture : %s)", side, path)
+        if not self._note_blocked(before_key, side, label, tried=[e.cell for e in tried]):
+            path = self.game.recorder.save(self.game.look().image, "sortie_bloquee", lossless=True)
+            log.warning("Sortie du %s inutilisable, je la note bloquée (capture : %s)", side, path)
         return None
 
     def click_sun(self, point: tuple[float, float], spread: tuple[float, float], game: Game | None = None) -> bool:
@@ -1423,6 +1461,7 @@ UNCONFIRMED_COST, ZONE_COST = 2.0, 2.0
 REFERENCE_COST, NO_EXIT_COST = 1.2, 6.0
 PASSAGES_DIR = PROJECT_DIR / "config" / "monde" / "passages"
 REFERENCES_DIR = PROJECT_DIR / "data" / "references"
+ANOMALIES = PROJECT_DIR / "data" / "anomalies_passages.jsonl"  # passages officiels ratés (Traveler._anomaly)
 
 
 class Passages:

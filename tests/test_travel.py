@@ -895,3 +895,37 @@ def test_arrival_seen_from_the_coordinates_when_the_scenery_barely_changes():
     t = Traveler(FakeGame(foret), fast(), World(None))
     arrived = t._wait_arrival(unreadable_label(), foret, (2, 3))
     assert isinstance(arrived, tuple) and arrived[1].coords == (2, 4)
+
+
+def test_failed_reference_passage_is_an_anomaly_not_a_learned_block(tmp_path):
+    # 24/10, utilisateur : la référence est juste (contrôlée en jeu) ; un passage officiel raté vient du bot
+    # (perception, soleil choisi, joueur dessus, latence) : rien d'appris dans data/carte.json, évité pour ce trajet,
+    # noté avec sa capture et sa cause probable dans data/anomalies_passages.jsonl.
+    import json as json_module
+
+    import bot.brain.travel as travel_module
+    from bot.brain.travel import Passages
+
+    foret = load_frame("hors_combat_foret")  # Incarnam 2,4
+    t = Traveler(FakeGame(foret), fast(), World(None))
+    t._passages = Passages({}, {"2,4": {"sorties": {"droite": {"vers": "3,4", "cases": [[27, 9]]}}}})
+    t._passages_region = t.region
+    t.entry = "gauche"
+    frame, label = t.look()
+    assert t.go(frame, label, "droite") is None
+    key = t.key(label)
+    assert t.world.destination(key, "droite") != BLOCKED and t.world.blocked_from(key, "gauche") == set()
+    assert (key, "droite") in t.blocked_here
+    (line,) = travel_module.ANOMALIES.read_text(encoding="utf-8").splitlines()
+    anomaly = json_module.loads(line)
+    assert anomaly["carte"] == "2,4" and anomaly["cote"] == "droite" and anomaly["vers"] == "3,4"
+    assert anomaly["soleils_essayes"] and "immobile" in anomaly["cause"]
+
+
+def test_failed_passage_unknown_to_the_reference_is_still_learned():
+    foret = load_frame("hors_combat_foret")
+    t = Traveler(FakeGame(foret), fast(), World(None))
+    t.entry = "gauche"
+    frame, label = t.look()
+    assert t.go(frame, label, "droite") is None
+    assert t.world.blocked_from(t.key(label), "gauche") == {"droite"}  # rien dans la référence : appris, comme avant

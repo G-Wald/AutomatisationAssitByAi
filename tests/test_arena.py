@@ -61,3 +61,19 @@ def test_arenas_loaded_from_the_local_reference(tmp_path):
     assert len(Arenas.load(tmp_path)) == 2
     assert len(Arenas.load()) == 0  # tests : sans la référence locale (conftest), rien n'est reconnu
     assert Arenas.load().by_terrain(terrain_of(BLOCKS, HOLES)) is None
+
+
+def test_maps_changed_by_a_game_update_are_reported(tmp_path):
+    # 24/10 : la référence fait foi ; une mise à jour du jeu (nouvelle version d'une carte) la périme : signalé au
+    # lancement, d'après les dates dans les noms des fichiers de cartes.
+    from bot.brain.arena import changed_maps
+
+    installed, built = tmp_path / "jeu", tmp_path / "copie"
+    installed.mkdir()
+    built.mkdir()
+    for name in ("10000_0706131721X.swf", "10001_0801011200X.swf", "10002_0706131721X.swf"):
+        (installed / name).write_bytes(b"")
+    for name in ("10000_0706131721X.swf", "10001_0706131721X.swf"):
+        (built / name).write_bytes(b"")
+    assert changed_maps(installed, built) == [10001]  # 10002 absente de la copie : pas dans les références
+    assert changed_maps(tmp_path / "absent", built) == []

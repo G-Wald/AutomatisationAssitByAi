@@ -46,6 +46,7 @@ import winerror
 
 from bot.actions.input import Human
 from bot.actions.stop import BotStopped, StopControl
+from bot.brain.arena import changed_maps
 from bot.brain.game import Game
 from bot.brain.loop import Bot
 from bot.brain.memory import CONTROL, READING_MODES, reading_mode
@@ -435,6 +436,12 @@ def run_team(args: argparse.Namespace, settings: dict, team: TeamSettings, title
         bot = TeamBot(members, settings, team, act=not args.observe, engage=False if args.combat_only or goto else None,
                       travel=args.travel, start=args.position, region=WORLDS.get(args.monde))
         log.info("Équipe : %s ; principal : %s", ", ".join(m.name for m in members), members[0].name)
+        changed = changed_maps()
+        if changed:
+            # 24/10 : la référence fait foi (passages, soleils, cases de combat) ; une mise à jour du jeu la périme.
+            log.warning("%d carte(s) du jeu ont changé depuis la construction des références (mise à jour du jeu ?), ex. "
+                        "%s : à reconstruire (tools.reference_complete, tools.reference_combat)", len(changed),
+                        ", ".join(map(str, changed[:5])))
         log.info("Début de session : %s", SESSION_MODES[_session(args, settings)])
         if args.observe:
             log.info("Mode : observation (aucune action, aucun changement de fenêtre) : passe toi-même d'une fenêtre à "
