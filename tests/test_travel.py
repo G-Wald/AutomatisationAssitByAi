@@ -862,3 +862,36 @@ def test_completed_reference_used_after_what_was_seen_in_game():
     assert passages.blocked_from((5, -30), "haut") == set()  # appris, mais la carte est décrite : calcul officiel seul
     assert Passages(seen).blocked_from((5, -30), "haut") == {"bas"}  # sans référence : l'appris
     assert passages.describes((5, -30)) and not passages.describes((0, 0))
+
+
+def test_sun_chosen_from_the_arrival_cell_and_the_next_side():
+    # 24/10, 1,-14 → 0,-14 → -1,-14 : en 1,-14, deux soleils à gauche, un de chaque côté du rempart. Celui du bas mène
+    # en 0,-14 sous le rempart (case (26,30)), d'où la sortie gauche est hors d'atteinte (deux clics perdus en jeu) ;
+    # celui du haut (case (26,8)), non. La référence le dit par case d'arrivée, et l'itinéraire choisit le bon soleil.
+    from bot.brain.travel import Passages
+
+    reference = {
+        "1,-14": {"sorties": {"gauche": {"vers": "0,-14", "cases": [[1, 9], [1, 29]],
+                                         "arrivees": {"1,9": [26, 8], "1,29": [26, 30]},
+                                         "cases_depuis": {"droite": [[1, 29], [1, 9]]}}}},
+        "0,-14": {"sorties": {"gauche": {"vers": "-1,-14", "cases": [[1, 11]]}},
+                  "depuis_arrivee": {"26,8": {"gauche": [[1, 11]]}, "26,30": {"gauche": []}}},
+    }
+    passages = Passages({}, reference)
+    assert passages.sun_cell((1, -14), "gauche", "droite") == (1, 29)  # sans la suite : le premier joignable
+    assert passages.sun_cell((1, -14), "gauche", "droite", then="gauche") == (1, 9)
+    assert passages.arrival((1, -14), "gauche", (1, 29)) == (26, 30)
+    assert passages.reachable((0, -14), "gauche", (26, 30)) == []  # inatteignable d'ici : pas de clic
+    assert passages.reachable((0, -14), "gauche", (26, 8)) == [(1, 11)]
+    assert passages.reachable((0, -14), "gauche", None) is None  # case d'arrivée inconnue : la référence ne sait pas
+    assert passages.sun_cell((0, -14), "gauche", arrival=(26, 8)) == (1, 11)
+
+
+def test_arrival_seen_from_the_coordinates_when_the_scenery_barely_changes():
+    # 24/10, plaines des Porkass (-3,-37 → -3,-38) : décor presque pareil d'une carte à l'autre, sous SCENE_CHANGED ;
+    # le personnage arrêté était pris pour bloqué (trois sorties notées bloquées alors que l'équipe était passée). Les
+    # coordonnées lues, autres que celles du départ, disent l'arrivée.
+    foret = load_frame("hors_combat_foret")  # 2,4
+    t = Traveler(FakeGame(foret), fast(), World(None))
+    arrived = t._wait_arrival(unreadable_label(), foret, (2, 3))
+    assert isinstance(arrived, tuple) and arrived[1].coords == (2, 4)

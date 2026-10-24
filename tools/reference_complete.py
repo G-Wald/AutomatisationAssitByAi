@@ -34,6 +34,8 @@ INDEX = RACINE / "data" / "client_retro" / "cartes" / "index.json"
 MEMOIRE = RACINE / "data" / "carte.json"
 PASSAGES = RACINE / "config" / "monde" / "passages"
 REGIONS = {0: "Monde des Douze", 3: "Incarnam"}  # super_zone de l'index du client
+CATALOGUE = json.loads((RACINE / "data" / "client_retro" / "cartes" / "catalogue_objets_interactifs.json")
+                       .read_text(encoding="utf-8"))
 DELTA = {"droite": (1, 0), "gauche": (-1, 0), "bas": (0, 1), "haut": (0, -1)}
 BLOQUEE = "bloquée"
 
@@ -128,6 +130,12 @@ def construire() -> tuple[dict, dict]:
                 c = cote(ici, (arrivee["x"], arrivee["y"]))
                 if c is None:
                     s["sorties_hors_voisines"] += 1  # porte, téléporteur : pas un passage de bord
+                    porte = {"case": list(case_vers_grille(case)) if info.get("largeur", 15) == 15 else None,
+                             "vers_id": dest, "vers": f"{arrivee['x']},{arrivee['y']}",
+                             "interieur": not arrivee.get("exterieur"), "sous_zone": arrivee.get("nom_sous_zone")}
+                    portes = ref.setdefault(cle_ici, {"ids": [], "sorties": {}}).setdefault("portes", [])
+                    if porte not in portes:
+                        portes.append(porte)
                     continue
                 entree = ref.setdefault(cle_ici, {"ids": [], "sorties": {}})
                 if ident not in entree["ids"]:
@@ -139,6 +147,10 @@ def construire() -> tuple[dict, dict]:
                 cellule = list(case_vers_grille(case)) if info.get("largeur", 15) == 15 else None
                 if cellule and cellule not in sortie["cases"]:
                     sortie["cases"].append(cellule)
+                if cellule and arrivee.get("largeur", 15) == 15:
+                    # Case où l'on arrive sur la carte voisine en prenant ce soleil (24/10 : en 1,-14, deux soleils à
+                    # gauche, un de chaque côté du rempart, deux arrivées différentes en 0,-14).
+                    sortie.setdefault("arrivees", {})[f"{cellule[0]},{cellule[1]}"] = list(case_vers_grille(case_dest))
                 s["sorties"] += 1
                 ctl = sortie["controles"]
                 # 3. version
@@ -162,6 +174,17 @@ def construire() -> tuple[dict, dict]:
                     continue
                 largeur = index[ident].get("largeur", 15)
                 for entree_cote, departs in arrivees[ident].items():
+                    # Soleils joignables depuis chaque case d'arrivée, une à une (le bot sait par quel soleil il est
+                    # arrivé, donc sur quelle case : brain/travel.py, Passages.sun_cell).
+                    for depart in departs:
+                        zone_case = joignables(cases, largeur, {depart})
+                        if not zone_case:
+                            continue
+                        par_case = entree.setdefault("depuis_arrivee", {}).setdefault(
+                            "{},{}".format(*case_vers_grille(depart)), {})
+                        for c, cases_sortie in sorties_cases[ident].items():
+                            if c in entree["sorties"]:
+                                par_case[c] = sorted(list(case_vers_grille(n)) for n in cases_sortie & zone_case)
                     zone = joignables(cases, largeur, departs)
                     if not zone:
                         continue
@@ -175,6 +198,28 @@ def construire() -> tuple[dict, dict]:
                                 s["inatteignable_depuis_un_cote"] += 1
                         else:
                             s["atteignable_depuis_un_cote"] += 1
+                            # Le soleil à cliquer en arrivant par ce côté : celui qu'on peut joindre à pied (24/10,
+                            # utilisateur : jamais un soleil de l'autre côté de la muraille).
+                            joignables_ici = sorted(list(case_vers_grille(n)) for n in cases_sortie & zone)
+                            depuis = entree["sorties"][c].setdefault("cases_depuis", {})
+                            depuis[entree_cote] = sorted({tuple(x) for x in depuis.get(entree_cote, []) +
+                                                          joignables_ici})
+                            if len(cases_sortie) > 1 and len(cases_sortie & zone) < len(cases_sortie):
+                                s["soleil_choisi_selon_arrivee"] += 1
+        # objets interactifs de la carte officielle (zaap, ressources, ateliers, portes...), d'après le catalogue du client
+        for cle_ici, entree in ref.items():
+            for ident in entree["ids"]:
+                cases = cases_officielles(ident)
+                if cases is None or index[ident].get("largeur", 15) != 15:
+                    continue
+                for n, case in enumerate(cases):
+                    if case["objet2_interactif"] and str(case["objet2"]) in CATALOGUE:
+                        objet = CATALOGUE[str(case["objet2"])]
+                        trouve = {"nom": objet.get("nom"), "nature": objet.get("nature"), "case": list(case_vers_grille(n))}
+                        objets = entree.setdefault("objets", [])
+                        if trouve not in objets:
+                            objets.append(trouve)
+                            s[f"objet_{objet.get('nature')}"] += 1
         # comparaison avec les « inatteignables selon le côté d'arrivée » notés en jeu
         for cle_mem, carte_mem in memoire.items():
             if not cle_mem.startswith(region + " "):
@@ -239,6 +284,11 @@ def rapport(stats: dict) -> str:
                    f"{s['atteignable_depuis_un_cote']} liaisons entrée -> sortie atteignables, "
                    f"{s['inatteignable_depuis_un_cote']} inatteignables (falaise, rempart) ; contre les blocages notés en "
                    f"jeu selon le côté d'arrivée : {s['bloque_vu_et_calcule']} retrouvés, {s['bloque_vu_pas_calcule']} non",
+                   f"- **Soleil à cliquer selon le côté d'arrivée** : {s['soleil_choisi_selon_arrivee']} sorties à plusieurs "
+                   "soleils où seuls certains sont joignables depuis un côté (muraille, falaise)",
+                   f"- **Objets interactifs** (catalogue du client) : "
+                   + ", ".join(f"{k[6:]} x{v}" for k, v in s.most_common() if k.startswith("objet_"))[:300],
+                   f"- **Portes et passages vers un intérieur ou une autre carte** (StarLoco) : {s['sorties_hors_voisines']}",
                    f"- Objets les plus fréquents sur les cases de sortie (objet2) : "
                    + ", ".join(f"{k[7:]} x{v}" for k, v in s.most_common() if k.startswith("objet2_"))[:400], ""]
     return "\n".join(lignes) + "\n"

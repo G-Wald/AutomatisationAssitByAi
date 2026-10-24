@@ -372,6 +372,8 @@ class Traveler:
         # début du trajet. Sur une carte coupée par un rempart, il dit de quel côté du mur on est.
         self.entry: str | None = None
         self.entry_cell: tuple[int, int] | None = None
+        self.arrival_cell: tuple[int, int] | None = None  # case d'arrivée d'après la référence complétée (_arrived)
+        self.next_side: str | None = None  # côté à prendre sur la carte suivante (Journey : choix du soleil)
         self.candidates: dict[str, list[Exit]] = {}  # soleils vus de chaque côté à la dernière recherche à l'écran
         self._hiding = False  # touche E déjà tenue : un clic sur un soleil ne la réappuie pas
         self._walked = False  # au dernier STILL : il avait marché avant de s'arrêter
@@ -491,16 +493,20 @@ class Traveler:
         reference = {side: cells[0] for side, cells in info.suns.items()} if info else {}
         for side, cells in (info.client_suns.items() if info else ()):
             reference.setdefault(side, cells[0])  # case donnée par le client (soleil « conditionnel »)
+        chosen = {}
         if self.coords is not None and self._sure_here():
-            passages = self.passages
             for side in DELTA:
-                cell = passages.sun_cell(self.coords, side)
+                cell = self.passages.sun_cell(self.coords, side, self.entry, self.arrival_cell,
+                                              self.next_side if side == wanted else None)
                 if cell is not None:
-                    reference.setdefault(side, cell)  # référence complétée (data/references), un seul soleil du côté
+                    chosen[side] = cell
         merged = {**reference, **known}  # ce que le bot a vu prime sur les références
         for side in [s for s in merged if self.world.several(key, s)]:
             del merged[side]  # plusieurs soleils de ce côté (rempart) : la case gardée ne dit pas lequel est le nôtre
         merged.update(self.world.suns_from(key, self.entry))  # celui qui a marché en arrivant par le même côté
+        # Référence complétée (data/references) : le soleil joignable depuis la case d'arrivée (et qui mène vers la
+        # suite de l'itinéraire) prime sur une case retenue, qui peut être celle de l'autre côté d'une muraille.
+        merged.update(chosen)
         described = info is not None and bool(info.suns)  # références avec soleils (Incarnam ; pas le Monde des Douze)
         if merged and (wanted in merged or (wanted is None and (described or not complete))):
             # Carte connue (déjà vue, ou décrite dans config/monde) : la case du soleil est connue, rien à chercher.
@@ -645,7 +651,15 @@ class Traveler:
         """Passe sur la carte voisine par le côté `side` ; None si c'est impossible (ou si un combat commence)."""
         exits = exits if exits is not None and side in exits else self.exits(frame, side)
         exit_ = exits.get(side)
-        reference_cell = self.passages.sun_cell(self.coords, side) if exit_ is None and self.coords is not None else None
+        if self.coords is not None and self.passages.reachable(self.coords, side, self.arrival_cell) == []:
+            # Référence complétée : aucun soleil de ce côté n'est joignable depuis la case où l'on est arrivé
+            # (muraille, falaise : 24/10, 0,-14 gauche en venant de 1,-14 par le bas du rempart) : pas de clic perdu.
+            log.info("Sortie du %s inatteignable depuis ma case d'arrivée %s d'après la carte officielle : je ne "
+                     "l'essaie pas", side, self.arrival_cell)
+            self.blocked_here.add((self.key(label), side))
+            return None
+        reference_cell = self.passages.sun_cell(self.coords, side, self.entry, self.arrival_cell, self.next_side) \
+            if exit_ is None and self.coords is not None else None
         if reference_cell is not None:
             # 24/10, 9,-20 haut : contours de A pas vus, sortie notée bloquée, alors qu'elle est dans la référence
             # complétée (et déjà prise en jeu) : sa case de soleil d'abord, avant de conclure qu'il n'y a pas de sortie.
@@ -792,6 +806,13 @@ class Traveler:
                 now = time.monotonic()
                 if now - clicked >= self.settings.still_after + self.settings.still_for \
                         and now - last_motion >= self.settings.still_for:
+                    label = read_map_label(frame)
+                    if label is not None and label.coords and before_coords and label.coords != before_coords:
+                        # Décor presque pareil d'une carte à l'autre (24/10, plaines des Porkass -3,-37 → -3,-38 : sous
+                        # SCENE_CHANGED, trois sorties notées bloquées alors que l'équipe était passée) : les
+                        # coordonnées lues tranchent.
+                        log.debug("Arrivé, décor presque pareil (coordonnées %s,%s lues)", *label.coords)
+                        return self._settled(frame, label)
                     log.debug("Immobile %.1f s après le clic (cases qui bougent : %s)", now - clicked, counts)
                     # Il a marché puis s'est arrêté : il est allé au plus près, le soleil est de l'autre côté d'un mur.
                     self._walked = sum(c >= self.settings.motion_cells for c in counts) >= WALKED_POLLS
@@ -812,6 +833,10 @@ class Traveler:
             if moved:
                 log.debug("Arrivé (cases qui bougeaient : %s)", counts)
                 return self._settled(frame, label)
+        label = read_map_label(self.game.look(park=False))
+        if label is not None and label.coords and before_coords and label.coords != before_coords:
+            log.debug("Arrivé, décor presque pareil (coordonnées %s,%s lues)", *label.coords)
+            return self._settled(self.game.look(park=False), label)
         log.debug("Pas arrivé en %.0f s (cases qui bougeaient : %s)", self.settings.walk_timeout, counts)
         return False
 
@@ -824,6 +849,8 @@ class Traveler:
     def _arrived(self, frame: Frame, label: MapLabel, before_key: str | None, before_coords: tuple[int, int] | None,
                  side: str, cell: tuple[int, int] | None = None) -> None:
         self.entry = OPPOSITE[side]
+        # Case d'arrivée d'après la référence complétée (le soleil pris) : choisit le soleil suivant (Passages.sun_cell)
+        self.arrival_cell = self.passages.arrival(before_coords, side, cell) if before_coords is not None else None
         self.entry_cell = _facing(frame, cell, side) if cell is not None else None
         self._unread_steps = 0 if label.readable and label.coords is not None else self._unread_steps + 1
         expected = None
@@ -1415,11 +1442,41 @@ class Passages:
                 out[side] = dest
         return out
 
-    def sun_cell(self, coords: tuple[int, int], side: str) -> tuple[int, int] | None:
-        """Case du soleil d'un côté d'après la référence complétée, s'il n'y en a qu'un (sinon : rempart, la recherche
-        à l'écran choisit)."""
-        cells = (((self.reference.get(f"{coords[0]},{coords[1]}") or {}).get("sorties") or {}).get(side) or {}).get("cases")
-        return tuple(cells[0]) if cells and len(cells) == 1 else None
+    def arrival(self, coords: tuple[int, int], side: str, cell: tuple[int, int] | None) -> tuple[int, int] | None:
+        """Case d'arrivée sur la carte voisine en prenant le soleil `cell` du côté `side` de la carte `coords`."""
+        exit_ = ((self.reference.get(f"{coords[0]},{coords[1]}") or {}).get("sorties") or {}).get(side) or {}
+        found = (exit_.get("arrivees") or {}).get(f"{cell[0]},{cell[1]}") if cell else None
+        return tuple(found) if found else None
+
+    def reachable(self, coords: tuple[int, int], side: str, arrival: tuple[int, int] | None) -> list | None:
+        """Soleils du côté `side` joignables à pied depuis la case d'arrivée `arrival` ([] : aucun, côté inatteignable
+        d'ici) ; None si la référence ne le sait pas."""
+        if arrival is None:
+            return None
+        by_cell = (self.reference.get(f"{coords[0]},{coords[1]}") or {}).get("depuis_arrivee") or {}
+        cells = (by_cell.get(f"{arrival[0]},{arrival[1]}") or {}).get(side)
+        return None if cells is None else [tuple(c) for c in cells]
+
+    def sun_cell(self, coords: tuple[int, int], side: str, entry: str | None = None,
+                 arrival: tuple[int, int] | None = None, then: str | None = None) -> tuple[int, int] | None:
+        """Case du soleil à cliquer d'un côté d'après la référence complétée : celle qu'on peut joindre à pied depuis
+        la case d'arrivée (`arrival`, soleil pris sur la carte d'avant), sinon depuis le côté d'arrivée (`entry`)
+        (calculé sur les cases praticables officielles : jamais un soleil de l'autre côté d'une muraille, 24/10) ;
+        sinon le seul soleil du côté ; sinon None (la recherche à l'écran choisit).
+
+        `then` : côté à prendre sur la carte voisine (itinéraire). Entre plusieurs soleils joignables, celui qui y
+        amène sur une case d'où ce côté se joint (24/10 : en 1,-14, le soleil gauche du bas mène en 0,-14 sous le
+        rempart, d'où la sortie gauche est hors d'atteinte ; celui du haut, non)."""
+        exit_ = ((self.reference.get(f"{coords[0]},{coords[1]}") or {}).get("sorties") or {}).get(side) or {}
+        cells = self.reachable(coords, side, arrival)             or [tuple(c) for c in ((exit_.get("cases_depuis") or {}).get(entry) or [] if entry else [])]
+        if not cells:
+            cells = [tuple(c) for c in exit_.get("cases") or []][:1] if len(exit_.get("cases") or []) == 1 else []
+        dest = _coords_of(f"x {exit_.get('vers', '')}")
+        if then and dest is not None and len(cells) > 1:
+            onward = [c for c in cells if self.reachable(dest, then, self.arrival(coords, side, c))]
+            if onward:
+                return onward[0]
+        return cells[0] if cells else None
 
     def blocked_from(self, coords: tuple[int, int], entry: str | None) -> set[str]:
         if not entry:
@@ -1487,7 +1544,10 @@ class Journey:
         side, dest = self.path[0]
         log.info("Trajet : côté %s, vers %s,%s (encore %d carte(s) jusqu'à %s,%s)", side, *dest, len(self.path),
                  *self.goal)
-        if self.traveler.go(frame, label, side) is None:
+        self.traveler.next_side = self.path[1][0] if len(self.path) > 1 else None
+        arrived = self.traveler.go(frame, label, side)
+        self.traveler.next_side = None
+        if arrived is None:
             # Sortie introuvable ou clic sans effet (le Traveler la note bloquée), ou combat : nouvel itinéraire.
             self.path = None
             self.failures += 1
