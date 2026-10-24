@@ -885,6 +885,14 @@ class TeamBot:
             return  # il arrive : pas de reclic (jugé au regard suivant)
         if find_context_menu(fresh) is not None or member.popups.describe(fresh) is not None:
             return  # menu ou fenêtre : fermés au regard suivant, avant tout clic
+        label = read_map_label(fresh)
+        if label is not None and label.coords is not None and label.coords == self._arrival(crossing):
+            # Décor presque pareil d'une carte à l'autre (24/10, plaines des Porkass : suiveurs crus sur la carte de
+            # départ, recliqués sur la nouvelle carte, partis une ou deux cartes trop loin) : la carte lue tranche.
+            log.info("%s a suivi le principal (%s, décor presque pareil)", member.name, label.describe())
+            self._lost.discard(member.name)
+            del pending[member.name]
+            return
         if walk.reclicks >= FOLLOWER_RECLICKS:
             del pending[member.name]
             self._left_behind(member, crossing, f"immobile sur la carte de départ après {walk.reclicks} reclics", fresh)
@@ -940,6 +948,15 @@ class TeamBot:
                 log.warning("%s n'est pas sur la carte du principal au départ : il le rejoindra d'abord", member.name)
                 self._mark_lost(member, frame)
 
+    def _same_place(self, member: Member) -> bool:
+        """Le suiveur est sur la carte du principal : même décor, ou mêmes coordonnées lues dans les deux fenêtres (24/10,
+        plaines des Porkass : Pesopepe arrivé en -1,-40, décor jugé autre, le bot arrêté)."""
+        mine, theirs = member.game.look(park=False), self.leader.game.look(park=False)
+        if same_map(mine, theirs):
+            return True
+        a, b = read_map_label(mine), read_map_label(theirs)
+        return a is not None and b is not None and a.coords is not None and a.coords == b.coords
+
     def _regroup(self) -> bool:
         """Suiveurs perdus (pas sur la carte du principal) : chacun fait son propre trajet jusqu'à elle (mode aller,
         une carte par appel) ; le principal ne repart pas avant. True quand toute l'équipe est réunie.
@@ -994,7 +1011,7 @@ class TeamBot:
                 continue
             del self._rejoin[name]
             arrived = journey.traveler.coords == target
-            if arrived and not same_map(member.game.look(park=False), self.leader.game.look(park=False)):
+            if arrived and not self._same_place(member):
                 log.warning("%s se croit en %s,%s mais ne voit pas le même décor que le principal", name, *target)
                 arrived = False
             if arrived:

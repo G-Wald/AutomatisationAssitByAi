@@ -1522,7 +1522,8 @@ class Journey:
         if self.at is None:
             log.info("Trajet vers %s,%s (%s), sans combat ; départ : %s,%s (%s)", *self.goal, region, *here,
                      label.describe())
-            if not any(m.suns for m in self.traveler.atlas.maps.values() if m.region == region):
+            if not any(m.suns for m in self.traveler.atlas.maps.values() if m.region == region) \
+                    and not self.passages.reference:  # référence complétée : cases des soleils connues
                 log.info("%s : références sans soleils : chaque sortie est cherchée à l'écran (touche %s si besoin) ; "
                          "une sortie introuvable est notée bloquée et l'itinéraire recalculé", region,
                          self.traveler.settings.show_exits_key.upper())

@@ -63,3 +63,10 @@ def _scroll_mode_forgotten():
     SpellBook.scroll_mode = None
     yield
     SpellBook.scroll_mode = None
+
+
+@pytest.fixture(autouse=True)
+def _without_local_reference(monkeypatch, tmp_path):
+    """La référence complétée (data/references) est locale, non versionnée : les tests ne dépendent pas de sa présence
+    (ceux qui en ont besoin construisent la leur)."""
+    monkeypatch.setattr("bot.brain.travel.REFERENCES_DIR", tmp_path / "references")

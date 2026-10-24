@@ -1761,3 +1761,16 @@ def test_sword_far_from_the_attacked_group_found_on_the_whole_map():
     hint = (1110 / frame.layout.scale, 480 / frame.layout.scale)  # clic du principal, repère de référence
     (sword,) = Joiner(timeout=5)._find(frame, hint)
     assert abs(sword.center[0] - 863) <= 8 and abs(sword.center[1] - 532) <= 8
+
+
+def test_follower_on_a_lookalike_map_is_not_reclicked_when_it_reads_the_arrival(monkeypatch):
+    # 24/10, plaines des Porkass : décor presque pareil d'une carte à l'autre ; suiveurs crus sur la carte de départ,
+    # recliqués sur la nouvelle carte, partis une ou deux cartes trop loin (-3,-40, -3,-41). La carte lue tranche.
+    monkeypatch.setattr("bot.team.loop.RECLICK_EVERY", 0)
+    monkeypatch.setattr("bot.team.loop.FOLLOWER_STILL", 0)
+    screen = Screen()
+    foret, champs = load_frame("hors_combat_foret"), load_frame("hors_combat")
+    a, b = member("A", screen, foret), member("B", screen, foret)  # même décor qu'au départ, mais 2,4 se lit
+    bot = walking_team(b, leader=a, departure=foret)
+    bot.follow(Crossing("gauche", (1, 9), read_map_label(champs), read_map_label(foret)))
+    assert events(screen, "click") == [] and not bot._lost
