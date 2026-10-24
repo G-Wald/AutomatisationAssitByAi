@@ -46,7 +46,7 @@ Faux blocages appris retirés de `data/carte.json` (sauvegarde dans `%TEMP%\cart
 | -4,-30, -5,-30, -5,-31, -5,-32 (x2), -5,-34 (x2), -5,-36, -5,-37 (Porkass) | au placement | 16 sur 16 (15 sur 15 une fois) |
 
 Aucune case de placement lue hors de la référence ; chaque carte reconnue est celle où le bot se savait (coordonnées
-du trajet). 9 combats aux Porkass sans un mort.
+du trajet). Session des Porkass : 11 combats, 11 placements contrôlés, aucun mort.
 
 **Zaap d'Astrub (4,-19)** : la case de la référence, (14, 20), tombe au pied du zaap à l'écran. Clic depuis
 l'arrière-plan sans effet (ni sur la case ni sur le portail) : la fenêtre des destinations ne s'est pas ouverte ; à
