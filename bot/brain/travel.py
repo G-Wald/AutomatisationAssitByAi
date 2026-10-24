@@ -1395,7 +1395,14 @@ class Passages:
         return f"{coords[0]},{coords[1]}" in self.reference
 
     def exits(self, coords: tuple[int, int]) -> dict[str, tuple[int, int] | str]:
-        return {**self.referenced(coords), **self.seen(coords)}  # ce qui a été vu en jeu prime
+        """Sorties : celles vues en jeu, et celles de la référence complétée. Sur une carte qu'elle décrit, une sortie
+        de la référence l'emporte sur un « bloquée » appris (24/10, utilisateur : l'apprentissage peut se tromper ; 5
+        sorties notées bloquées que StarLoco et la carte officielle donnent praticables)."""
+        out = dict(self.seen(coords))
+        for side, dest in self.referenced(coords).items():
+            if out.get(side) in (None, BLOCKED):
+                out[side] = dest
+        return out
 
     def sun_cell(self, coords: tuple[int, int], side: str) -> tuple[int, int] | None:
         """Case du soleil d'un côté d'après la référence complétée, s'il n'y en a qu'un (sinon : rempart, la recherche
@@ -1407,9 +1414,10 @@ class Passages:
         if not entry:
             return set()
         key = f"{coords[0]},{coords[1]}"
-        seen = ((self.maps.get(key) or {}).get("bloquees_depuis") or {}).get(entry) or []
         computed = ((self.reference.get(key) or {}).get("bloquees_depuis") or {}).get(entry) or []
-        return set(seen) | set(computed)
+        if self.describes(coords):
+            return set(computed)  # calculé sur les cases praticables officielles : prime sur l'appris
+        return set(((self.maps.get(key) or {}).get("bloquees_depuis") or {}).get(entry) or [])
 
 
 class Journey:
@@ -1527,9 +1535,10 @@ class Journey:
         if blocked:
             for side in self.passages.blocked_from(coords, entry):
                 links.pop(side, None)
+        referenced = self.passages.referenced(coords)
         for side, dest in (self.world.maps.get(World.key(region, coords)) or {}).get("sorties", {}).items():
             if dest == BLOCKED:
-                if blocked:
+                if blocked and side not in referenced:  # la référence complétée prime sur un « bloquée » appris
                     links.pop(side, None)
             elif dest:
                 where = _coords_of(dest)
@@ -1543,8 +1552,9 @@ class Journey:
             for key, side in getattr(self.traveler, "blocked_here", ()):
                 if key == World.key(region, coords):
                     links.pop(side, None)  # bloquée pour ce trajet seulement (carte pas sûre)
-            for side in self.world.blocked_from(World.key(region, coords), entry):
-                links.pop(side, None)  # inatteignable quand on arrive par ce côté (rempart)
+            if not self.passages.describes(coords):  # sinon : calculé sur la carte officielle (blocked_from)
+                for side in self.world.blocked_from(World.key(region, coords), entry):
+                    links.pop(side, None)  # inatteignable quand on arrive par ce côté (rempart)
         return links
 
     def _cost(self, coords: tuple[int, int], side: str, dest: tuple[int, int]) -> float:

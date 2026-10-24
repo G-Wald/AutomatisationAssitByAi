@@ -854,8 +854,11 @@ def test_completed_reference_used_after_what_was_seen_in_game():
                                        "bas": {"vers": "5,-29", "cases": [[13, 31]]}},
                            "bloquees_depuis": {"droite": ["gauche"]}}}
     passages = Passages(seen, reference)
-    assert passages.exits((5, -30)) == {"droite": (6, -30), "gauche": (4, -30), "bas": "bloquée"}
+    # « bas » noté bloqué en jeu, mais praticable d'après la référence (carte officielle) : la référence l'emporte.
+    assert passages.exits((5, -30)) == {"droite": (6, -30), "gauche": (4, -30), "bas": (5, -29)}
     assert passages.sun_cell((5, -30), "droite") == (27, 25)
     assert passages.sun_cell((5, -30), "gauche") is None  # deux soleils de ce côté : la recherche à l'écran choisit
-    assert passages.blocked_from((5, -30), "droite") == {"gauche"} and passages.blocked_from((5, -30), "haut") == {"bas"}
+    assert passages.blocked_from((5, -30), "droite") == {"gauche"}
+    assert passages.blocked_from((5, -30), "haut") == set()  # appris, mais la carte est décrite : calcul officiel seul
+    assert Passages(seen).blocked_from((5, -30), "haut") == {"bas"}  # sans référence : l'appris
     assert passages.describes((5, -30)) and not passages.describes((0, 0))
