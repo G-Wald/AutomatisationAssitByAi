@@ -645,6 +645,12 @@ class Traveler:
         """Passe sur la carte voisine par le côté `side` ; None si c'est impossible (ou si un combat commence)."""
         exits = exits if exits is not None and side in exits else self.exits(frame, side)
         exit_ = exits.get(side)
+        reference_cell = self.passages.sun_cell(self.coords, side) if exit_ is None and self.coords is not None else None
+        if reference_cell is not None:
+            # 24/10, 9,-20 haut : contours de A pas vus, sortie notée bloquée, alors qu'elle est dans la référence
+            # complétée (et déjà prise en jeu) : sa case de soleil d'abord, avant de conclure qu'il n'y a pas de sortie.
+            log.info("Pas de soleil vu vers le %s, mais la référence en donne un en %s : je l'essaie", side, reference_cell)
+            exit_ = Exit(side, reference_cell, _point(frame, reference_cell), 1.0, remembered=True)
         if exit_ is None and self.a_unheard:
             # 20/10 (S14) : A sans aucun contour, la fenêtre n'avait pas reçu la touche ; la sortie notée bloquée pour
             # tous les passages. Jamais sur une lecture vide : bloquée pour ce trajet seulement.
