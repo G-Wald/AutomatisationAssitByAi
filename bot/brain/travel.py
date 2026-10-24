@@ -112,6 +112,7 @@ class TravelSettings:
     avoid_maps: tuple[tuple[str | None, tuple[int, int]], ...] = ()  # « Incarnam 3,6 » ou « 3,6 »
     avoid_zones: tuple[tuple[str | None, str], ...] = ()  # « Incarnam (Cimetière) » ou « Cimetière »
     destination: tuple[int, int] | None = None  # mode aller : coordonnées de la carte d'arrivée
+    waypoints: tuple[tuple[int, int], ...] = ()  # mode aller : cartes à rejoindre l'une après l'autre (--etapes)
 
     @classmethod
     def from_settings(cls, settings: dict, mode: str | None = None, start: tuple[int, int] | None = None,
@@ -140,6 +141,7 @@ class TravelSettings:
             avoid_maps=tuple(_parse_map(text) for text in travel.get("avoid_maps") or ()),
             avoid_zones=tuple(_parse_zone(text) for text in travel.get("avoid_zones") or ()),
             destination=destination,
+            waypoints=tuple(tuple(w) for w in travel.get("etapes") or ()),
         )
 
 
@@ -1610,6 +1612,38 @@ class Journey:
         self.done = True
 
 
+class Waypoints:
+    """Mode aller par étapes (--etapes) : chaque carte rejointe à son tour (Journey). Une étape ratée est dite et
+    sautée : la suite continue (24/10 : vérification en jeu de la référence complétée, une paire de cartes voisines
+    par passage à vérifier)."""
+
+    def __init__(self, traveler: Traveler, goals: list[tuple[int, int]]) -> None:
+        self.traveler = traveler
+        self.goals = list(goals)
+        self.reached: list[tuple[int, int]] = []
+        self.missed: list[tuple[int, int]] = []
+        self.done = False
+        self.journey: Journey | None = None
+
+    def step(self) -> None:
+        if self.journey is None:
+            if not self.goals:
+                log.info("Étapes : %d rejointes, %d ratées%s", len(self.reached), len(self.missed),
+                         f" ({' '.join(f'{x},{y}' for x, y in self.missed)})" if self.missed else "")
+                self.done = True
+                return
+            goal = self.goals.pop(0)
+            log.info("Étape suivante : %s,%s (encore %d après)", *goal, len(self.goals))
+            self.journey = Journey(self.traveler, goal)
+        self.journey.step()
+        if self.journey.done:
+            goal = self.journey.goal
+            (self.reached if self.traveler.coords == goal else self.missed).append(goal)
+            if self.traveler.coords != goal:
+                log.warning("Étape %s,%s ratée : je passe à la suivante", *goal)
+            self.journey = None
+
+
 def make_roamer(game: Game, settings: TravelSettings) -> RoundTrip | Explorer | ZoneRoamer | Journey | None:
     if not settings.mode:
         return None
@@ -1620,6 +1654,8 @@ def make_roamer(game: Game, settings: TravelSettings) -> RoundTrip | Explorer | 
         return RoundTrip(traveler, settings.test_steps)
     if settings.mode == "explore":
         return Explorer(traveler, zone_only=settings.region == WORLDS["douze"])
+    if settings.mode == "aller" and settings.waypoints:
+        return Waypoints(traveler, list(settings.waypoints))
     if settings.mode == "aller":
         return Journey(traveler, settings.destination)
     return ZoneRoamer(traveler)

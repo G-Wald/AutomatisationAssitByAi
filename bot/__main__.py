@@ -96,6 +96,9 @@ def _coords(text: str) -> tuple[int, int]:
 def _goto(args: argparse.Namespace, settings: dict) -> bool:
     """--aller X,Y : mode aller, carte d'arrivée dans travel.destination. True pour le mode aller (en ligne de
     commande ou dans config/settings.yaml) : aucun combat lancé par le bot pendant le trajet."""
+    if getattr(args, "etapes", None):
+        args.aller = args.etapes[-1]
+        settings["travel"] = {**(settings.get("travel") or {}), "etapes": args.etapes}
     if args.aller is not None:
         args.travel = "aller"
         settings["travel"] = {**(settings.get("travel") or {}), "destination": args.aller}
@@ -240,6 +243,8 @@ def main() -> int:
                         help="mode équipe : faire le donjon NOM (config/donjons_entree.yaml), l'équipe devant l'entrée ; "
                              "NOM:ETAPE pour reprendre à une étape (entree, dalle, soleil, pnj, salles), NOM:ETAPE:NOMS "
                              "pour ces seuls personnages à cette étape (les autres l'ont faite), NOM:salles:N en salle N")
+    parser.add_argument("--etapes", type=lambda t: [_coords(c) for c in t.split(";") if c.strip()], metavar="X,Y;X,Y",
+                        help="sans combat : rejoint ces cartes l'une après l'autre (une étape ratée est sautée)")
     parser.add_argument("--banque", action="store_true",
                         help="mode équipe : à la banque d'Astrub (4,-16), chaque personnage vide l'onglet ressources de "
                              "son inventaire dans son coffre, puis le bot s'arrête")
