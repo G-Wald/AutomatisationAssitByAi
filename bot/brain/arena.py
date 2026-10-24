@@ -27,8 +27,11 @@ ARENA_DIR = Path(__file__).resolve().parents[2] / "data" / "references"
 COLUMNS, ROWS = 29, 40  # cases (i, j) de notre grille, cartes de 15 de large
 FLOOR, BLOCK, HOLE = 0, 1, 2
 # Terrain : accord minimal sur les cases lues, avance sur la carte suivante (24/10 : 1388 captures sur 1581 reconnues
-# avec 3 points d'avance ; la carte reconnue colle à 98-99 %), et cases lues au moins.
+# avec 3 points d'avance ; la carte reconnue colle à 98-99 %), et cases lues au moins. Ou avance plus courte, si la
+# suivante fait au moins TERRAIN_ERROR_RATIO fois plus d'erreurs (24/10, Prairie des Blops -4,-27 : 99,2 % contre
+# 96,3 %, pas reconnue avec 3 points ; les plaines sans relief se ressemblent).
 TERRAIN_MATCH, TERRAIN_MARGIN, TERRAIN_CELLS = 0.9, 0.03, 50
+TERRAIN_MIN_MARGIN, TERRAIN_ERROR_RATIO = 0.015, 3.0
 PLACEMENT_CELLS = 6  # placement : cases lues au moins, toutes parmi celles d'une seule carte
 
 
@@ -100,7 +103,10 @@ class Arenas:
             return None
         agreement = (self.matrix[:, cells] == np.array(natures, dtype=np.int8)).mean(axis=1)
         best, second = np.argsort(-agreement)[:2]
-        if agreement[best] < TERRAIN_MATCH or agreement[best] - agreement[second] < TERRAIN_MARGIN:
+        lead = agreement[best] - agreement[second]
+        clear = lead >= TERRAIN_MARGIN or (lead >= TERRAIN_MIN_MARGIN and
+                                           1 - agreement[second] >= TERRAIN_ERROR_RATIO * (1 - agreement[best]))
+        if agreement[best] < TERRAIN_MATCH or not clear:
             return None
         log.debug("Carte de combat reconnue au terrain : %s (%s), accord %.0f %% (suivante %.0f %%)",
                   self.arenas[best].coords, self.arenas[best].ident, 100 * agreement[best], 100 * agreement[second])

@@ -1481,3 +1481,26 @@ def test_unknown_spell_cast_blind_only_ever_clicks_enemies(monkeypatch):
     cells = [grid.cell_at(*point) for point in clicks(game)]
     assert cells == [surrounded.cell, lonely.cell]  # le plus entouré d'abord, rien d'autre que des ennemis
     assert presses(game) == ["1"]  # resélectionné après le clic sans effet
+
+
+def test_refused_fallback_spell_with_no_known_spell_means_the_spells_changed(monkeypatch):
+    # 24/10, citrouilles d'Halloween : aucun sort connu, le sort de secours (case 3) refusé à chaque tour, 30 min sans
+    # un coup. Ce refus dit « sorts changés » : touches 1 à 3 sur l'ennemi pour la suite du combat. Pas un sort connu
+    # refusé (aux Blops le même jour, une fausse transformation après Pelle Fantomatique refusée).
+    frame = load_frame("combat_portee_sort")
+    me, _ = me_and_enemy(frame)
+    target = enemy_in_range(frame)
+    ai = CombatAI(FakeGame(frame), CombatSettings())
+    monkeypatch.setattr(ai, "_select_spell", lambda frame, spell: None)
+    assert ai._cast(frame, me, target, [me, target], RED) is Cast.NO_SPELL
+    assert not ai._bar_unknown  # une fois : relance, PA... pas encore une preuve
+    ai._use.turn += 1
+    assert ai._cast(frame, me, target, [me, target], RED) is Cast.NO_SPELL
+    assert ai._bar_unknown  # refusé d'entrée deux tours de suite : sorts changés
+    known = CombatAI(FakeGame(frame), CombatSettings())
+    known._spells = [CombatSpell(4, "pelle", "Pelle Fantomatique", pa=4, spell_range=(1, 8), damage=12.0)]
+    monkeypatch.setattr(known, "_select_spell", lambda frame, spell: None)
+    for _ in range(3):
+        known._use.turn += 1
+        assert known._cast(frame, me, target, [me, target], RED) is Cast.NO_SPELL
+    assert not known._bar_unknown

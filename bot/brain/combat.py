@@ -74,7 +74,7 @@ from bot.perception.layout import Point
 from bot.perception.placement import read_placement, standing_cells
 from bot.perception.sight import (RangeView, Terrain, in_line_only, line_of_sight, locate_caster, read_blocks,
                                   range_fit, read_range, read_terrain, sight_agreement)
-from bot.perception.spellbook import locate_in_bar, slot_greyed
+from bot.perception.spellbook import slot_greyed
 from bot.perception.timeline import challenge_icons, timeline_portraits
 from bot.perception.toolbar import ToolbarButton, find_creature_button, find_tactical_button
 from bot.perception.ui import (
@@ -115,6 +115,8 @@ ALLY_RANGE_BONUS = 2
 MAX_CASTS_PER_TURN = 5  # garde-fou
 RELIEF_MARGIN = 4  # cases de marge sur la portée prévue, sur une carte à plusieurs niveaux
 RELIEF_MIN_WRONG = 2  # cases à portée mal prédites, au moins, pour croire la carte à relief (une seule : animation, ombre)
+FALLBACK_SPELL = "sort_configure"  # identifiant du sort de la case configurée, sans sort connu (spells)
+FALLBACK_REFUSED_TURNS = 2  # tours où le sort de secours est refusé d'entrée : sorts changés (transformation)
 STEP_PROOF_WAIT = 1.5  # s : marche d'un pas avant de revoir les cercles (_locate_by_step)
 ARENA_TRIES = 6  # essais de reconnaissance de la carte officielle par combat (_recognize_arena)
 # Arrière-plan, 2e rangée de la barre (cases 8 à 14) : Ctrl+1 à Ctrl+7 ne passent pas (l'état de Ctrl est celui du
@@ -483,7 +485,7 @@ class CombatAI:
         if not self._spells:
             slot = self.settings.spell_slot
             entry = self.spellbook.in_slot(slot) if self.spellbook else None
-            self._spells = [CombatSpell(slot, "sort_configure", f"sort de la case {slot}", pa=0,
+            self._spells = [CombatSpell(slot, FALLBACK_SPELL, f"sort de la case {slot}", pa=0,
                                         spell_range=(entry.reach if entry and entry.reach else self.settings.spell_range),
                                         damage=1.0, per_turn=self.settings.casts_per_turn)]
         return self._spells
@@ -496,6 +498,7 @@ class CombatAI:
         self._warned_pa = False
         self._sight_saved = False
         self._bar_changed = False  # aucun de mes sorts dans la barre (transformation), vu sur un sort refusé
+        self._fallback_refused: set[int] = set()  # tours où le sort de secours a été refusé d'entrée
         self._map_reliable = True  # faux sur une carte à relief : mes cases y sont décalées, le jeu tranche
         self._tactical_tried = False
         self._creature_tried = False
@@ -1134,7 +1137,12 @@ class CombatAI:
     @property
     def _bar_unknown(self) -> bool:
         """Sorts lus dans la fenêtre des sorts, mais aucun dans la barre : sorts changés (transformation)."""
-        return self._bar_changed or (self.spellbook is not None and bool(self.spellbook.entries) and not self._spells)
+        return self._bar_changed or (self.spellbook is not None and bool(self.spellbook.entries) and self._fallback_only)
+
+    @property
+    def _fallback_only(self) -> bool:
+        """Aucun sort connu : seul le sort de la case configurée (voir spells)."""
+        return all(s.spell_id == FALLBACK_SPELL for s in self._spells)
 
     def _learn_blocks(self, frame: Frame, fighters: list[Fighter]) -> None:
         """Blocs et trous lus sur la carte propre (mode tactique, sans portée affichée) : MapMemory.learn_terrain."""
@@ -1676,16 +1684,16 @@ class CombatAI:
             key = self._slot_key(spell.slot)
             log.info("%s non sélectionnable (touche %s) : plus assez de PA, sort en relance ou raccourci différent",
                      spell.name, key or "aucune")
-            after = self.game.look()
-            self.game.recorder.save(after.image, "sort_non_selectionnable")
-            entries = self.spellbook.entries if self.spellbook is not None else []
-            if not self._bar_changed and spell.pa <= self._use.pa and (
-                    not self._spells or (entries and not locate_in_bar(after, entries))):
-                # 24/10 : bot relancé en combat, barre reprise de la session d'avant la transformation (citrouilles) ;
-                # la case 3 visée à chaque tour, 30 min sans un coup. Aucun de mes sorts dans la barre : sorts changés.
+            self.game.recorder.save(self.game.look().image, "sort_non_selectionnable")
+            if self._fallback_only and not self._turn_stats().casts:
+                self._fallback_refused.add(self._use.turn)  # refusé d'entrée : ni PA dépensés, ni sort lancé ce tour
+            if not self._bar_changed and len(self._fallback_refused) >= FALLBACK_REFUSED_TURNS:
+                # 24/10, citrouilles d'Halloween : aucun sort connu, le sort de secours (case 3) refusé d'entrée à chaque
+                # tour, 30 min sans un coup : sorts changés. (Pas la barre relue : illisible juste après un refus, une
+                # fausse transformation vue aux Blops le même jour.)
                 self._bar_changed = True
-                log.warning("Aucun de mes sorts dans la barre (transformation ?) : touches 1 à 3 sur l'ennemi pour la "
-                            "suite du combat")
+                log.warning("Sort de secours refusé, aucun sort connu (transformation ?) : touches 1 à 3 sur l'ennemi "
+                            "pour la suite du combat")
             if key.startswith("num"):
                 self._numpad_missed(spell)
             return Cast.NO_SPELL
