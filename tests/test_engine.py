@@ -103,7 +103,9 @@ def test_casts_per_target_are_respected():
 def test_range_bonus_first_then_the_attack():
     turn = plan((0, 0), 0, [(11, 1)], [TIR, MAGIQUE])  # à 11 cases : 10 + 1 avec le bonus
     assert [(s.spell, s.cell) for s in turn.steps] == [(TIR, (0, 0)), (MAGIQUE, (11, 1))]
-    assert plan((0, 0), 0, [(14, 0)], [TIR, MAGIQUE]).steps == ()  # bonus seul : gardé pour plus tard
+    # Rien ne touche, même avec le bonus (25/10, l'utilisateur) : le bonus (3 tours) est lancé quand même, ses PA ne
+    # servaient à rien ; au tour suivant, ils iront aux attaques.
+    assert [s.spell for s in plan((0, 0), 0, [(14, 0)], [TIR, MAGIQUE]).casts] == [TIR]
     turn = plan((0, 0), 3, [(14, 0)], [TIR, MAGIQUE])  # 3 pas vers lui : 11 cases, bonus puis Flèche Magique
     assert kinds(turn) == [MOVE, CAST, CAST] and turn.steps[1].spell is TIR and turn.steps[2].spell is MAGIQUE
     assert distance(turn.steps[0].cell, (14, 0)) == 11
@@ -654,7 +656,10 @@ def test_cra_boosts_its_damage_first_when_an_enemy_is_in_range():
     assert [s.spell for s in turn.casts] == [maitrise, magique, magique]
     assert turn.first.reason == "bonus de dégâts (+40 par coup) avant de taper"
     assert turn.describe().startswith("Plan : Maîtrise de l'Arc sur moi, Flèche Magique sur (6, 2)")
-    assert not plan((0, 0), 3, [(20, 20)], [magique, maitrise, tir], pa=10).casts  # rien à portée : pas de bonus
+    # Rien à portée : les bonus qui durent encore au tour suivant (Maîtrise, Tir Puissant : 2 tours), pour taper fort
+    # au prochain
+    # (25/10, l'utilisateur : des personnages passaient leur tour).
+    assert {s.spell for s in plan((0, 0), 3, [(20, 20)], [magique, maitrise, tir], pa=10).casts} == {maitrise, tir}
     attacked = new_use(10)
     attacked.record(magique, (6, 2))  # déjà tapé ce tour : les bonus se lancent avant
     assert maitrise not in [s.spell for s in plan((0, 0), 0, [(6, 2)], [magique, maitrise], use=attacked).casts]
@@ -779,3 +784,17 @@ def test_spell_refused_after_a_move_this_turn_is_tried_again(monkeypatch):
     me, enemy = Fighter(RED, *frame.grid.center((8, 22)), (8, 22)), Fighter("blue", *frame.grid.center((12, 18)), (12, 18))
     ai._turn_stats().moves = 1  # un pas vient d'être fait, aucun lancer récent
     assert ai._cast(frame, me, enemy, [me, enemy], RED, MAGIQUE) is Cast.DONE and not answers
+
+
+def test_team_boost_counts_for_every_ally():
+    # 25/10, l'utilisateur : Cupidité (Enutrof, +50 force et +50 intelligence à toute l'équipe, 5 tours) booste beaucoup
+    # les alliés : elle passe avant les attaques quand l'équipe est là, plus qu'un bonus pour soi seul.
+    pieces = CombatSpell(1, "pieces", "Lancer de Pièces", 2, (1, 10), damage=20.0)
+    cupidite = CombatSpell(2, "cupidite", "Cupidité", 4, (0, 0), cooldown=6, boost_pct=50.0, boost_turns=5,
+                           role="boost_degats", team_boost=True)
+    allies = [(2, 2), (3, 3), (4, 4), (5, 5)]
+    turn = plan((0, 0), 0, [(6, 2)], [pieces, cupidite], allies=allies, pa=6)
+    assert turn.casts[0].spell is cupidite
+    alone = CombatSpell(2, "cupidite", "Cupidité", 4, (0, 0), cooldown=6, boost_pct=50.0, boost_turns=5,
+                        role="boost_degats")
+    assert plan((0, 0), 0, [(6, 2)], [pieces, alone], pa=6).casts[0].spell is pieces  # pour moi seul : 3 Pièces valent mieux

@@ -53,7 +53,8 @@ def test_no_range_boost_when_the_planned_attack_would_no_longer_fit():
 
 def test_no_range_boost_while_enemies_are_out_of_reach_even_with_it():
     use = new_use()
-    assert plan((0, 0), [(14, 0)], use) is None  # 14 cases : bonus gardé pour quand il servira
+    # 14 cases, rien ne touche même avec le bonus : il est lancé quand même, il dure 3 tours (25/10, l'utilisateur).
+    assert plan((0, 0), [(14, 0)], use).spell is TIR
 
 
 def test_greyed_spells_are_skipped():

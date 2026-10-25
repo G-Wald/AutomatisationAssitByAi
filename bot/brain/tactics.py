@@ -49,6 +49,7 @@ class CombatSpell:
     boost_flat: float = 0.0
     boost_pct: float = 0.0
     boost_turns: int = 0
+    team_boost: bool = False  # bonus donné à toute l'équipe (Cupidité : toute la carte), pas qu'à moi
     # Ce qu'un bonus de dégâts change à ce sort (formule des caractéristiques, validée le 04/10 : ligne = base x
     # (100 + carac + %) / 100 + dommages) : base des lignes de dégâts (pour les %) et nombre de lignes (pour les
     # dommages fixes), poisons comptés à chaque tour. None : inconnus (sort configuré) -> damage et 1 ligne.

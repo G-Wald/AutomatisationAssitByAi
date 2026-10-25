@@ -129,6 +129,9 @@ RANGE_BONUS_VALUE = 1.0  # bonus de portée suivi d'une attaque : il vaut encore
 # ma meilleure attaque (on n'est pas sûr de taper au tour suivant). Le tour du lancer, il vaut ce qu'il ajoute aux
 # attaques qui le suivent : Maîtrise de l'Arc (+40) avant deux Flèches Magiques, c'est +80 tout de suite.
 BOOST_CARRY = 0.5
+# Bonus d'équipe (Cupidité) : ce qu'il ajoute à ma meilleure attaque, compté pour chaque allié, à cette part, sur ses
+# tours (3 au plus) : le plus souvent le meilleur sort du tour (25/10, l'utilisateur).
+TEAM_BOOST = 0.5
 MAX_CASTS = 6  # sorts au plus dans un plan (12 PA en sorts à 2 PA)
 ZONE_SEARCH = 4  # cases vides visées par une zone : à 4 cases au plus d'un ennemi (au-delà, viser l'ennemi suffit)
 EPSILON = 1e-6
@@ -147,6 +150,7 @@ class Weights:
     next_turn: float = NEXT_TURN
     range_bonus: float = RANGE_BONUS_VALUE
     boost_carry: float = BOOST_CARRY
+    team_boost: float = TEAM_BOOST
     zone_falloff: float = ZONE_FALLOFF  # part des dégâts perdue par case entre la case visée et l'ennemi touché
     hit: float = HIT_BONUS
     kill: float = KILL_BONUS
@@ -396,6 +400,7 @@ class _Planner:
         self.me, self.pm = me, max(pm, 0)
         self.enemies = tuple(enemies)
         self.allies = frozenset(allies)
+        self._idle = False  # recherche d'un tour sans coup possible : un bonus seul est permis (_casts_from)
         self.ally_cells = tuple(sorted(self.allies))
         self.spells = [s for s in spells if s.damage > 0 or (s.on_self and (s.range_bonus or s.damage_boost))]
         self.use, self.board, self.w = use, board, weights
@@ -591,7 +596,8 @@ class _Planner:
         turns = min(max(boost.boost_turns, 1) - 1, 2)
         gain = max((s.boosted(boost.boost_flat, boost.boost_pct) - s.damage for s in self.spells
                     if s.damage > 0 and not s.on_self), default=0.0)
-        return self.w.boost_carry * turns * gain
+        team = self.w.team_boost * gain * len(self.allies) * min(max(boost.boost_turns, 1), 3) if boost.team_boost else 0.0
+        return self.w.boost_carry * turns * gain + team
 
     def _push(self, spell: CombatSpell, origin: Cell, center: Cell, positions: tuple[Cell, ...],
               hits: tuple[int, ...]) -> tuple[tuple[Cell, ...] | None, int]:
@@ -793,9 +799,10 @@ class _Planner:
             self.sequences += 1
             if damage > 0:
                 self.can_hit = True
-            elif bonus:
-                return  # bonus sans attaque derrière : gardé pour quand il servira
-            if any(o.spell.range_bonus and o.damage <= 0 for o in sequence) and not any(o.stretch for o in sequence):
+            elif bonus and not (self._idle and all(_lasting(o.spell) for o in sequence)):
+                return  # bonus sans attaque derrière : gardé pour quand il servira (sauf tour sans coup : _idle)
+            if any(o.spell.range_bonus and o.damage <= 0 for o in sequence) and not any(o.stretch for o in sequence) \
+                    and not self._idle:
                 return  # 11/10 : bonus de portée alors que tout est déjà à portée : des PA pour rien
             adjust, killed = self._lives(dealt)
             alive = tuple(p for i, p in enumerate(positions) if i not in killed) if killed else positions
@@ -838,6 +845,13 @@ class _Planner:
                 local[spell.spell_id] -= 1
 
         search(self.use.pa, self.enemies, 0, (0.0, 0.0), 0, 0.0, 0.0, False)
+        if not best.casts and not self._idle:
+            # Rien ne touche d'ici (25/10, l'utilisateur : des personnages passaient leur tour) : un bonus qui dure
+            # encore au tour suivant (Cupidité, Tir Éloigné, Chance...) est lancé maintenant, ses PA ne servaient à
+            # rien ; au tour suivant, tous les PA vont aux attaques.
+            self._idle = True
+            search(self.use.pa, self.enemies, 0, (0.0, 0.0), 0, 0.0, 0.0, False)
+            self._idle = False
         return best
 
     def plan(self) -> TurnPlan:
@@ -965,6 +979,11 @@ class _Planner:
             if why:
                 notes.append(f"je ne me mets pas en {straight}, tout droit : {', '.join(why)}")
         return ", ".join(notes)
+
+
+def _lasting(spell: CombatSpell) -> bool:
+    """Bonus qui dure encore au tour suivant (lancé un tour sans coup, il servira)."""
+    return spell.damage <= 0 and max(spell.boost_turns, spell.bonus_turns) >= 2
 
 
 def _boost_text(spell: CombatSpell) -> str:

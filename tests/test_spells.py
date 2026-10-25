@@ -12,6 +12,7 @@ from bot.brain.spellbook import (
     SpellBook,
     best_assignment,
     boost_of,
+    stat_boost_of,
     deduce_role,
     guess_class,
     load_reference,
@@ -101,7 +102,9 @@ def test_enutrof_spells_known_with_their_roles():
     assert by_key["cle_reductrice"].role == "autre"  # -1 à la portée, sans dégâts
     spells.slots = {s.entry.row + 1: s.entry for s in spells.spells.values()}
     attacks = {s.spell_id for s in spells.combat_spells()}
-    assert attacks == {"lancer_de_pieces", "lancer_de_pelle", "pelle_fantomatique", "remblai", "force_de_l_age"}
+    # Chance (+11 à 20 chance sur soi) : un bonus de dégâts (bonus de caractéristique, 25/10).
+    assert attacks == {"lancer_de_pieces", "lancer_de_pelle", "pelle_fantomatique", "remblai", "force_de_l_age",
+                       "chance"}
 
 
 @pytest.mark.parametrize("name", CRA_WINDOWS)
@@ -146,7 +149,7 @@ def test_no_attack_without_damage_in_any_class():
             if role in ATTACKS:
                 assert ids & DAMAGE_EFFECTS and mean_damage(level["effets"]) > 0, spell["cle"]
             elif not ids & DAMAGE_EFFECTS:
-                expected = "boost_portee" if RANGE_BONUS in ids and tuple(level["portee"]) == (0, 0) else                     "boost_degats" if boost_of(level) is not None else "autre"
+                expected = "boost_portee" if RANGE_BONUS in ids and tuple(level["portee"]) == (0, 0) else                     "boost_degats" if boost_of(level) is not None or stat_boost_of(level) is not None else "autre"
                 assert role == expected, spell["cle"]
 
 

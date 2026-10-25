@@ -75,6 +75,10 @@ DAMAGE_BONUS, DAMAGE_PERCENT = 112, 138  # « +40 de dommages », « Augmente le
 # coups critiques. Tout autre effet (état, transformation, PM perdus, dégâts au lanceur : Mutilation, Roue de la
 # Fortune, Colère de Zatoïshwan, Momification) : pas un simple bonus, la tactique ne s'en sert pas.
 BOOST_SIDE_EFFECTS = {202, 115}
+# Bonus de caractéristique (+force, +intelligence, +chance, +agilité) : +1 % aux dégâts de l'élément par point (formule
+# des caractéristiques). Un personnage tape d'habitude dans deux éléments : compté pour la moitié de leur somme.
+STAT_BOOSTS = {118: "terre", 126: "feu", 123: "eau", 119: "air"}
+TEAM_ZONE = 63  # taille de zone « toute la carte » chez Solomonk : bonus pour toute l'équipe
 MIN_DAMAGE_PER_PA = 1.0  # un sort à malus (ou recul...) qui fait moins de dégâts moyens par PA n'est pas une attaque
 # Classe d'après la fenêtre (match_class) : points des lignes reliées à un sort de la classe.
 ICON_POINTS = 3  # icône reconnue : le sort est sûr ; PA, portée et niveau qui collent : 1 point chacun
@@ -328,6 +332,24 @@ def boost_of(level: dict) -> tuple[float, float, int] | None:
             max(e.get("tours") or 1 for e in boosts))
 
 
+def stat_boost_of(level: dict) -> tuple[float, float, int] | None:
+    """Bonus de caractéristiques lancé de ma case (Cupidité de l'Enutrof : +50 force et +50 intelligence à toute
+    l'équipe, 5 tours ; Chance : +11 à 20 chance sur soi) : (0, % de dégâts, tours), comme boost_of ; None sinon."""
+    effects = level.get("effets") or []
+    ids = {e["id"] for e in effects}
+    if not ids & set(STAT_BOOSTS) or ids - set(STAT_BOOSTS) - BOOST_SIDE_EFFECTS - NO_EFFECT or level["portee"][0] != 0:
+        return None
+    boosts = [e for e in effects if e["id"] in STAT_BOOSTS]
+    pct = sum(((e["min"] or 0) + (e["max"] or e["min"] or 0)) / 2 for e in boosts) / 2
+    return 0.0, pct, max(e.get("tours") or 1 for e in boosts)
+
+
+def team_boost(level: dict) -> bool:
+    """Bonus sur toute la carte (toute l'équipe), pas seulement sur ma case."""
+    return any((e.get("zone") or {}).get("taille", 0) >= TEAM_ZONE for e in level.get("effets") or []
+               if e["id"] in STAT_BOOSTS or e["id"] in (DAMAGE_BONUS, DAMAGE_PERCENT))
+
+
 def deduce_role(level: dict) -> str:
     """Rôle tactique d'après les effets (voir config/sorts.yaml) ; « autre » : la tactique ne s'en sert pas.
 
@@ -339,7 +361,7 @@ def deduce_role(level: dict) -> str:
     ids = {e["id"] for e in effects}
     if RANGE_BONUS in ids and tuple(level["portee"]) == (0, 0):
         return "boost_portee"
-    if boost_of(level) is not None:
+    if boost_of(level) is not None or stat_boost_of(level) is not None:
         return "boost_degats"
     damage = [e for e in effects if e["id"] in DAMAGE_EFFECTS]
     if not damage:
@@ -404,7 +426,7 @@ class Spell:
         strongest = max(hurting, key=lambda e: (e["min"] or 0) + (e["max"] or 0), default=None)
         zone = (strongest or {}).get("zone") or {}
         bonus = next((e for e in effects if e["id"] == RANGE_BONUS), None)
-        boost = boost_of(level) if self.role == "boost_degats" else None
+        boost = (boost_of(level) or stat_boost_of(level)) if self.role == "boost_degats" else None
         return CombatSpell(
             slot=slot,
             spell_id=self.key or f"sort_{self.entry.row + 1}",
@@ -426,6 +448,7 @@ class Spell:
             boost_flat=boost[0] if boost else 0.0,
             boost_pct=boost[1] if boost else 0.0,
             boost_turns=boost[2] if boost else 0,
+            team_boost=bool(boost) and team_boost(level),
             damage_base=mean_damage(effects),
             damage_lines=sum(max(1, e.get("tours", 0)) * (e.get("chance") or 100) / 100 for e in hurting),
         )
