@@ -207,9 +207,13 @@ FLASH_MENU_SCALE = 1057 / REF_HEIGHT  # découpé tel quel dans une fenêtre de 
 FLASH_MENU_THRESHOLD = 0.8  # 1,0 sur sa capture ; 0,5 au plus sur les autres captures entières (14/10)
 FLASH_MENU_REACH = (350, 300)  # px de référence autour du clic : le menu s'ouvre au clic (à gauche ou au-dessus près
 # d'un bord), d'environ 300 x 220
-FLASH_CLOSE_REF = (1465, 991)  # repère de référence : fond beige en bas à gauche de la barre de sorts (15/10)
+FLASH_CLOSE_REF = (1465, 997)  # repère de référence : fond beige en bas à gauche de la barre de sorts (15/10, 25/10)
 FLASH_CLOSE_IN_COMBAT_REF = (1700, 1000)  # sous la 2e rangée de sorts : beige en combat (bouton de fin de tour à gauche)
-FLASH_CLOSE_CLEARANCE = 6  # px de référence autour de ce point : beige uni exigé
+FLASH_CLOSE_CLEARANCE = 6  # px de référence autour de ce point : beige uni exigé, étendue du clic
+# Beige uni exigé aussi sur cette hauteur au-dessus du point (px de référence) : 25/10, l'œil « combats en cours »
+# (affiché quand un autre combat a lieu sur la carte) était juste au-dessus de l'ancien point (1465, 991) ; le clic de
+# fermeture du menu de Flash l'a ouvert. Point descendu dans la bande beige du bas.
+FLASH_CLOSE_UP = 16
 
 
 def find_flash_menu(frame: Frame, around: Point | None = None, anywhere: bool = False) -> Point | None:
@@ -253,9 +257,10 @@ def flash_close_point(frame: Frame) -> Point | None:
     droite de ce bouton (17/10 : menu de Flash ouvert en rejoignant un combat). None si aucun des deux n'est beige uni
     (une fenêtre assombrit l'écran)."""
     r = round(frame.layout.length(FLASH_CLOSE_CLEARANCE))
-    for ref in (FLASH_CLOSE_REF, FLASH_CLOSE_IN_COMBAT_REF):
+    up = round(frame.layout.length(FLASH_CLOSE_UP))
+    for ref, above in ((FLASH_CLOSE_REF, up), (FLASH_CLOSE_IN_COMBAT_REF, r)):
         x, y = frame.layout.point(*ref)
-        patch = frame.image[max(0, y - r) : y + r + 1, max(0, x - r) : x + r + 1]
+        patch = frame.image[max(0, y - above) : y + r + 1, max(0, x - r) : x + r + 1]
         if patch.size and near(patch, UI_BEIGE, 10).all():
             return x, y
     return None

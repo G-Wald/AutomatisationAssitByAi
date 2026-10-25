@@ -790,3 +790,15 @@ def test_fighters_found_on_cells_one_ground_level_lower():
     teams = [f.team for f in fighters]
     assert teams.count("red") == 7 and teams.count("blue") == 5
     assert len({(f.team, f.cell) for f in fighters}) == len(fighters)
+
+
+def test_flash_close_point_stays_off_the_fights_eye():
+    # 25/10 : l'œil « combats en cours » (un autre combat sur la carte) juste au-dessus de l'ancien point de fermeture
+    # du menu de Flash : le clic l'a ouvert. Le point est descendu dans la bande beige, beige uni au-dessus de lui.
+    frame = load_frame("oeil_combats_en_cours_sous_la_carte")
+    x, y = flash_close_point(frame)
+    up, r = round(frame.layout.length(16)), round(frame.layout.length(6))
+    patch = frame.image[y - up : y + r + 1, x - r : x + r + 1].astype(int)
+    assert (np.abs(patch - np.array(UI_BEIGE)).max(axis=2) <= 10).all()
+    eye_y = frame.layout.point(1465, 991)[1] - round(frame.layout.length(20))  # l'œil, ~20 px au-dessus de l'ancien point
+    assert y - eye_y >= frame.layout.length(25)
