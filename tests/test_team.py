@@ -1788,3 +1788,19 @@ def test_friend_names_just_under_the_old_threshold_are_found():
     title = find_friends_window(frame)
     assert find_friend(frame, title, "Walitcoin") is not None and find_friend(frame, title, "Waldarch-[Gal]") is not None
     assert find_friend(frame, title, "Koalaloupour") is None and find_friend(frame, title, "Fourbouille") is None
+
+
+def test_friend_levels_read_in_the_friends_list():
+    # 25/10 : nouvelle équipe, niveaux jamais lus : groupes de niveau 75 laissés (limite par défaut 70) alors que
+    # l'équipe en cumule ~270. La colonne « Niveau » de la liste des amis du principal les donne.
+    from bot.perception.chat import ocr_available
+    from bot.perception.party import find_friends_window, read_friend_level
+
+    if not ocr_available():
+        pytest.skip("OCR de Windows absent")
+    frame = load_frame("amis_noms_pres_du_seuil")
+    title = find_friends_window(frame)
+    assert [read_friend_level(frame, title, n) for n in ("Eldieso", "Pesopepe", "Walitcoin", "Waldarch-[Gal]")] == \
+        [30, 19, 23, 47]
+    assert read_friend_level(frame, title, "Koalaloupour") is None
+

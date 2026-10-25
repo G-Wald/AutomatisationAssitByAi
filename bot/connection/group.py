@@ -13,7 +13,8 @@ from dataclasses import dataclass
 
 from bot.brain.game import Game
 from bot.perception.party import (ACCEPT, CANCEL, INVITE_ENTRY, find_friend, find_friends_icon, find_friends_window,
-                                  find_invitation, find_invite_entry, find_pending_invite, group_arrow)
+                                  find_invitation, find_invite_entry, find_pending_invite, group_arrow,
+                                  read_friend_level)
 from bot.perception.popups import find_known_popup, load_popup_specs
 from bot.perception.templates import template_spread
 
@@ -123,6 +124,18 @@ def collapse(player: Player) -> None:
     player.game.click(arrow[1], frame.layout.spread(*ARROW_SPREAD))
     if player.game.wait_until(lambda f: (a := group_arrow(f)) is not None and not a[0], 2.0) is None:
         log.warning("%s : le cadre du groupe ne se replie pas", player.name)
+
+
+def friend_levels(leader: Player, names: list[str]) -> dict[str, int]:
+    """Niveaux de `names` lus dans la liste des amis du principal (fenêtre « Amis » ouverte puis refermée) ; ceux
+    qui ne s'y lisent pas manquent."""
+    opened = open_friends(leader)
+    if opened is None:
+        return {}
+    frame, title = opened
+    levels = {name: level for name in names if (level := read_friend_level(frame, title, name)) is not None}
+    close_friends(leader)
+    return levels
 
 
 def form_group(leader: Player, members: list[Player], collapse_frames: bool = True) -> list[str]:

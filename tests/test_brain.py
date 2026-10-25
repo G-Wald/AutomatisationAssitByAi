@@ -1504,3 +1504,52 @@ def test_refused_fallback_spell_with_no_known_spell_means_the_spells_changed(mon
         known._use.turn += 1
         assert known._cast(frame, me, target, [me, target], RED) is Cast.NO_SPELL
     assert not known._bar_unknown
+
+
+def test_points_clicked_on_a_group_are_remembered_across_searches():
+    # 25/10, Taïnéla 1,-34 : infobulle collée au bord, groupe 3 colonnes plus loin ; les deux mêmes points recliqués à
+    # chaque recherche, puis le groupe abandonné. La recherche suivante continue la liste des points.
+    frame = load_frame("groupe_niveau_7")
+    (tooltip,) = find_group_tooltips(frame)
+    engager = Engager(FakeGame(frame), EngageSettings())
+    first = engager._probed_points(tooltip, frame)
+    first.append((1.0, 2.0))
+    moved = replace(tooltip, x=tooltip.x + 10)
+    assert engager._probed_points(moved, frame) is first  # même groupe, un peu bougé : mêmes points déjà cliqués
+    far = replace(tooltip, x=tooltip.x + 400)
+    assert engager._probed_points(far, frame) == []  # un autre groupe
+    engager.new_map()
+    assert engager._probed_points(tooltip, frame) == []
+
+
+def test_truncated_tooltip_does_not_tell_which_side_its_group_is():
+    # 25/10, Taïnéla 1,-33 : infobulle coupée par une autre, 3 monstres lus pour 6 : « au-dessus » sûr, à tort.
+    from bot.perception.groups import under_its_group
+
+    frame = load_frame("groupe_niveau_7")
+    (tooltip,) = find_group_tooltips(frame)
+    assert under_its_group(replace(tooltip, truncated=True), frame) is None
+
+
+def test_level_limit_with_the_leader_missing_uses_the_others_mean():
+    # 25/10 : le principal n'est pas dans sa propre liste d'amis ; les autres niveaux y sont lus.
+    engager = Engager(FakeGame(load_frame("groupe_niveau_7")), EngageSettings(max_level=70, max_level_auto=True,
+                                                                              level_ratio=0.7))
+    engager.team_levels = [None, 30, 19, 29, 23, 47, 44, 39]
+    assert engager.level_limit() == round(0.7 * 231 * 8 / 7)
+    engager.team_levels = [None, None, None, None, None, 47, 44, 39]
+    assert engager.level_limit() == 70  # trop peu de niveaux connus : la limite réglée
+
+
+def test_no_click_on_the_bar_once_the_fight_is_over():
+    # 25/10, l'utilisateur : deux fois une potion de téléportation bue hors combat. Un sort sur soi se lance d'un clic
+    # droit sur sa case de la barre ; combat fini, la barre montre les objets : la potion de cette case. Plus de clic.
+    frame = load_frame("hors_combat")
+    game = FakeGame(frame)
+    ai = CombatAI(game, CombatSettings())
+    boost = CombatSpell(5, "chance", "Chance", 4, (0, 1), boost_pct=10.0, boost_turns=5, role="boost_degats")
+    me = Fighter(RED, *frame.grid.center((10, 10)), (10, 10))
+    assert ai._cast_on_self(frame, me, boost, RED) is Cast.NO_SPELL
+    assert clicks(game) == [] and presses(game) == []
+    magique = CombatSpell(3, "fleche_magique", "Flèche Magique", 4, (1, 8), damage=11)
+    assert ai._select_spell(frame, magique) is None and presses(game) == []

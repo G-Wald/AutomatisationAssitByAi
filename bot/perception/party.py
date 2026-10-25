@@ -12,6 +12,8 @@ Captures de l'utilisateur du 08/10 :
   replié (07-08/10 : 0,95 ou plus sur la bonne flèche, 0,77 au plus sur l'autre, 0,58 sans groupe).
 """
 
+import cv2
+
 from bot.perception.frame import Frame
 from bot.perception.layout import Box, Point
 from bot.perception.templates import match_template
@@ -61,6 +63,31 @@ def find_friend(frame: Frame, title: Point, name: str) -> tuple[Point, tuple[flo
         return None
     width = render_text(name, frame.layout.length(FRIEND_SIZE)).shape[1]
     return found[0], (width / 2 * NAME_SPREAD, frame.layout.length(3))
+
+
+FRIEND_LEVEL = (320, 420)  # px de référence depuis le titre « Amis » : colonne « Niveau » de la liste des amis
+LEVEL_ROW = 11  # px de référence au-dessus et au-dessous du nom
+LEVEL_ZOOM = 4  # agrandi pour l'OCR de Windows (lu juste sur les 7 noms de la capture du 25/10)
+
+
+def read_friend_level(frame: Frame, title: Point, name: str) -> int | None:
+    """Niveau de `name` dans la liste des amis (colonne « Niveau », OCR de Windows) ; None s'il n'y est pas ou ne se
+    lit pas. 25/10 : nouvelle équipe, niveaux jamais lus, groupes de niveau 75 laissés (limite par défaut 70) alors
+    que l'équipe en cumule ~270."""
+    from bot.perception.chat import ocr_available, ocr_lines  # OCR de Windows (chat.py)
+
+    found = find_friend(frame, title, name)
+    if found is None or not ocr_available():
+        return None
+    (_, y), _ = found
+    length = frame.layout.length
+    crop = frame.image[round(y - length(LEVEL_ROW)):round(y + length(LEVEL_ROW)),
+                       round(title[0] + length(FRIEND_LEVEL[0])):round(title[0] + length(FRIEND_LEVEL[1]))]
+    if crop.size == 0:
+        return None
+    lines = ocr_lines(cv2.resize(crop, None, fx=LEVEL_ZOOM, fy=LEVEL_ZOOM, interpolation=cv2.INTER_CUBIC)) or []
+    digits = "".join(c for c in "".join(lines) if c.isdigit())
+    return int(digits) if digits and 1 <= int(digits) <= 200 else None
 
 
 def find_invite_entry(frame: Frame, click: Point) -> Point | None:

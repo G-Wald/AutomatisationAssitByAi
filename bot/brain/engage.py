@@ -307,6 +307,7 @@ class Engager:
         self._no_menu: list[tuple[GroupTooltip, float]] = []  # (infobulle, quand) : clics sans menu « Attaquer »
         self._z_until = float("-inf")  # jusqu'à quand les infobulles de Z peuvent rester affichées (game.now)
         self._unreachable: list[tuple[Point, float]] = []  # (clic, quand) : groupe touché, combat jamais lancé
+        self._probed: list[tuple[GroupTooltip, list[tuple[float, float]]]] = []  # points cliqués par groupe (_probe)
         self._hit = False  # dernier clic sans menu « Attaquer » : quelque chose a été touché (ni menu de Flash, ni autre)
         self._last_click: Point | None = None  # dernier clic sur un groupe de cette recherche
         # Mémoire des zones hors d'atteinte (remember_in) : où l'écrire (World de travel.py) et où l'on est
@@ -335,6 +336,7 @@ class Engager:
         """Changement de carte : les groupes ratés et les endroits hors d'atteinte de l'ancienne sont oubliés (ceux
         notés de la nouvelle sont chargés à la recherche suivante)."""
         self._skipped, self._no_menu, self._unreachable = [], [], []
+        self._probed = []
         self._place, self._zones = None, []
         self._empty_z, self.keyboard_ok = 0, None
 
@@ -519,8 +521,10 @@ class Engager:
         """Niveau total maximal d'un groupe attaqué : engage.max_level, ou (auto) level_ratio x niveau cumulé de
         l'équipe (team_levels : un par personnage, None si jamais lu ; max_level tant qu'il en manque un)."""
         levels = getattr(self, "team_levels", None) or []
-        if self.settings.max_level_auto and levels and all(level is not None for level in levels):
-            return round(self.settings.level_ratio * sum(levels))
+        known = [level for level in levels if level is not None]
+        if self.settings.max_level_auto and levels and 2 * len(known) >= len(levels):
+            # Niveaux manquants (le principal n'est pas dans sa propre liste d'amis) : la moyenne des autres (25/10).
+            return round(self.settings.level_ratio * sum(known) * len(levels) / len(known))
         return self.settings.max_level
 
     def _not_too_strong(self, frame: Frame, tooltips: list[GroupTooltip]) -> list[GroupTooltip]:
@@ -654,7 +658,7 @@ class Engager:
         revue (le groupe a pu bouger : ses points ne sont plus ceux déjà cliqués, le 1er est retenté). NO_MENU si aucun
         clic n'a ouvert le menu, ou si l'infobulle n'est plus là (groupe parti)."""
         button = PROBE_BUTTONS[self.settings.probe_click]
-        tried: list[tuple[float, float]] = []
+        tried = self._probed_points(tooltip, frame)
         for probe in range(1, PROBES + 1):
             near = frame.layout.length(8)
             point = next((p for p in hover_points(tooltip, frame)
@@ -675,6 +679,7 @@ class Engager:
             else:
                 outcome = self._after_click(aim, tooltip, frame)
             if outcome is Outcome.NO_MENU and button == "right" and self._hit:
+                tried.remove(point)  # le groupe est là (touché) : le même point à la recherche suivante, pour confirmer
                 self._note_unreachable(aim, frame)
                 log.info("Groupe touché mais pas de combat : hors d'atteinte ? (endroit noté, pas d'autre clic dessus)")
                 return outcome
@@ -693,6 +698,18 @@ class Engager:
             previous = tooltip
             tooltip = min(again, key=lambda t: abs(t.x - previous.x) + abs(t.title_y - previous.title_y))
         return Outcome.NO_MENU
+
+    def _probed_points(self, tooltip: GroupTooltip, frame: Frame) -> list[tuple[float, float]]:
+        """Points déjà cliqués sur ce groupe (même infobulle) aux recherches précédentes de cette carte : la recherche
+        suivante continue la liste de hover_points au lieu de la recommencer (25/10, Taïnéla 1,-34 : infobulle collée au
+        bord, le groupe 3 colonnes plus loin ; les deux mêmes points recliqués à chaque recherche, puis le groupe
+        abandonné et la carte quittée avec 3 groupes dessus)."""
+        for known, points in self._probed:
+            if _same_tooltip(known, tooltip, frame):
+                return points
+        points: list[tuple[float, float]] = []
+        self._probed.append((tooltip, points))
+        return points
 
     def _attack(self, group: Point, tooltip: GroupTooltip, z_frame: Frame) -> Outcome:
         self._last_click = group

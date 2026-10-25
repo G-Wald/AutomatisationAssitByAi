@@ -58,7 +58,8 @@ from bot.perception.ui import READY_SPREAD, hp_ratio, pods_fill, tactical_mode
 from bot.state.scene import Phase, Scene, read_scene
 from bot.perception.chat import combat_lines, died
 from bot.team.join import Joiner, recent_click
-from bot.team.member import load_level, Member, to_reference
+from bot.connection.group import Player, friend_levels
+from bot.team.member import load_level, save_level, Member, to_reference
 from bot.team.placement import Seat, by_elimination, next_moves, plan_seats
 from bot.team.recovery import RecoverySettings, Watchdog
 from bot.team.roster import TeamSettings
@@ -239,6 +240,7 @@ class TeamBot:
         combat = settings.get("combat") or {}
         timing = settings.get("timing") or {}
         self.members = members
+        self._settings = settings  # réglages bruts : niveaux retenus des personnages (learn_levels)
         self.leader, self.followers = members[0], members[1:]
         self.by_name = {m.name: m for m in members}
         self.team = team or TeamSettings.from_settings(settings)
@@ -252,8 +254,10 @@ class TeamBot:
         if self.engager is not None and engage_settings.max_level_auto:
             self.engager.team_levels = [load_level(settings, m.name) for m in members]
             missing = [m.name for m, level in zip(members, self.engager.team_levels) if level is None]
+            known = [level for level in self.engager.team_levels if level is not None]
             log.info("Niveau maximal des groupes : %s", f"{self.engager.level_limit()} ({engage_settings.level_ratio:g} x "
-                     f"niveau cumulé {sum(self.engager.team_levels)})" if not missing else
+                     f"niveau cumulé {sum(known)}" + (f", {', '.join(missing)} à la moyenne des autres" if missing else "")
+                     + ")" if self.engager.level_limit() != engage_settings.max_level or not missing else
                      f"{engage_settings.max_level} (niveau pas encore connu : {', '.join(missing)} ; retenu au prochain "
                      "« Tu passes niveau N »)")
         self.roamer = make_roamer(self.leader.game, self.travel_settings)
@@ -1124,6 +1128,22 @@ class TeamBot:
             if label is not None and label.readable and label.coords is not None:
                 return label.coords
         return None
+
+    def learn_levels(self) -> None:
+        """Niveaux jamais lus (nouveaux personnages, 25/10 : groupes de niveau 75 laissés, limite par défaut 70, pour
+        une équipe qui en cumule ~270) : lus dans la liste des amis du principal, retenus, la limite recalculée. Le
+        principal n'est pas dans sa propre liste : la moyenne des autres (Engager.level_limit). Au lancement, après le
+        groupe (bot/__main__.py)."""
+        if self.engager is None or not getattr(self.engager, "team_levels", None):
+            return
+        missing = [m.name for m, level in zip(self.members, self.engager.team_levels)
+                   if level is None and m is not self.leader]
+        if not missing:
+            return
+        for name, level in friend_levels(Player(self.leader.name, self.leader.game), missing).items():
+            save_level(self._settings, name, level)
+        self.engager.team_levels = [load_level(self._settings, m.name) for m in self.members]
+        log.info("Niveaux lus dans la liste des amis : niveau maximal des groupes %d", self.engager.level_limit())
 
     def _walk_area(self) -> set | None:
         """Cases joignables à pied d'où est le principal (carte officielle, brain/arena.walk_area) : depuis sa case

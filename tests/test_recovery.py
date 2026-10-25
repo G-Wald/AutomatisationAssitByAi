@@ -792,6 +792,8 @@ def test_level_limit_follows_the_team_cumulated_level():
     engager = Engager.__new__(Engager)
     engager.settings = settings
     engager.team_levels = [14, 13, 15, None]
-    assert engager.level_limit() == 70  # un niveau manque : le plafond fixe
+    assert engager.level_limit() == 28  # un niveau manque (le principal, absent de sa liste d'amis) : la moyenne (25/10)
+    engager.team_levels = [14, None, None, None]
+    assert engager.level_limit() == 70  # trop peu de niveaux connus : le plafond fixe
     engager.team_levels = [14, 13, 15, 14]
     assert engager.level_limit() == 28

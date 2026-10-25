@@ -63,6 +63,9 @@ class GroupTooltip:
     right: float
     monsters: int
     clipped: bool  # collée au bord gauche ou droit de la carte (ou décentrée, bout caché) : décalée par le jeu
+    # Lignes de monstres coupées par l'infobulle suivante en dessous (chevauchement) : nombre peut-être faux (25/10, 3
+    # lus pour 6), sa hauteur ne dit pas de quel côté est le groupe (under_its_group).
+    truncated: bool = False
 
     @property
     def box(self) -> Box:
@@ -125,10 +128,13 @@ def _tooltip_from_word(frame: Frame, word: tuple[int, int, int, int], stop_y: fl
             break
     x = wx + (right_end + 1) / 2
     # Une ligne par monstre, tant qu'il y a du texte à l'endroit attendu.
-    monsters = 0
+    monsters, truncated = 0, False
     while monsters < 8:
         y = round(title_y + (FIRST_MONSTER + LINE_HEIGHT * monsters) * s)
-        if y + 5 * s >= stop_y or not _monster_line(frame, x, y):
+        if y + 5 * s >= stop_y:
+            truncated = True
+            break
+        if not _monster_line(frame, x, y):
             break
         monsters += 1
     top = title_y - TEXT_ABOVE * s
@@ -147,7 +153,7 @@ def _tooltip_from_word(frame: Frame, word: tuple[int, int, int, int], stop_y: fl
     clipped = left <= map_left + EDGE_MARGIN * s or right >= map_right - EDGE_MARGIN * s
     if not clipped and abs(_column_offset(x, frame)) > OFF_COLUMN * s:  # décentrée : repoussée, bout caché ?
         clipped = left <= map_left + HIDDEN_EDGE * s or right >= map_right - HIDDEN_EDGE * s
-    return GroupTooltip(x, title_y, top, bottom, left, right, monsters, clipped)
+    return GroupTooltip(x, title_y, top, bottom, left, right, monsters, clipped, truncated)
 
 
 def _monster_line(frame: Frame, x: float, y: int) -> bool:
@@ -186,6 +192,8 @@ def under_its_group(tooltip: GroupTooltip, frame: Frame) -> bool | None:
     """Infobulle sous son groupe (True) ou au-dessus de lui (False), d'après la case où tomberait le groupe dans
     chaque cas : une seule tombe sur une rangée du réseau. None si aucune ou les deux (relief de la carte, groupe
     en marche, lignes de monstres mal comptées sous une autre infobulle) : à vérifier en survolant."""
+    if tooltip.truncated:
+        return None  # 25/10, Taïnéla 1,-33 : 3 lignes lues pour 6 monstres, « au-dessus » sûr à tort, clic dans le vide
     grid = frame.grid
     s = frame.layout.scale
 

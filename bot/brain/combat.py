@@ -74,7 +74,7 @@ from bot.perception.layout import Point
 from bot.perception.placement import read_placement, standing_cells
 from bot.perception.sight import (RangeView, Terrain, in_line_only, line_of_sight, locate_caster, read_blocks,
                                   range_fit, read_range, read_terrain, sight_agreement)
-from bot.perception.spellbook import slot_greyed
+from bot.perception.spellbook import slot_greyed, slot_scores
 from bot.perception.timeline import challenge_icons, timeline_portraits
 from bot.perception.toolbar import ToolbarButton, find_creature_button, find_tactical_button
 from bot.perception.ui import (
@@ -118,6 +118,7 @@ RELIEF_MIN_WRONG = 2  # cases à portée mal prédites, au moins, pour croire la
 FALLBACK_SPELL = "sort_configure"  # identifiant du sort de la case configurée, sans sort connu (spells)
 FALLBACK_REFUSED_TURNS = 2  # tours où le sort de secours est refusé d'entrée : sorts changés (transformation)
 STEP_PROOF_WAIT = 1.5  # s : marche d'un pas avant de revoir les cercles (_locate_by_step)
+BAR_ICON_MATCH = 0.65  # case de la barre qui montre l'icône du sort (comme locate_in_bar) : _bar_shows
 ARENA_TRIES = 6  # essais de reconnaissance de la carte officielle par combat (_recognize_arena)
 # Arrière-plan, 2e rangée de la barre (cases 8 à 14) : Ctrl+1 à Ctrl+7 ne passent pas (l'état de Ctrl est celui du
 # vrai clavier) et un clic gauche sur la case ne sélectionne pas le sort (Épée du destin, 11/10). Le jeu leur donne un
@@ -1248,6 +1249,8 @@ class CombatAI:
         if not mine or not enemies:
             return False
         for key in TRANSFORMED_KEYS:
+            if read_scene(self.game.look()).phase is not Phase.COMBAT:
+                return False  # combat fini : une touche de la barre des objets boirait une potion (25/10)
             self.game.press(key)
             shown = self._range_frame()
             if shown is None:
@@ -1425,6 +1428,8 @@ class CombatAI:
         Pas de clic sur la case du sort : un sort que sa touche ne sélectionne pas est refusé par le jeu (PA,
         relance...). Clic seulement pour une case sans raccourci (bouton à gauche de la barre, combat.spell.key ""),
         ou quand la fenêtre est sourde aux touches ce tour (_deaf_key)."""
+        if not self._bar_shows(frame, spell):
+            return None
         key = self._slot_key(spell.slot)
         if key and not self._keys_deaf:
             self.game.press(key)
@@ -2007,6 +2012,8 @@ class CombatAI:
         """Sort de bonus, lancé sur moi : clic droit sur sa case de la barre, ou son raccourci puis un clic sur mon
         personnage. Le 01/10, le jeu a ignoré le clic droit à partir du 6e combat (sort survolé, rien de lancé) :
         la façon qui a marché en dernier passe en premier, pour toute la session."""
+        if not self._bar_shows(before, spell):
+            return Cast.NO_SPELL
         for method in sorted(SELF_CAST_METHODS, key=lambda m: m != self._self_cast):
             if method == "clic droit":
                 log.info("%s lancé sur moi (clic droit sur sa case)", spell.name)
@@ -2035,6 +2042,24 @@ class CombatAI:
             if spell_range_visible(after) and self._cancel_spell() is Cast.STUCK:
                 return Cast.STUCK
         return Cast.NO_SPELL
+
+    def _bar_shows(self, frame: Frame, spell: CombatSpell) -> bool:
+        """Avant un clic droit sur la case d'un sort ou sa touche : toujours en combat, et la case montre bien ce sort
+        (25/10, l'utilisateur : deux fois une potion de téléportation utilisée, la barre montrait les objets, combat fini
+        ou onglet « Obj. » ouvert ; un clic droit sur la case d'une potion la boit). Sort sans icône connue : le combat
+        seul est vérifié."""
+        if read_scene(frame).phase is not Phase.COMBAT:
+            log.warning("%s : plus en combat, pas de clic sur la barre (elle montre peut-être les objets)", spell.name)
+            return False
+        entry = self.spellbook.in_slot(spell.slot) if self.spellbook is not None else None
+        if entry is None or getattr(entry, "icon_core", None) is None:
+            return True
+        if slot_scores(frame, entry, range(spell.slot, spell.slot + 1)).get(spell.slot, -1.0) >= BAR_ICON_MATCH:
+            return True
+        path = self.game.recorder.save(frame.image, "barre_sans_le_sort", lossless=True)
+        log.warning("La case %d de la barre ne montre pas %s (onglet des objets ?) : pas de clic (capture : %s)",
+                    spell.slot, spell.name, path)
+        return False
 
     def _walk(self, frame: Frame, me: Fighter, best: Cell, fighters: list[Fighter], zone: set[Cell], label: str,
               steps: int | None = None, retry: bool = True) -> int:

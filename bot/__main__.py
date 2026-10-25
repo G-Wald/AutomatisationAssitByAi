@@ -484,6 +484,8 @@ def run_team(args: argparse.Namespace, settings: dict, team: TeamSettings, title
             players = [Player(m.name, m.game) for m in members]
             if connection.group and len(players) > 1:
                 form_group(players[0], players[1:], connection.collapse_group)
+            if not args.observe and hasattr(bot, "learn_levels"):
+                bot.learn_levels()  # niveaux jamais lus : liste des amis du principal
             log.info("Reconnexion automatique : serveur %s", connection.server)
             bot.connection = Watcher(connection, players)
         if args.donjon:
