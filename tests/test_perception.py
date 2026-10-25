@@ -773,3 +773,10 @@ def test_group_level_read_in_its_tooltip_title():
     frame = load_frame("groupe_niveau_7")
     (tooltip,) = find_group_tooltips(frame)
     assert read_group_level(frame, tooltip) == 7
+
+
+def test_trade_offered_by_another_player_is_refused_with_escape():
+    # 25/10, Pombro : échange proposé par un autre joueur, ouvert à la connexion ; la carte et « /p » illisibles
+    # dessous, le bot arrêté. Fenêtre connue, refermée par Échap (refus) : jamais « Accepter ».
+    found = find_known_popup(load_frame("echange_propose_par_un_joueur"), load_popup_specs())
+    assert found is not None and found.spec.name == "échange" and found.spec.key == "escape"

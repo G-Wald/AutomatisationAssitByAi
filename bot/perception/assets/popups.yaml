@@ -21,6 +21,11 @@ popups:
     pair_threshold: 0.8                 # titre ou bouton à 0,85 suffit si l'autre dépasse 0,80 (autres fenêtres des
                                         # tests : titre à 0,55 au plus)
     close: fin_de_combat_fermer.png     # bouton « Fermer » sous la fenêtre
+  - name: échange
+    detect: echange_fleches.png         # double flèche entre les deux moitiés de la fenêtre d'échange (25/10, Pombro :
+                                        # échange proposé par un autre joueur, ouvert à la connexion ; la carte et
+                                        # « /p » illisibles dessous, le bot arrêté). Échap = refuser, jamais « Accepter »
+    key: escape
   - name: menu principal
     detect: menu_principal_titre.png    # « Menu principal » : Échap sans rien à fermer l'ouvre (11/10, un suiveur)
     key: escape                         # Échap = « Annuler » ; jamais de clic : « Quitter Dofus » et « Déconnecter »
