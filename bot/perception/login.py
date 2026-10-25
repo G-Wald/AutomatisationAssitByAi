@@ -13,13 +13,19 @@
 Tout est placé par rapport au titre de l'écran (trouvé par son modèle) : mesures sur les captures, échelle 1.
 """
 
+import difflib
+import logging
 from dataclasses import dataclass
 from enum import Enum
+
+import cv2
 
 from bot.perception.frame import Frame
 from bot.perception.layout import Box, Point
 from bot.perception.templates import match_template
 from bot.perception.text import find_text, text_score
+
+log = logging.getLogger(__name__)
 
 SERVER_TITLE, SELECT_BUTTON = "connexion/choix_serveur.png", "connexion/selectionner.png"
 CHARACTER_TITLE, PLAY_BUTTON = "connexion/choix_personnage.png", "connexion/jouer.png"
@@ -43,6 +49,10 @@ PLATE_DY, PLATE_HALF = 327, (105, 20)
 CHARACTER_SIZE = 21.75
 BODY_DY, BODY_SPREAD = 150, (18, 25)
 NAME_THRESHOLD = 0.8  # 0,97 sur sa plaque, 0,72 au plus sur une autre (08/10)
+PLATE_ZOOM = 3  # plaque agrandie pour l'OCR (noms lus justes sur connexion_choix_personnage.png, 25/10)
+# Nom lu sur la plaque ressemblant au nom voulu au moins à ce point : « Vegano-[GalJ » lu pour « Vegano-[Gal] » 0,95 ;
+# « Fourbocinq » pour « Fourboun » 0,67, « Gela-[A13] » pour « Gela » 0,57.
+PLATE_MATCH = 0.8
 
 
 class LoginStep(Enum):
@@ -120,12 +130,39 @@ def slot_point(frame: Frame, view: LoginView, slot: int) -> Point:
 
 def find_character(frame: Frame, view: LoginView, names: list[str]) -> tuple[int, str] | None:
     """(emplacement, nom) du premier de `names` présent sur l'écran de choix du personnage ; None si aucun. Chaque nom
-    est cherché sur chaque plaque, la plus ressemblante l'emporte (au-dessus du seuil)."""
+    est cherché sur chaque plaque, la plus ressemblante l'emporte (au-dessus du seuil) ; son texte, lu par l'OCR de
+    Windows, doit être ce nom à une ou deux lettres près (25/10 : « Fourboquatre » pris pour « Fourboun », même début
+    de nom ; « Gela » ressemble à 0,98 à la plaque « Gela-[A13] »)."""
     size = frame.layout.length(CHARACTER_SIZE)
     for name in names:
         scores = [text_score(frame.crop(slot_box(frame, view, slot)), name, size, bold=True)[0]
                   for slot in range(len(SLOTS_DX))]
         best = max(range(len(scores)), key=scores.__getitem__)
-        if scores[best] >= NAME_THRESHOLD:
-            return best, name
+        if scores[best] < NAME_THRESHOLD:
+            continue
+        read = plate_text(frame, view, best)
+        if read is not None and same_name(read, name) < PLATE_MATCH:
+            log.info("Plaque %d : « %s » lu, pas %s (nom qui lui ressemble)", best + 1, read, name)
+            continue
+        return best, name
     return None
+
+
+def plate_text(frame: Frame, view: LoginView, slot: int) -> str | None:
+    """Nom écrit sur la plaque de l'emplacement `slot` (OCR de Windows) ; None sans OCR ou si rien ne se lit."""
+    from bot.perception.chat import ocr_available, ocr_lines  # OCR de Windows (chat.py)
+
+    if not ocr_available():
+        return None
+    crop = frame.crop(slot_box(frame, view, slot))
+    lines = ocr_lines(cv2.resize(crop, None, fx=PLATE_ZOOM, fy=PLATE_ZOOM, interpolation=cv2.INTER_CUBIC)) or []
+    text = " ".join(lines).strip()
+    return text or None
+
+
+def same_name(read: str, name: str) -> float:
+    """Ressemblance (0 à 1) d'un nom lu à l'OCR avec un nom voulu, lettres et chiffres seuls, sans la casse."""
+    def bare(text: str) -> str:
+        return "".join(c for c in text.lower() if c.isalnum())
+
+    return difflib.SequenceMatcher(None, bare(read), bare(name)).ratio()

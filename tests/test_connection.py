@@ -661,3 +661,18 @@ def test_server_error_window_is_closed_before_anything_else():
     view = read_login(frame("connexion_erreur_choisis_un_serveur"))
     assert view.step is LoginStep.MESSAGE and view.error
     assert abs(view.button[0] - 1214) <= 6 and abs(view.button[1] - 578) <= 6
+
+
+def test_lookalike_character_name_is_not_chosen():
+    # 25/10 : « Fourboquatre » choisi pour « Fourboun » (même début de nom, ressemblance au-dessus du seuil) : mauvais
+    # personnage connecté. Le nom de la plaque, lu à l'OCR, doit être le nom voulu à une ou deux lettres près.
+    from bot.perception.chat import ocr_available
+    from bot.perception.login import find_character, read_login
+
+    if not ocr_available():
+        pytest.skip("OCR de Windows absent")
+    frame = load_frame("connexion_choix_personnage")  # Gela-[A13], Fourbocinq, Elnano, Walheal, Vegano-[Gal]
+    view = read_login(frame)
+    assert find_character(frame, view, ["Fourboun"]) is None
+    assert find_character(frame, view, ["Gela"]) is None  # 0,98 de ressemblance avec la plaque « Gela-[A13] »
+    assert find_character(frame, view, ["Fourboun", "Vegano-[Gal]"]) == (4, "Vegano-[Gal]")
