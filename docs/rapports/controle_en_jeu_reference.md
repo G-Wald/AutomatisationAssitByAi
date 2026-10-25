@@ -74,3 +74,18 @@ Reste faible : les combats où l'équipe est transformée par les monstres d'Hal
 le 24/10 à 15:48) : portraits de la timeline tous pareils (le tour d'un personnage pris pour celui d'un autre),
 cercles pareils, pas sans effet ; le combat traîne (aucun mort, monstres faibles). Le zaap ne s'utilise pas encore
 depuis l'arrière-plan.
+
+## Deux heures de tests de la branche « la référence fait foi » (25/10)
+
+| Zone | Durée | Combats (tous gagnés) | Cartes reconnues | Placements conformes | Anomalies de trajet | Morts |
+|---|---|---|---|---|---|---|
+| Prairie des Blops (-3,-23 → -3,-27) | 11:50 → 12:54 | 10 | 10 | 10 / 10 | 0 | 1 (Koalaloupour, combat 9) |
+| Plaine des Porkass (-3,-31 → 0,-38) | 12:55 → 13:58 | 23 | 23 | 23 / 23 | 0 | 1 (Pombro, combat 3) |
+
+Sorts aux Porkass : 243 lancés, 10 refus, 4 clics sans effet. Aucun passage officiel raté (donc rien dans
+`data/anomalies_passages.jsonl`), aucune carte du jeu changée depuis la construction des références.
+
+Corrigé : une fenêtre d'échange proposée par un autre joueur (ouverte à la connexion) bloquait le départ ; elle est
+maintenant refusée par Échap. Observé, à revoir : le Sadida (Koalaloupour) avance en première ligne pour avoir la ligne
+de vue de Ronce ; des lectures de portée suspectes (« 0 à 10 au lieu de 0 à 8 ») donnent une ligne de vue prédite
+juste à 40-90 % sur certaines cartes plates, le bot se rabat alors sur la vérification par le sort.
