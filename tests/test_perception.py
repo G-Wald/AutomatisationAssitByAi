@@ -780,3 +780,13 @@ def test_trade_offered_by_another_player_is_refused_with_escape():
     # dessous, le bot arrêté. Fenêtre connue, refermée par Échap (refus) : jamais « Accepter ».
     found = find_known_popup(load_frame("echange_propose_par_un_joueur"), load_popup_specs())
     assert found is not None and found.spec.name == "échange" and found.spec.key == "escape"
+
+
+def test_fighters_found_on_cells_one_ground_level_lower():
+    # 25/10, Taïnéla 5,-30 : combat dans le coin bas-droit, une marche plus bas (niveau de sol 6, carte officielle) ;
+    # cercles dessinés ~14 px plus haut que la grille plate : aucun trouvé, tous les tours passés. 7 rouges et 5 bleus
+    # visibles, une fois chacun.
+    fighters = find_fighters(load_frame("combat_coin_une_marche_plus_bas"))
+    teams = [f.team for f in fighters]
+    assert teams.count("red") == 7 and teams.count("blue") == 5
+    assert len({(f.team, f.cell) for f in fighters}) == len(fighters)

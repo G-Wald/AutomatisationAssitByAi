@@ -26,6 +26,9 @@ TOOLBAR = (1400, 785, 1918, 890)  # barre d'icônes (repère de référence)
 # Fenêtre « Amis », depuis le centre de son titre : liste des connectés.
 FRIENDS_LIST = (-30, 235, 330, 645)
 FRIEND_SIZE = 18
+# 25/10 : « Walitcoin » 0,798 et « Waldarch-[Gal] » 0,788 dans la liste, pas trouvés au seuil de 0,8 de find_text ; un
+# nom absent de la liste ne dépasse pas 0,73 sur les captures des tests.
+FRIEND_THRESHOLD = 0.76
 NAME_SPREAD = 0.35  # part de la demi-largeur du nom où cliquer (la croix « retirer » est à sa gauche)
 MENU_BOX = (-60, -30, 420, 300)  # menu du clic droit, depuis le clic
 INVITATION_TO_ACCEPT = (-260, 30, 0, 90)  # du centre de « Acceptes-tu ? » au bouton « Oui »
@@ -53,7 +56,7 @@ def find_friends_window(frame: Frame) -> Point | None:
 def find_friend(frame: Frame, title: Point, name: str) -> tuple[Point, tuple[float, float]] | None:
     """Où cliquer sur le nom `name` dans la liste des amis connectés, et la demi-étendue du clic ; None s'il n'y est
     pas (pas connecté, ou pas dans la liste d'amis)."""
-    found = find_text(frame, name, _offset(frame, title, FRIENDS_LIST), FRIEND_SIZE, dark=True)
+    found = find_text(frame, name, _offset(frame, title, FRIENDS_LIST), FRIEND_SIZE, dark=True, threshold=FRIEND_THRESHOLD)
     if found is None:
         return None
     width = render_text(name, frame.layout.length(FRIEND_SIZE)).shape[1]

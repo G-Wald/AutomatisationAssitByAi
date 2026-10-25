@@ -1494,8 +1494,11 @@ def test_lost_follower_of_unknown_position_but_on_the_leaders_map_does_not_stop_
     bot.roamer.traveler.coords = (4, 3)
     bot._together_checked, bot._lost = True, {"B"}
     assert bot._regroup() and not bot._lost and not bot.finished
-    b.game.frames = [load_frame("hors_combat_foret")]  # vraiment ailleurs, carte inconnue : arrêt, comme avant
+    b.game.frames = [load_frame("hors_combat_foret")]  # ailleurs, nom lisible (2,4) : relu, il part le rejoindre
     bot._lost = {"B"}
+    assert not bot._regroup() and not bot.finished and "B" in bot._rejoin
+    b.game.frames = [load_frame("hors_combat_nom_illisible")]  # vraiment ailleurs, carte inconnue : arrêt, comme avant
+    bot._lost, bot._rejoin, bot._seen_at = {"B"}, {}, {}
     assert not bot._regroup() and bot.finished
 
 
@@ -1774,3 +1777,14 @@ def test_follower_on_a_lookalike_map_is_not_reclicked_when_it_reads_the_arrival(
     bot = walking_team(b, leader=a, departure=foret)
     bot.follow(Crossing("gauche", (1, 9), read_map_label(champs), read_map_label(foret)))
     assert events(screen, "click") == [] and not bot._lost
+
+
+def test_friend_names_just_under_the_old_threshold_are_found():
+    # 25/10 : Walitcoin et Waldarch-[Gal] dans la liste des amis de Fourboun, pas trouvés (0,798 et 0,788 pour un seuil de
+    # 0,8) : pas invités, pas dans les combats du principal.
+    from bot.perception.party import find_friend, find_friends_window
+
+    frame = load_frame("amis_noms_pres_du_seuil")
+    title = find_friends_window(frame)
+    assert find_friend(frame, title, "Walitcoin") is not None and find_friend(frame, title, "Waldarch-[Gal]") is not None
+    assert find_friend(frame, title, "Koalaloupour") is None and find_friend(frame, title, "Fourbouille") is None

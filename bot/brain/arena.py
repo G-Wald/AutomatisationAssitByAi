@@ -115,6 +115,10 @@ class Arenas:
                   self.arenas[best].coords, self.arenas[best].ident, 100 * agreement[best], 100 * agreement[second])
         return self.arenas[best]
 
+    def by_coords(self, coords: tuple[int, int]) -> list[Arena]:
+        key = f"{coords[0]},{coords[1]}"
+        return [a for a in self.arenas if a.coords == key]
+
     def by_placement(self, cells: set[Cell]) -> Arena | None:
         """La seule carte dont les cases de placement contiennent toutes celles lues (au moins PLACEMENT_CELLS)."""
         if len(cells) < PLACEMENT_CELLS:
@@ -150,3 +154,47 @@ def changed_maps(installed: Path = CLIENT_MAPS, built: Path = BUILT_MAPS) -> lis
     if not now or not then:
         return []
     return sorted(ident for ident, date in now.items() if ident in then and then[ident] != date)
+
+
+MAP_CELLS = 479  # cases d'une carte de 15 de large (lignes de 15 puis 14 en quinconce)
+SECOND_AREA = 20  # cases : une 2e zone aussi grande, et la zone de départ ne se devine pas
+STEPS = ((1, 1), (1, -1), (-1, 1), (-1, -1), (2, 0), (-2, 0), (0, 2), (0, -2))  # 8 directions hors combat
+
+
+def map_cell(case: int, width: int = 15) -> Cell:
+    """Numéro de case du client -> case (i, j) de notre grille (comme tools/cartes_client.case_vers_grille)."""
+    row, rest = divmod(case, 2 * width - 1)
+    return (2 * rest, 2 * row) if rest < width else (2 * (rest - width) + 1, 2 * row + 1)
+
+
+ALL_CELLS = frozenset(map_cell(n) for n in range(MAP_CELLS))
+
+
+def walk_area(arena: Arena, start: Cell | None) -> set[Cell] | None:
+    """Cases joignables à pied (hors combat) sur la carte officielle : depuis `start` ; sans `start`, la seule grande
+    zone d'un seul tenant s'il n'y en a qu'une (24/10, Taïnéla 5,-30 : deux zones de 65 et 52 cases, celle où l'on est
+    dépend du côté d'arrivée), sinon None (on ne sait pas)."""
+    free = set(ALL_CELLS) - arena.unwalkable
+    areas, seen = [], set()
+    for first in sorted(free):
+        if first in seen:
+            continue
+        area, stack = set(), [first]
+        while stack:
+            cell = stack.pop()
+            if cell in area:
+                continue
+            area.add(cell)
+            stack.extend(n for n in ((cell[0] + di, cell[1] + dj) for di, dj in STEPS) if n in free and n not in area)
+        seen |= area
+        areas.append(area)
+    if start is not None:
+        near = [start] + [(start[0] + di, start[1] + dj) for di, dj in STEPS]
+        for area in areas:
+            if any(c in area for c in near):
+                return area
+        return None
+    areas.sort(key=len, reverse=True)
+    if not areas or (len(areas) > 1 and len(areas[1]) >= SECOND_AREA):
+        return None
+    return areas[0]

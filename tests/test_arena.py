@@ -77,3 +77,28 @@ def test_maps_changed_by_a_game_update_are_reported(tmp_path):
         (built / name).write_bytes(b"")
     assert changed_maps(installed, built) == [10001]  # 10002 absente de la copie : pas dans les références
     assert changed_maps(tmp_path / "absent", built) == []
+
+
+def test_walk_area_from_the_arrival_cell_and_only_one_big_area_without_it():
+    # 25/10, Taïnéla 5,-30 : carte officielle coupée en deux zones (65 et 52 cases) ; celle où l'on est dépend du côté
+    # d'arrivée. Sans case d'arrivée, on ne devine pas.
+    from bot.brain.arena import ALL_CELLS, Arena, walk_area
+
+    wall = frozenset(c for c in ALL_CELLS if 14 <= c[1] <= 16)  # une rangée infranchissable au milieu
+    split = Arena("1", "5,-30", wall, frozenset())
+    assert walk_area(split, None) is None
+    top = walk_area(split, (10, 4))
+    assert (10, 4) in top and (10, 24) not in top
+    pocket = frozenset(c for c in ALL_CELLS if c[1] >= 14 and not (c[1] >= 28 and c[0] <= 2))  # un coin isolé
+    assert (10, 4) in walk_area(Arena("2", "1,1", pocket, frozenset()), None)  # une seule grande zone : celle-là
+
+
+def test_group_on_a_cell_out_of_the_walk_area_is_left_aside():
+    from bot.brain.engage import _on_walk_area, hover_points
+    from bot.perception.groups import find_group_tooltips
+
+    frame = load_frame("groupe_niveau_7")
+    (tooltip,) = find_group_tooltips(frame)
+    cell = frame.grid.cell_at(*hover_points(tooltip, frame)[0])
+    assert _on_walk_area(tooltip, frame, {cell})
+    assert not _on_walk_area(tooltip, frame, {(0, 0)})

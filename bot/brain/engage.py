@@ -33,6 +33,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 
+from bot.brain.arena import ALL_CELLS, STEPS
 from bot.brain.game import WATCH_SLACK, Game
 from bot.brain.popups import close_flash_menu, close_npc_dialog, close_small_menu
 from bot.brain.recovery import capture_once, keyboard_answers, mark_deaf, mark_heard, report_episode, unlock_click
@@ -94,6 +95,7 @@ RETRY_SKIPPED = 10.0
 # à côté fait marcher le personnage jusque-là : on ne balaie pas les 7 à 16 points de hover_points.
 PROBES = 2
 PROBE_BUTTONS = {"gauche": "left", "droit": "right"}  # engage.clic_sonde -> bouton de la souris
+WALK_POINTS = 3  # premiers points de survol d'un groupe dont la case est comparée à la carte officielle
 # Groupe hors d'atteinte (17/10, Incarnam 3,0, journal 125352) : le clic droit le touche (pas de menu de Flash), le
 # personnage marche, mais le combat ne se lance jamais (groupe de l'autre côté d'un obstacle). 68 clics ainsi en 20 min
 # sur les groupes du côté droit de la carte, 7 min 21 s perdues : seul le groupe d'en bas à gauche était attaquable.
@@ -194,6 +196,16 @@ class _Zone:
 def _same_tooltip(a: GroupTooltip, b: GroupTooltip, frame: Frame) -> bool:
     """Même infobulle, à un petit déplacement du groupe près."""
     return abs(a.x - b.x) <= frame.layout.length(70) and abs(a.title_y - b.title_y) <= frame.layout.length(40)
+
+
+def _on_walk_area(tooltip: GroupTooltip, frame: Frame, area: set) -> bool:
+    """Le groupe de l'infobulle peut être sur une case joignable : une des cases de ses premiers points de survol, ou
+    une voisine, est dans `area` ; ou aucune n'est une case de la carte (pas de quoi l'écarter)."""
+    cells = [frame.grid.cell_at(*point) for point in hover_points(tooltip, frame)[:WALK_POINTS]]
+    cells = [c for c in cells if c is not None]
+    if not any(c in ALL_CELLS for c in cells):
+        return True
+    return any((c[0] + di, c[1] + dj) in area for c in cells for di, dj in ((0, 0),) + STEPS)
 
 
 def hover_points(tooltip: GroupTooltip, frame: Frame) -> list[tuple[float, float]]:
@@ -311,6 +323,8 @@ class Engager:
         self.probe_first = False
         self.keyboard_ok: bool | None = None  # dernière sonde : True clavier reçu, False sourd malgré les clics, None aucune
         self._empty_z = 0  # recherches de suite sans aucune infobulle sur cette carte
+        # Cases joignables à pied d'où l'on est, d'après la carte officielle (brain/arena.walk_area), ou None.
+        self.walk_area: Callable[[], set | None] | None = None
 
     def remember_in(self, world, where: Callable[[], tuple[str, str] | None]) -> None:
         """Mode zone : zones hors d'atteinte gardées dans `world` (travel.World : unreachable_from,
@@ -446,6 +460,19 @@ class Engager:
             log.info("Plus que des groupes hors d'atteinte sur la carte")
             self.none_found = True
             return False
+        area = self.walk_area() if self.walk_area is not None else None
+        if area:
+            # Carte officielle (brain/arena.py) : un groupe sur une case qu'on ne peut pas joindre à pied d'ici (en bas
+            # d'une falaise, de l'autre côté de l'eau) n'est pas cliqué (25/10, Taïnéla 5,-30 : deux clics perdus).
+            kept = [t for t in reachable if _on_walk_area(t, frame, area)]
+            if len(kept) < len(reachable):
+                log.info("Je laisse %d groupe(s) sur des cases que la carte officielle dit injoignables d'ici",
+                         len(reachable) - len(kept))
+            reachable = kept
+            if not reachable:
+                log.info("Plus que des groupes injoignables d'ici sur la carte")
+                self.none_found = True
+                return False
         tooltips = reachable
         candidates = self._candidates(tooltips, frame)
         if not candidates:

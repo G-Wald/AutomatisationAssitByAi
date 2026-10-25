@@ -134,6 +134,9 @@ def _is_forbidden_cursor(blob: Blob, layout: Layout) -> bool:
     return layout.length(38) <= blob.h <= layout.length(50) and 0.75 <= blob.w / blob.h <= 1.33
 
 
+LEVEL_STEP = 13.5  # px (repère de référence) : une marche de niveau de sol à l'écran (_rings_in)
+
+
 def find_fighters(frame: Frame) -> list[Fighter]:
     box = frame.layout.map_box
     region = frame.crop(box)
@@ -159,7 +162,11 @@ def find_fighters(frame: Frame) -> list[Fighter]:
         grown = Blob(round(blob.x - margin), round(blob.y - margin / 2), round(blob.w + 2 * margin),
                      round(blob.h + margin), blob.area)
         fighters += [f for f in _rings_in(frame, grown, team, mask, wide, ARC_MIN_SCORE, hidden) if f.cell not in known]
-    return fighters
+    # Deux taches de cercles collés qui se recouvrent donnent les mêmes cercles (25/10, Taïnéla 5,-30) : une fois.
+    unique: dict[tuple[str, Cell], Fighter] = {}
+    for fighter in fighters:
+        unique.setdefault((fighter.team, fighter.cell), fighter)
+    return list(unique.values())
 
 
 def _under_portraits(frame: Frame) -> np.ndarray | None:
@@ -180,12 +187,31 @@ def _rings_in(frame: Frame, blob: Blob, team: str, mask: np.ndarray, wide: np.nd
               hidden: np.ndarray | None = None) -> list[Fighter]:
     """Cercles centrés sur les cases que couvre `blob` : ellipse colorée au moins à `min_score`, vide à l'intérieur.
     Avec `hidden` (portraits de la timeline), aussi un cercle en partie caché dont les points visibles sont colorés à
-    RING_MIN_SCORE (le seuil d'un cercle entier : moins de points, plus de hasard)."""
+    RING_MIN_SCORE (le seuil d'un cercle entier : moins de points, plus de hasard).
+
+    Cases d'un autre niveau de sol (25/10, Taïnéla 5,-30 : coin du combat une marche plus bas, niveau 6 au lieu de 7,
+    cercles dessinés ~14 px plus haut que le centre de la grille plate ; aucun cercle trouvé, tous les tours passés) :
+    décalages d'une puis deux marches essayés quand les centres plats ne donnent rien."""
+    step = frame.layout.length(LEVEL_STEP)
+    best: list[Fighter] = []
+    for dy in (0, -step, step, -2 * step, 2 * step):
+        found = _rings_at(frame, blob, team, mask, wide, min_score, hidden, dy)
+        if len(found) > len(best):
+            best = found
+        if best and dy == 0:
+            break
+    return best
+
+
+def _rings_at(frame: Frame, blob: Blob, team: str, mask: np.ndarray, wide: np.ndarray, min_score: float,
+              hidden: np.ndarray | None, dy: float) -> list[Fighter]:
+    """_rings_in, les centres des cases décalés de `dy` (niveau de sol) ; chaque cercle garde sa case de la grille."""
     box = frame.layout.map_box
     layout = frame.layout
     found = []
     for cell in frame.grid.cells():
         x, y = frame.grid.center(cell)
+        y += dy
         rx, ry = x - box[0], y - box[1]
         if not (blob.x <= x <= blob.x + blob.w and blob.y <= y <= blob.y + blob.h):
             continue

@@ -30,6 +30,7 @@ import numpy as np
 
 from bot.actions import keys
 from bot.actions.stop import BotStopped
+from bot.brain.arena import Arenas, walk_area
 from bot.brain.combat import MapMemory
 from bot.brain.engage import Engager, EngageSettings
 from bot.brain.loop import PLACEMENT_FIRST_TRY, PLACEMENT_GIVE_UP, SETTLE_AFTER_READY, SETTLE_SECONDS
@@ -154,6 +155,8 @@ class Crossing:
 # Attente des suiveurs (_wait_followers) prolongée tant que l'un bouge encore (immobile depuis moins de MOVING_RECENTLY s),
 # jusqu'à WALK_EXTENSION fois travel.walk_timeout.
 MOVING_RECENTLY, WALK_EXTENSION = 2.0, 2.0
+# Suiveur perdu au nom de carte illisible : carte relue LOOK_AGAIN fois, LOOK_AGAIN_PAUSE s d'écart (_look_again).
+LOOK_AGAIN, LOOK_AGAIN_PAUSE = 3, 1.5
 
 
 @dataclass
@@ -272,6 +275,7 @@ class TeamBot:
             self.roamer.traveler.on_click = self._dispatch
         if self.engager is not None and self.roamer is not None:  # zones hors d'atteinte gardées (brain/engage.py)
             self.engager.remember_in(self.roamer.traveler.world, self.roamer.traveler.place)
+            self.engager.walk_area = self._walk_area  # groupes injoignables d'après la carte officielle
         if self.engager is not None:
             # Z sans infobulle : clavier sondé par la touche A (fenêtre sourde, 20/10), dès la 1re recherche vide en
             # mode zone (avant de changer de carte), après deux sinon.
@@ -992,6 +996,8 @@ class TeamBot:
             journey = self._rejoin.get(name)
             if journey is None or journey.goal != target:
                 start = self._seen_at.get(name)
+                if start is None:
+                    start = self._look_again(member)
                 if start is None and same_map(member.game.look(park=False), self.leader.game.look(park=False)):
                     # 20/10, 11,-23 : Pesopepe cru perdu (« 11,-?3 » lu), carte inconnue, le bot arrêté ; il était sur
                     # la carte du principal. Son décor est revu avant de s'arrêter faute de savoir où il est.
@@ -1107,6 +1113,24 @@ class TeamBot:
                     self._ready(member)
                     member.game.sleep(random.uniform(*READY_GAP))
         return [host] + joined if self._wait_combat(host) else []
+
+    def _look_again(self, member: Member) -> tuple[int, int] | None:
+        """Carte d'un suiveur perdu, relue LOOK_AGAIN fois à quelques instants d'intervalle avant de demander « /p » ou
+        de s'arrêter (25/10 : Walitcoin reconnecté à la main au démarrage, carte pas encore affichée ; nom illisible,
+        « /p » sans réponse, le bot arrêté alors qu'il était avec le principal). Ses coordonnées, ou None."""
+        for _ in range(LOOK_AGAIN):
+            member.game.sleep(LOOK_AGAIN_PAUSE)
+            label = read_map_label(member.game.look(park=False))
+            if label is not None and label.readable and label.coords is not None:
+                return label.coords
+        return None
+
+    def _walk_area(self) -> set | None:
+        """Cases joignables à pied d'où est le principal (carte officielle, brain/arena.walk_area) : depuis sa case
+        d'arrivée si le soleil pris est dans la référence ; None si la carte ou la case ne se savent pas."""
+        traveler = self.roamer.traveler
+        arenas = Arenas.load().by_coords(traveler.coords) if traveler.coords is not None else []
+        return walk_area(arenas[0], traveler.arrival_cell) if len(arenas) == 1 else None
 
     def _note_placement(self, host: Member) -> None:
         """Sans placement de l'équipe : les cases de placement lues une fois, pour reconnaître la carte officielle et
