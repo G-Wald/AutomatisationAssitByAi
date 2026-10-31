@@ -127,6 +127,13 @@ def connect_at_start(settings: ConnectionSettings, wanted: list[str], control: S
     tagged = TaggedRecorder(recorder, "connexion")
 
     def make_game(window: GameWindow) -> Game:
+        # 30/10 : fenêtre écoutée dès sa connexion (avant le choix du personnage) : le sac arrive à ce moment (ASK) et
+        # sert à la répartition des clés de donjon (team/keys.py) ; son flux revient au personnage ensuite (follow).
+        from bot.connection.network import current_listener
+
+        listener = current_listener()
+        if listener is not None:
+            listener.follow(window.hwnd, "")
         return MemberGame(window, control, tagged, human, True, focus, background)
 
     def make_launcher(window: GameWindow) -> Game:
@@ -161,7 +168,11 @@ class Watcher:
         for player in lost:
             log.warning("%s est déconnecté : je le reconnecte", player.name)
             try:
-                Login(player.game, self.settings, [player.name]).run()
+                name = Login(player.game, self.settings, [player.name]).run()
+                if name and name.lower() != player.name.lower():
+                    # Personnage le plus à gauche pris faute de trouver le sien : signalé, pas joué à sa place.
+                    log.error("Reconnexion de %s : c'est %s qui est en jeu dans sa fenêtre. Ferme-la et relance le bot "
+                              "avec --connexion --personnages <les noms de l'équipe>", player.name, name)
             except NotSubscribed:
                 log.error("Reconnexion de %s impossible : son compte n'est plus abonné (« Mode découverte »)",
                           player.name)

@@ -16,7 +16,7 @@ from bot.brain.combat import (
     choose_placement,
 )
 from bot.brain.engine import CAST, POSITION, reachable_cells
-from bot.brain.engage import HOVER_WAIT, Z_LINGER, Engager, EngageSettings, hover_points
+from bot.brain.engage import HOVER_WAIT, Z_LINGER, Engager, EngageSettings, Outcome, hover_points
 from bot.brain.loop import Bot
 from bot.brain.popups import PopupCloser
 from bot.brain.rest import Rester, RestSettings
@@ -1051,6 +1051,37 @@ def test_an_empty_cell_at_the_range_center_is_no_proof():
     assert found.cell == (10, 24) and found.spell_range == (2, 7) and not found.hidden
 
 
+def range_capture(name: str):
+    shown = load_frame(name)
+    fighters = find_fighters(shown)
+    return shown, fighters, {f.cell for f in fighters if f.team == RED}
+
+
+def test_a_cut_range_centred_as_well_on_several_allies_proves_nothing():
+    # 26/10 (journal 190101, combat 5) : équipe serrée dans le coin, portée de Flèche Glacée (+5 d'un Tir Éloigné allié)
+    # coupée par deux bords ; portées 11, 14 et 15 à 0,925, centrées sur Pesopepe et deux autres alliés. Elseiso s'est
+    # cru sur la case de Pesopepe : 2 déplacements ratés, 16 s.
+    shown, fighters, mine = range_capture("portee_coupee_coin_plusieurs_allies_plausibles")
+    assert locate_caster(shown, (1, 5), mine, fighters, modifiable=True) is None
+
+
+def test_a_cut_range_whose_plateau_crosses_only_empty_cells_still_proves():
+    # Même combat, plus tôt : portée coupée d'un côté, les portées 10 à 15 collent presque aussi bien mais sur des cases
+    # vides ; (18, 22) était juste (déplacement réussi depuis là).
+    shown, fighters, mine = range_capture("portee_coupee_plateau_sur_cases_vides")
+    found = locate_caster(shown, (1, 5), mine, fighters, modifiable=True)
+    assert found is not None and found.cell == (18, 22)
+
+
+def test_cells_proven_by_teammates_leave_one_circle():
+    # 26/10, combat 5 : Enu-six-[Gal] dans le coin, portées 9 à 11 centrées sur 3 cercles ; les cases de Fourbodeux (8, 6)
+    # et de Waldarch-[Gal] (7, 5), prouvées à la fin de leur tour, écartées : lui en (9, 7).
+    shown, fighters, mine = range_capture("portee_coupee_coin_allies_connus")
+    assert locate_caster(shown, (1, 5), mine, fighters, modifiable=True) is None
+    found = locate_caster(shown, (1, 5), mine - {(8, 6), (7, 5)}, fighters, modifiable=True)
+    assert found is not None and found.cell == (9, 7)
+
+
 def test_my_circle_missing_on_the_turn_capture_is_read_on_the_range_capture():
     # 20/10, Leproduitlatte : arrivé en (10, 24), souris restée dessus (case éclairée, cercle pas vu sur la capture du
     # tour) ; la portée de Flèche Empoisonnée (2 à 5, +2 de Tir Éloigné) le montrait au centre, cercle bien visible.
@@ -1221,6 +1252,48 @@ def test_chained_spell_waits_for_the_animation_of_the_previous_one(monkeypatch):
     assert ai._cast(frame, me, target, [me, target], RED) is Cast.DONE
     assert any(1.0 < s <= CHAIN_GAP - 0.5 for s in game.slept)  # le reste des CHAIN_GAP s (temps de calcul déduit)
     assert len(clicks(game)) == 2
+
+
+def test_chained_spell_goes_as_soon_as_the_chat_shows_the_previous_effect(monkeypatch):
+    # 26/10 (journal 190101) : 3 Lancer de Pièces de Pesopepe, 3,1 s chacun, dont 1,5 s à attendre CHAIN_GAP. L'effet du
+    # sort précédent (« Biblop perd 12 PDV. », sous son annonce) lu dans le chat : le sort suivant part aussitôt.
+    import time
+
+    from bot.brain.combat import CHAIN_CHAT_MARGIN, CombatAI as AI
+
+    frame = load_frame("combat_portee_sort")
+    me, _ = me_and_enemy(frame)
+    target = enemy_in_range(frame)
+    game = FakeGame(frame)
+    game.background = True
+    ai = CombatAI(game, CombatSettings())
+    monkeypatch.setattr(ai, "_confirm_cast", lambda *a: None)
+    monkeypatch.setattr(AI, "_name", property(lambda self: "Pesopepe"))
+    chat = [["Biblop perd 9 PDV.", "Pesopepe lance Lancer de Pièces."],
+            ["Biblop perd 9 PDV.", "Pesopepe lance Lancer de Pièces.", "Biblop perd 12 PDV."]]
+    monkeypatch.setattr(combat_module, "combat_lines", lambda frame: chat.pop(0) if len(chat) > 1 else chat[0])
+    ai._target_cast_at, ai._target_spell = time.monotonic() - 0.5, "Lancer de Pièces"
+    ai._chain_chat = ["Biblop perd 9 PDV."]
+    assert ai._cast(frame, me, target, [me, target], RED) is Cast.DONE
+    assert max(game.slept) <= max(CHAIN_CHAT_MARGIN, combat_module.CHAIN_CHAT_EVERY)  # pas les CHAIN_GAP s
+    assert len(clicks(game)) == 1
+
+
+def test_chained_spell_without_a_readable_chat_waits_as_before(monkeypatch):
+    import time
+
+    from bot.brain.combat import CHAIN_GAP
+
+    frame = load_frame("combat_portee_sort")
+    me, _ = me_and_enemy(frame)
+    target = enemy_in_range(frame)
+    game = FakeGame(frame)
+    game.background = True
+    ai = CombatAI(game, CombatSettings())
+    monkeypatch.setattr(ai, "_confirm_cast", lambda *a: None)
+    ai._target_cast_at, ai._target_spell, ai._chain_chat = time.monotonic() - 0.5, "Lancer de Pièces", None
+    assert ai._cast(frame, me, target, [me, target], RED) is Cast.DONE
+    assert any(1.0 < s <= CHAIN_GAP - 0.5 for s in game.slept)
 
 
 def test_last_spell_of_the_turn_is_checked_before_ending_the_turn():
@@ -1553,3 +1626,14 @@ def test_no_click_on_the_bar_once_the_fight_is_over():
     assert clicks(game) == [] and presses(game) == []
     magique = CombatSpell(3, "fleche_magique", "Flèche Magique", 4, (1, 8), damage=11)
     assert ai._select_spell(frame, magique) is None and presses(game) == []
+
+
+def test_points_of_a_fought_group_are_forgotten(monkeypatch):
+    # 25/10 (journal 181212) : le groupe combattu, un autre réapparu au même endroit a hérité de ses points cliqués ; son
+    # meilleur point (sous l'infobulle) sauté, 2 clics à côté. Combat lancé : ses points sont oubliés.
+    frame = load_frame("groupe_niveau_7")
+    (tooltip,) = find_group_tooltips(frame)
+    engager = Engager(FakeGame(frame), EngageSettings())
+    monkeypatch.setattr(engager, "_wait_for_combat", lambda *args, **kwargs: True)
+    assert engager._probe(frame, tooltip) is Outcome.COMBAT
+    assert engager._probed_points(tooltip, frame) == []

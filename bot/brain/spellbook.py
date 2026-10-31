@@ -427,6 +427,10 @@ class Spell:
         zone = (strongest or {}).get("zone") or {}
         bonus = next((e for e in effects if e["id"] == RANGE_BONUS), None)
         boost = (boost_of(level) or stat_boost_of(level)) if self.role == "boost_degats" else None
+        # Zone du bonus (Tir Éloigné : cercle autour de ma case) : les alliés dedans en profitent aussi (27/10).
+        given = {RANGE_BONUS, DAMAGE_BONUS, DAMAGE_PERCENT, *STAT_BOOSTS}
+        boost_zone = next((e["zone"] for e in effects if (bonus or boost) and e["id"] in given
+                           and (e.get("zone") or {}).get("forme", "point") != "point" and e["zone"].get("taille")), {})
         return CombatSpell(
             slot=slot,
             spell_id=self.key or f"sort_{self.entry.row + 1}",
@@ -451,6 +455,7 @@ class Spell:
             team_boost=bool(boost) and team_boost(level),
             damage_base=mean_damage(effects),
             damage_lines=sum(max(1, e.get("tours", 0)) * (e.get("chance") or 100) / 100 for e in hurting),
+            boost_zone=(boost_zone.get("forme") or "point", boost_zone.get("taille") or 0),
         )
 
 
@@ -517,9 +522,9 @@ class SpellBook:
         if not self._resumed:
             self._resumed = True
             self._resume()
-        fresh = False
+        fresh = self.session.stats and self._take_told_stats()
         if not self.entries and self._tries < READ_TRIES:
-            fresh = self._read_window()
+            fresh = self._read_window() or fresh
         if not self._stats_done:
             self._stats_done = True
             self.stats = StatsReader(self.game).read()
@@ -533,6 +538,34 @@ class SpellBook:
         if self.read_done:
             self._log_damage()
         return bool(self.entries)
+
+    def _take_told_stats(self) -> bool:
+        """Caractéristiques annoncées par le serveur (« As », connection/network.py), à la place de celles lues à
+        l'écran ou retenues : pas de fenêtre à ouvrir (27/10). True si elles ont changé."""
+        net = getattr(self.game, "net", None)
+        if net is None or not net.alive() or not net.stats:
+            return False
+        told = CharacterStats(**net.stats, source="serveur")
+        if told == self.stats:
+            return False
+        before = self.stats
+        self.stats, self._stats_done, self._stats_read_at = told, True, now_text()
+        log.info("Caractéristiques annoncées par le serveur%s : %s", " (changées)" if before is not None and
+                 before.source == "serveur" else "", told.describe())
+        return True
+
+    def numpad_known(self) -> bool:
+        """Pavé numérique déjà essayé avec succès sur la 2e rangée de la barre, à une session précédente."""
+        record = self.memory.load(self.name) if self.memory is not None else None
+        return bool(((record or {}).get("pave_numerique") or {}).get("marche"))
+
+    def remember_numpad(self) -> None:
+        """Retient que le pavé numérique sélectionne les sorts de la 2e rangée en arrière-plan (plus d'essai)."""
+        if self.memory is None:
+            return
+        record = self.memory.load(self.name) or {}
+        record["pave_numerique"] = {"marche": True, "essaye_le": now_text()}
+        self.memory.save(self.name, record)
 
     def _read_window(self) -> bool:
         """Ouvre la fenêtre des sorts, lit la liste, referme. True si lu.
@@ -923,6 +956,14 @@ class SpellBook:
                      ", ".join(moved))
         self._remember()  # cases de la barre, pour le journal de la session suivante
 
+    def refresh_stats(self) -> bool:
+        """Caractéristiques changées d'après le serveur depuis le début de la session (connexion, niveau, équipement) :
+        retenues ; True si elles ont changé."""
+        if self.session.stats and self._take_told_stats():
+            self._remember()
+            return True
+        return False
+
     def in_slot(self, slot: int) -> SpellEntry | None:
         return self.slots.get(slot)
 
@@ -930,11 +971,13 @@ class SpellBook:
         """Tous les sorts de classe connus posés sur la barre, rôle « autre » compris (Bond...) : pour se repérer par la
         portée d'un sort quand aucune attaque n'a 2 cases de portée (11/10, l'Iop). Pas les sorts communs (Capture
         d'âmes : tout le monde ne l'a pas)."""
+        self.refresh_stats()
         return [spell.combat_spell(slot, self.stats) for slot, entry in sorted(self.slots.items())
                 if (spell := self.spells.get(entry.row)) is not None and spell.data]
 
     def combat_spells(self) -> list[CombatSpell]:
         """Sorts de la barre utilisables par la tactique (connus de Solomonk), dégâts avec les caractéristiques."""
+        self.refresh_stats()
         spells = []
         for slot, entry in sorted(self.slots.items()):
             spell = self.spells.get(entry.row)

@@ -60,22 +60,27 @@ from bot.brain.engine import (
 )
 from bot.brain.arena import Arena, Arenas
 from bot.brain.game import Game
+from bot.brain.popups import close_flash_menu
 from bot.brain.recovery import is_deaf, mark_deaf, mark_heard, report_episode, unlock_click
 from bot.brain.spellbook import SpellBook
-from bot.brain.tactics import (DANGER_DISTANCE, CombatSpell, HitLog, SpellUse, reach_range, refusals,
-                               refusals_on_hit_target, refused_beyond, spell_range)
+from bot.brain.tactics import (DANGER_DISTANCE, SIGHT_DOUBT_CELLS, CombatSpell, HitLog, SpellUse, reach_range,
+                               refusals, refusals_on_hit_target, refused_beyond, sight_refusals, spell_range)
 from bot.debug.draw import annotate
-from bot.perception.chat import cast_announced, combat_lines
+from bot.perception.chat import _plain, cast_announced, combat_lines
+from bot.perception.colors import BLUE, RED
+from bot.perception.daylight import DAY_FLOOR, Tint
 from bot.perception.fighters import Fighter, clear_point, find_fighters
 from bot.perception.frame import Frame
 from bot.perception.grid import Cell, distance
 from bot.perception.hp import read_hovered_hp, read_hovered_name, same_name, sheet_visible
 from bot.perception.layout import Point
 from bot.perception.placement import read_placement, standing_cells
+from bot.perception.popups import find_flash_menu
 from bot.perception.sight import (RangeView, Terrain, in_line_only, line_of_sight, locate_caster, read_blocks,
                                   range_fit, read_range, read_terrain, sight_agreement)
 from bot.perception.spellbook import slot_greyed, slot_scores
 from bot.perception.timeline import challenge_icons, timeline_portraits
+from bot.perception.ui import spell_bar_tab
 from bot.perception.toolbar import ToolbarButton, find_creature_button, find_tactical_button
 from bot.perception.ui import (
     END_TURN_SPREAD,
@@ -167,6 +172,7 @@ BURST_RECHECK = 0.3  # cible plus vue après un lancer en rafale : second regard
 # pendant son animation : « non sélectionnable », Épée Céleste lancée à la place, l'ennemi à 25 PV resté debout) :
 # même touche une fois de plus, après une courte pause.
 RESELECT_AFTER_CAST, RESELECT_PAUSE = 1.5, 0.4
+RESELECT_AFTER_MOVE = 1.5  # s après la fin d'un déplacement (arrivée vue ou non) : sort refusé, même touche une fois de plus
 # Sort enchaîné sur une cible (19/10, journal 204116, vérifié dans le chat de combat) : Pelle Fantomatique cliquée 1,3 à
 # 1,9 s après Lancer de Pièces, pendant son animation (pièce en vol) : le jeu ignore le clic, 3 partis sur 26 ; relancée
 # 4 à 6 s après : 8 sur 8. Les PA baissent ~0,5 s après le clic, bien avant la fin de l'animation : « parti » n'est pas
@@ -179,6 +185,31 @@ RESELECT_AFTER_CAST, RESELECT_PAUSE = 1.5, 0.4
 # un sort parti sur cette cible ce tour : un essai de plus à un autre endroit de sa case (_cast, à mesurer), puis plus
 # aucun sort sur elle d'ici (_play_turn, Cast.OUT_OF_REACH). Le 2e sort vise déjà un autre endroit que le 1er.
 CHAIN_GAP = 3.0
+# 26/10, l'utilisateur : « se focus sur la lecture du chat ». Le clic suivant n'attend plus CHAIN_GAP s : dès qu'une ligne
+# suit l'annonce « Nom lance Sort. » du sort précédent dans le chat de combat (son effet : « ... perd N PDV », « +5 à la
+# portée »...), écrite quand son animation touche la cible, CHAIN_CHAT_MARGIN s de plus et le sort suivant part. Chat
+# relu toutes les CHAIN_CHAT_EVERY s (OCR : ~40 ms). Rien de lu (pas d'OCR, canal fermé) : CHAIN_GAP, comme avant.
+CHAIN_CHAT_EVERY = 0.1
+CHAIN_CHAT_MARGIN = 0.15
+# Écoute du serveur (connection/network.py, 26/10) : sort confirmé par « GA;102 » (PA dépensés), reçu ~0,2 s après le
+# clic (au lieu de la bulle des PA, 0,5-0,6 s) ; rien après NET_REFUSED s : refusé (au lieu de 1,2 s).
+NET_REFUSED = 0.8  # 26/10 (audit) : 70 sorts sur 847 confirmés au-delà de 0,5 s
+# Enchaînement avec l'écoute (26/10, idée de l'utilisateur) : le serveur annonce dégâts et PA dès le clic, pas la fin de
+# l'animation (que le chat, lui, écrit 1,2 à 2 s après). Sort suivant cliqué NET_CHAIN_FIRST s après le précédent ;
+# ignoré par le jeu (animation en cours : rien du serveur en NET_REFUSED s), recliqué toutes les NET_RETRY_EVERY s
+# tant que le sort reste sélectionné et la cible debout, jusqu'à CHAIN_GAP s après le précédent.
+NET_CHAIN_FIRST = 1.0
+NET_RETRY_EVERY = 0.3
+# La touche du sort suivant aussi est ignorée pendant l'animation (26/10, journal 213859 : touche pressée 0,47 s après le
+# lancer, ignorée ; nouvel essai 1 s plus tard, sorts enchaînés 1,6 à 2 s après le précédent). Avec l'écoute : touche
+# pressée NET_KEY_AFTER_CAST s après le lancer précédent, puis de nouveau toutes les NET_KEY_RETRY_EVERY s (NET_KEY_RETRIES
+# fois au plus) tant que la portée ne s'affiche pas.
+NET_KEY_AFTER_CAST = 0.9
+NET_KEY_RETRY_EVERY, NET_KEY_RETRIES = 0.25, 1  # 3 appuis au plus par sort (l'utilisateur, 26/10 : pas de rafale)
+NET_CLICK_RETRIES = 2  # clics de lancer recommencés au plus (_animation_retry)
+# Clic de déplacement pendant l'animation de mon dernier sort : ignoré par le jeu, comme la touche (27/10, 11 sessions :
+# 16 « pas bougé » sur 111 clics à moins de 0,6 s du lancer, 0 sur 13 entre 0,6 et 1,2 s) : pas avant WALK_AFTER_CAST s.
+WALK_AFTER_CAST = 0.7
 PA_BUFF_MAX = 4  # PA en plus du maximum (bonus d'un allié) : au-delà, la bulle est mal lue (« 10 » lu « 16 » en JPEG)
 ARRIVAL_CHECKS, ARRIVAL_EVERY = 8, 0.2  # fixe : arrivée vérifiée 8 fois, toutes les 0,2 s, après per_cell_moved
 TURN_PASSED_EVERY = 0.25  # fixe : main passée vérifiée toutes les 0,25 s après la fin de tour
@@ -333,7 +364,9 @@ class MapMemory:
 
     def adopt(self, arena: Arena) -> None:
         self.arena = arena
-        self.obstacles = set(arena.blocks)
+        # Obstacles : la ligne de vue seulement (la marche suit unwalkable) ; les cases praticables sans ligne de vue de
+        # la carte du client y comptent (31/10 : 21 cartes sur 60 en ont, les références les prenaient pour du sol).
+        self.obstacles = set(arena.blocks) | set(getattr(arena, "sight_only", ()))
         self.unwalkable = set(arena.unwalkable)
         self.known = True
 
@@ -472,12 +505,21 @@ class CombatAI:
         self._clicks: tuple[int, dict[Cell, list[Point]]] = (-1, {})  # (tour, points cliqués sur chaque case ce tour)
         self._cast_at = float("-inf")  # heure du dernier clic de lancer (sélection refusée juste après : animation)
         self._target_cast_at = float("-inf")  # heure du clic du dernier sort lancé sur une cible ce tour (CHAIN_GAP)
+        self._target_spell = ""  # son nom, et le chat de combat d'avant son clic (_effect_in_chat)
+        self._clicked_at = 0.0  # time.monotonic() juste avant le dernier clic de lancer (écoute du serveur)
+        self._walk_clicked_at = 0.0  # et du dernier clic de déplacement
+        self._chain_chat: list[str] | None = None
+        self._moved_at = float("-inf")  # fin du dernier déplacement (sort refusé juste après : RESELECT_AFTER_MOVE)
         self._life_saved: set[str] = set()  # captures de fiche déjà gardées (vie lue, illisible : _read_life)
         # Fenêtre sourde aux touches (20/10, _deaf_key) : vérifiée une fois par tour ; sourde, sorts cliqués ce tour.
         self._deaf_checked = False
         self._keys_deaf = False
         self._spell_stuck = False  # un sort est resté sélectionné malgré Échap : plus aucun clic sur la carte ce tour
+        self._sight_refused = False  # dernier sort refusé avant le clic : cible montrée sans ligne de vue par le jeu
+        self._team: str | None = None  # ma couleur pendant mon tour (ennemis encore debout : _foes_standing)
         self._bar_turn = -1  # tour (SpellUse.turn) où les sorts grisés de la barre ont été lus
+        self._unknown_floor_saved = False  # capture « sol_tactique_inconnu » : une par session (_note_unknown_floor)
+        self.unknown_tint = False  # sol tactique pas reconnu, mode tactique coché, ce combat (_note_unknown_floor)
         self.new_combat()
 
     @property
@@ -493,6 +535,7 @@ class CombatAI:
 
     def new_combat(self) -> None:
         self._use = SpellUse()  # délais de relance et bonus de portée : valables sur le combat
+        self.unknown_tint = False
         self._turn_ended_at: float | None = None  # fin de mon dernier tour (suite du même tour, SAME_TURN_WINDOW)
         self.map = MapMemory()  # carte de ce combat (mode équipe : partagée, team/loop.py)
         self._warned_pm = False
@@ -504,6 +547,7 @@ class CombatAI:
         self._tactical_tried = False
         self._creature_tried = False
         self._warned_not_tactical = False
+        self._tint_logged = False  # teinte de nuit de la carte : dite une fois par combat (_note_tint)
         self._warned_who = False
         self._stats: TurnStats | None = None  # mesure du tour en cours (voir _turn_stats)
         self.turns_not_passed = 0  # tours d'affilée finis sans que la main passe (team/loop.py : boucle évitée)
@@ -523,8 +567,23 @@ class CombatAI:
             return
         button = find_tactical_button(frame)  # trouvé même sous la flèche ▽ du tour (04/10)
         if button is not None and button.active:
+            self._note_unknown_floor(frame)
             return  # déjà coché (carte cachée par une fiche...) : cliquer le désactiverait
         self._tactical_tried = True
+        if button is None and timeline_at_top(frame):
+            # 26/10 (journal 234008) : timeline mise en haut un combat plus tôt (équipe cachée dessous, _move_timeline) ;
+            # les boutons du mode tactique et du mode créature ne se voient plus (pas au-dessus d'elle en haut) : mode
+            # tactique perdu les combats suivants, dans les 8 fenêtres, et 9 cercles pareils (invocation) ont fait passer
+            # leur tour à la moitié de l'équipe. La timeline est remise en bas, puis le bouton cherché de nouveau.
+            log.info("Bouton du mode tactique caché (timeline en haut) : je remets la timeline en bas")
+            self.game.click(frame.layout.point(*TIMELINE_DOWN), frame.layout.spread(2, 2))
+            self.game.sleep(0.5)
+            frame = self.game.look(park=True)
+            if tactical_mode(frame):
+                return
+            button = find_tactical_button(frame)
+            if button is not None and button.active:
+                return
         if button is None:
             path = self.game.recorder.save(frame.image, "bouton_tactique_introuvable", lossless=True)
             log.warning("Carte hors mode tactique et bouton du mode tactique introuvable (capture : %s)", path)
@@ -536,6 +595,30 @@ class CombatAI:
         if not tactical_mode(after):
             path = self.game.recorder.save(after.image, "mode_tactique_pas_actif", lossless=True)
             log.warning("Le mode tactique ne s'est pas activé (capture : %s)", path)
+
+    def _note_tint(self, frame: Frame) -> None:
+        """Dit au journal, une fois par combat, que la carte est teintée par la nuit et ramenée au jour pour la lire
+        (perception/daylight.py ; 26/10, journal 001614 : sans cela, mode tactique et portée des sorts plus reconnus)."""
+        tint = getattr(frame, "tint", None)
+        if not isinstance(tint, Tint) or self._tint_logged:
+            return
+        self._tint_logged = True
+        log.info("Carte teintée par la nuit (force %.2f : sol %s au lieu de %s) : couleurs de la carte ramenées au jour",
+                 tint.strength, " et ".join(str(tuple(round(v) for v in shade)) for shade in tint.floor),
+                 " et ".join(map(str, DAY_FLOOR)))
+
+    def _note_unknown_floor(self, frame: Frame) -> None:
+        """Bouton du mode tactique coché, sol tactique pas reconnu : carte cachée (fiche, fenêtre), ou teinte jour/nuit
+        d'une autre forme que celle de minuit (aube, crépuscule : pas encore vues le 26/10). Une capture sans perte par
+        session, pour mesurer la teinte (perception/daylight.py). Noté pour ce combat (unknown_tint) : team/loop.py
+        arrête la session après le combat quand plusieurs personnages l'ont vu (nuit d'une teinte pas encore apprise)."""
+        self.unknown_tint = True
+        if self._unknown_floor_saved:
+            return
+        self._unknown_floor_saved = True
+        path = self.game.recorder.save(frame.image, "sol_tactique_inconnu", lossless=True)
+        log.info("Mode tactique coché mais sol tactique pas reconnu (carte cachée, ou teinte jour/nuit inconnue) "
+                 "(capture : %s)", path)
 
     def ensure_creature_mode(self, frame: Frame) -> None:
         """Active le mode créature (boule cerclée de rouge, à droite du cube), une fois par combat au plus. Pas de
@@ -588,6 +671,7 @@ class CombatAI:
           quand même.
         """
         log.info("Mon tour")
+        self._team = my_team
         self._is_mine, self._find_me, self._me_cell = is_mine, find_me, me_cell
         self._me_sure, self._proven_now, self._doubt = me_cell is not None, False, False  # me_cell : case sûre
         self._warned_who = False  # « rien ne prouve lequel est moi » : une fois par tour
@@ -598,7 +682,12 @@ class CombatAI:
         self._target_cast_at = float("-inf")
         self._expected_plan = ""
         self._expected_step = None
+        net = self._net()
+        # 31/10 : mon tour annoncé par le serveur (GTS de mon id) : la main passée le sera aussi (_turn_passed).
+        self._turn_told = net is not None and hasattr(net, "fight_turn") and net.fight_turn()[0] == net.my_id
         frame = self.game.look()
+        my_team = self._team = self._team_from_net(frame, my_team)
+        self._note_tint(frame)
         self.ensure_tactical_mode(frame)
         self._use_spellbook(frame)
         self._use.gear_range = self._stat("portee") or 0
@@ -630,7 +719,7 @@ class CombatAI:
                 frame = self.game.look()
                 if not self._my_turn(frame, my_team):
                     return  # combat fini, ou tour passé (timer écoulé, échec critique)
-            fighters = find_fighters(frame)
+            fighters = self._seen_fighters(frame, my_team)
             me, allies, enemies = self._sides(frame, fighters, my_team)
             fighters = fighters + [a for a in allies if a not in fighters]  # alliés invisibles : obstacles aussi
             if self._spell_stuck:
@@ -737,7 +826,10 @@ class CombatAI:
                 # La suite du plan se lance d'ici (le moteur ne bouge jamais entre deux sorts) : les plans suivants
                 # partent de ma case, sauf si plus rien ne s'y lance (04/10 : un plan complet, toutes cases et toutes
                 # suites de sorts, coûte jusqu'à 0,4 s avec 10 PA, 5 PM et des zones ; il était refait après chaque sort).
-                committed = True
+                # Sauf un bonus de zone lancé avant le déplacement prévu (27/10, Tir Éloigné : plus d'alliés dans sa
+                # zone de ma case de départ) : le plan suivant va d'abord à la case choisie.
+                after = plan.rest().first
+                committed = committed or after is None or after.kind != MOVE
                 done = 0
                 if self.settings.burst:
                     done, stuck = self._burst(target, step, burst_length(plan), my_team, MAX_CASTS_PER_TURN - casts,
@@ -752,6 +844,8 @@ class CombatAI:
                 self._use.unavailable.add(spell.spell_id)  # plus assez de PA pour lui, relance... : un autre
             elif result is Cast.OUT_OF_REACH:
                 self._use.refused |= refusals(spell, step.cell, self.spells, self._use)
+                if self._sight_refused:
+                    self._note_no_sight(me.cell, step.cell)
                 hit = refusals_on_hit_target(step.cell, self.spells, self._use)
                 if hit:
                     log.info("Plus de sort sur %s d'ici ce tour : une autre cible, ou un pas d'abord", _aim_label(target))
@@ -764,8 +858,22 @@ class CombatAI:
                 break
         self._end_turn(my_team)
 
+    def _note_no_sight(self, me: Cell, target: Cell) -> None:
+        """La portée affichée par le jeu montre `target` sans ligne de vue depuis ma case `me` : plus aucun sort à ligne
+        de vue sur lui d'ici (sight_refusals) ; vu ainsi depuis SIGHT_DOUBT_CELLS de mes cases ce tour, plus visé du
+        tour par un sort à ligne de vue (SpellUse.blind_targets)."""
+        self._use.refused |= sight_refusals(target, self.spells)
+        cells = self._use.no_sight.setdefault(target, set())
+        cells.add(me)
+        if len(cells) == SIGHT_DOUBT_CELLS:
+            log.info("Cible en %s montrée sans ligne de vue par le jeu depuis %d de mes cases (%s) : je ne la vise plus "
+                     "ce tour avec un sort à ligne de vue", target, len(cells), ", ".join(map(str, sorted(cells))))
+
     def _my_turn(self, frame: Frame, my_team: str) -> bool:
-        """C'est encore mon tour : timeline (joueur seul) ou fonction du mode équipe (play_turn, is_mine)."""
+        """C'est encore mon tour : timeline (joueur seul) ou fonction du mode équipe (play_turn, is_mine). 31/10 : mort
+        d'après le serveur (GA;103 de mon id, ou GTM) : plus jamais mon tour, quoi que montre l'écran."""
+        if self._dead_told():
+            return False
         if self._is_mine is None:
             return is_my_turn(read_scene(frame), my_team)
         return read_scene(frame).phase is Phase.COMBAT and self._is_mine(frame)
@@ -780,6 +888,14 @@ class CombatAI:
         if me is not None and (self._find_me is not None or self._me_cell is not None):
             self._me_cell = me.cell
         allies = [f for f in mine if f is not me]
+        friends = self._told_allies()
+        if friends and any(e.cell in friends for e in enemies):
+            # Jamais un allié pour cible, même si les couleurs lues le disent ennemi (26/10, journal 205705).
+            log.warning("Combattant(s) de mon équipe d'après le jeu vu(s) comme ennemi(s) en %s : écartés des cibles",
+                        ", ".join(str(e.cell) for e in enemies if e.cell in friends))
+            allies += [e for e in enemies if e.cell in friends]
+            enemies = [e for e in enemies if e.cell not in friends]
+        self._told_life(enemies)
         if self._team_cells is not None and me is not None:
             seen = {f.cell for f in fighters}
             known = self._team_cells()
@@ -800,6 +916,12 @@ class CombatAI:
         Rien de tout ça en mode équipe : None, on ne joue pas sur une supposition. Joueur seul : son cercle."""
         team = self._find_me is not None or self._me_cell is not None or self.name is not None
         self._no_proof = False
+        told = self._told_me(frame, mine, my_team)
+        if told is not None:
+            # Ma case annoncée par le jeu (GTM, déplacements, poussées : connection/network.py, 26/10) : elle fait foi.
+            self._me_sure = self._proven_now = True
+            self._doubt = False
+            return told
         if not team and len(mine) <= 1:
             return mine[0] if mine else None
         if not self._doubt and (self._me_sure or self._me_cell is None):
@@ -840,6 +962,87 @@ class CombatAI:
                         "au survol) : je ne joue pas sur une supposition (capture : %s)", len(mine), path)
         return None
 
+    def _net(self):
+        """Écoute du serveur utilisable pour ce combat (mon id connu, combat en cours) ; None sinon : l'écran."""
+        net = getattr(self.game, "net", None)
+        return net if net is not None and net.my_id is not None and net.alive() and net.in_fight() else None
+
+    def _dead_told(self) -> bool:
+        """Mon personnage est mort dans ce combat d'après le serveur (« GA;103;tueur;mon id », ou « GTM » qui le dit
+        mort) ; False sans écoute. Dit une fois au journal par combat."""
+        net = self._net()
+        my_state = getattr(net, "my_state", None) if net is not None else None
+        state = my_state() if my_state is not None else None
+        if state is None or not state.dead:
+            return False
+        fight = getattr(net, "fight", None)
+        if getattr(self, "_dead_said", None) is not fight:
+            self._dead_said = fight
+            log.warning("Mon personnage est mort d'après le serveur : plus de tour à jouer dans ce combat")
+        return True
+
+    def _seen_fighters(self, frame: Frame, my_team: str) -> list[Fighter]:
+        """Combattants debout. Écoute du serveur : sa liste (case et équipe de chacun, GTM, GIC, déplacements,
+        poussées, morts), aux couleurs de l'écran (la mienne : `my_team`) ; sinon les cercles vus à l'écran.
+        26/10 (journal 205705) : les couleurs lues à l'écran au mauvais moment ont fait taper mes personnages entre
+        eux ; l'équipe de chaque combattant vient maintenant du serveur."""
+        net = self._net()
+        told = net.fighters() if net is not None else []
+        mine = net.my_team() if net is not None else None
+        if not told or mine is None:
+            return find_fighters(frame)
+        other = BLUE if my_team == RED else RED
+        # Équipe inconnue (invocation annoncée sans elle) : un personnage (id positif) est des miens, un monstre non.
+        return [Fighter(my_team if (team == mine if team is not None else who > 0) else other,
+                        *frame.grid.center(cell), cell) for who, cell, team, _ in told]
+
+    def _team_from_net(self, frame: Frame, my_team: str) -> str:
+        """Ma couleur d'après le cercle sur ma case annoncée par le jeu : elle l'emporte sur celle reçue (26/10, journal
+        205705 : couleur de la timeline lue en retard, celle des Blops ; mes personnages se sont tapé dessus)."""
+        net = getattr(self.game, "net", None)
+        if net is None or net.my_id is None or not net.in_fight():
+            return my_team
+        cell = net.my_grid_cell()
+        circle = next((f for f in find_fighters(frame) if f.cell == cell), None) if cell is not None else None
+        if circle is None or not circle.team or circle.team == my_team:
+            return my_team
+        log.warning("Mon cercle (case %s annoncée par le jeu) est %s, pas %s : je joue avec l'équipe %s", cell,
+                    circle.team, my_team, circle.team)
+        return circle.team
+
+    def _told_allies(self) -> set[Cell]:
+        """Cases des combattants de mon équipe d'après le jeu (moi excepté) : jamais visés, quelle que soit la couleur
+        lue à l'écran. Vide sans écoute."""
+        net = getattr(self.game, "net", None)
+        if net is None or net.my_id is None or not net.in_fight():
+            return set()
+        fighters = net.fighters()
+        mine = next((team for who, _, team, _ in fighters if who == net.my_id), None)
+        if mine is None:
+            return set()
+        return {cell for who, cell, team, _ in fighters if team == mine and who != net.my_id}
+
+    def _told_me(self, frame: Frame, mine: list[Fighter], my_team: str) -> Fighter | None:
+        """Moi d'après le jeu (écoute réseau) : le cercle de ma couleur sur ma case annoncée, sinon cette case (cercle
+        caché) ; None sans écoute, hors combat, ou ma case pas encore annoncée."""
+        net = getattr(self.game, "net", None)
+        if net is None or net.my_id is None or not net.in_fight():
+            return None
+        cell = net.my_grid_cell()
+        if cell is None:
+            return None
+        return next((f for f in mine if f.cell == cell), None) or Fighter(my_team, *frame.grid.center(cell), cell)
+
+    def _told_life(self, enemies: list[Fighter]) -> None:
+        """Vie exacte des ennemis d'après le jeu (GTM, puis dégâts) : remplace l'estimation (MapMemory.life)."""
+        net = getattr(self.game, "net", None)
+        if net is None or not net.in_fight():
+            return
+        told = {cell: state.hp for who, cell, team, state in net.fighters() if who != net.my_id and state.hp > 0}
+        for enemy in enemies:
+            if enemy.cell in told:
+                self.map.life[enemy.cell] = told[enemy.cell]
+
     def _locate_by_range(self, frame: Frame, mine: list[Fighter], fighters: list[Fighter]) -> Fighter | None:
         """Moi parmi plusieurs cercles de ma couleur quand rien d'autre ne le dit (combat repris sans connaître les
         cases : 03/10, le bot s'est pris pour un allié, déplacements et sorts faux) : la portée d'un sort s'affiche
@@ -877,7 +1080,11 @@ class CombatAI:
             # Mes cercles lus aussi sur cette capture : sur celle du tour, le mien pouvait manquer (20/10 : souris sur
             # ma case d'arrivée, case éclairée en bleu, cercle pas vu ; il l'est une fois la portée affichée).
             on_shown = [f for f in find_fighters(shown) if f.team == mine[0].team]
-            circles = {f.cell for f in [*mine, *on_shown]}
+            # Pas les cases des autres personnages, prouvées à la fin de leur tour (TeamBot._cells) : 26/10 (journal
+            # 190101), équipe serrée dans un coin, losange coupé, plusieurs portées centrées chacune sur un allié ;
+            # écartées, il ne reste souvent qu'un cercle (locate_caster refuse quand plusieurs restent plausibles).
+            claimed = set(self._team_cells()) if self._team_cells is not None else set()
+            circles = {f.cell for f in [*mine, *on_shown]} - claimed
             found = locate_caster(shown, expected, circles, fighters, exclude=self.map.unwalkable,
                                   in_line=spell.in_line, modifiable=spell.range_modifiable)
             if self._locate_saved < LOCATE_SAVED:  # captures pour vérifier le repérage (sans repère dessiné dessus)
@@ -1022,7 +1229,14 @@ class CombatAI:
         return self._stat("pm") or self.settings.max_pm
 
     def _turn_pa(self, frame: Frame) -> int:
-        """PA de ce tour, lus dans la bulle bleue (moins que le maximum si un monstre en a retiré)."""
+        """PA de ce tour, lus dans la bulle bleue (moins que le maximum si un monstre en a retiré) ; écoute du
+        serveur : ceux qu'il annonce (GTM au début du tour)."""
+        net = self._net()
+        state = net.my_state() if net is not None else None
+        if state is not None and state.pa > 0:
+            if state.pa != self._max_pa:
+                log.info("%d PA ce tour (au lieu de %d, d'après le jeu)", state.pa, self._max_pa)
+            return state.pa
         pa = read_pa(frame)
         if pa is None:
             if not self._warned_pa:
@@ -1043,7 +1257,9 @@ class CombatAI:
 
         Les PA suivis baissent de ce que coûte chaque sort lancé ; la bulle corrige s'il en reste moins. Un sort
         grisé n'est même pas essayé : sa touche ne ferait rien."""
-        pa = read_pa(frame)
+        net = self._net()
+        state = net.my_state() if net is not None else None
+        pa = state.pa if state is not None else read_pa(frame)
         greyed = None
         if self.spellbook is not None and find_end_turn_button(frame) is not None:
             greyed = {s.spell_id for s in self.spells
@@ -1078,7 +1294,7 @@ class CombatAI:
         cells = set(frame.grid.cells())
         board = Board(frozenset(cells), frozenset(self.map.unwalkable),
                       frozenset(self.map.obstacles) if self.map.known else None,
-                      reliable=self._map_reliable, margin=RELIEF_MARGIN, unseen=frozenset(self.map.unseen(cells)))
+                      reliable=self._trusted_map, margin=RELIEF_MARGIN, unseen=frozenset(self.map.unseen(cells)))
         self._board = board
         started = time.perf_counter()
         spells = [s for s in self.spells if s.spell_id not in self._banned]
@@ -1089,6 +1305,12 @@ class CombatAI:
                   plan.sequences, self._use.pa, pm)
         return plan
 
+    @property
+    def _trusted_map(self) -> bool:
+        """Mes cases et distances valent : carte crue sans relief, ou carte officielle reconnue (même reconnue après un
+        passage en « carte à relief » : la carte est partagée par l'équipe, la reconnaissance peut venir d'un autre)."""
+        return self._map_reliable or self.map.arena is not None
+
     def _spell_fits(self) -> bool:
         """Un sort d'attaque tient encore dans mes PA ce tour (sinon, pas de plan d'ailleurs : rien à y lancer)."""
         use = self._use
@@ -1098,7 +1320,13 @@ class CombatAI:
     def _pm_left(self, frame: Frame, pm_left: int) -> int:
         """PM restants : ceux de la bulle verte, sans dépasser `pm_left` (PM du début du tour moins ceux dépensés) :
         juste après un déplacement, la bulle montre parfois encore l'ancien nombre (01/10 : un déplacement de 2 PM
-        planifié avec 0 PM, 2 à 3 s perdues). `pm_left` seul si la bulle est illisible."""
+        planifié avec 0 PM, 2 à 3 s perdues). `pm_left` seul si la bulle est illisible.
+        31/10 : écoute du serveur d'abord, ses PM font foi (GTM au début du tour, puis GA;129 dépensés et GA;127
+        perdus : tacle, sort d'un ennemi) ; la bulle seulement sans écoute ou mon état pas annoncé."""
+        net = self._net()
+        state = net.my_state() if net is not None else None
+        if state is not None and (state.max_hp or state.hp):  # GTM reçu pour moi (sinon PM à 0 par défaut)
+            return max(state.pm, 0)
         pm = read_pm(frame)
         if pm is None:
             if not self._warned_pm:
@@ -1111,7 +1339,14 @@ class CombatAI:
 
     def _use_spellbook(self, frame: Frame) -> None:
         """Premier tour de la session : cases de la barre -> sorts, et ce que la tactique en sait."""
-        if self.spellbook is None or self.spellbook.slots or not self.spellbook.entries:
+        if self.spellbook is None or not self.spellbook.entries:
+            return
+        if self.spellbook.slots:
+            # Caractéristiques annoncées par le serveur après le premier tour (27/10 : « As » envoyé en combat) :
+            # dégâts des sorts recalculés, mêmes sorts (ceux écartés en route le restent).
+            if getattr(self.spellbook, "refresh_stats", lambda: False)():
+                fresh = {s.spell_id: s for s in self.spellbook.combat_spells()}
+                self._spells = [fresh.get(s.spell_id, s) for s in self._spells]
             return
         self.spellbook.locate(frame)
         self._spells = self.spellbook.combat_spells()
@@ -1161,6 +1396,18 @@ class CombatAI:
         """Carte officielle du combat (brain/arena.py), reconnue au terrain lu ou aux cases de placement ; ARENA_TRIES
         essais par combat (la reconnaissance compare toutes les cartes du jeu)."""
         if self.map.arena is not None or self.map.arena_tries >= ARENA_TRIES:
+            return
+        # 31/10 : la carte du client d'abord (numéro et clé du GDM, brain/mapdata.py ; 60 cartes sur 60 d'accord avec
+        # les références, et juste aussi pour les cartes changées depuis) ; la reconnaissance par les références en
+        # secours.
+        from bot.brain.arena import fight_arena
+
+        arena = fight_arena(getattr(self.game, "net", None))
+        if arena is not None:
+            self.map.adopt(arena)
+            log.info("Carte du combat d'après la carte du client : %s (%d blocs, %d trous, %d cases sans ligne de vue)",
+                     arena.coords, len(arena.blocks), len(arena.holes), len(getattr(arena, "sight_only", ())))
+            self._check_placements()
             return
         arenas = Arenas.load()
         if not len(arenas):
@@ -1306,6 +1553,8 @@ class CombatAI:
 
         for n, target in enumerate(sorted(enemies, key=lambda e: (-around(e), e.cell))):
             if n:
+                if read_scene(self.game.look(park=False)).phase is not Phase.COMBAT:
+                    return False  # combat fini : la touche viserait la barre des objets (25/10)
                 self.game.press(key)  # un clic hors de portée a désélectionné le sort
                 self.game.sleep(0.3)
             frame = self.game.look()
@@ -1384,6 +1633,12 @@ class CombatAI:
         derrière Flèche Magique et Flèche Explosive)."""
         if not self.game_background or self._numpad_checked or self._numpad_misses >= NUMPAD_MISSES:
             return
+        if getattr(self.spellbook, "numpad_known", lambda: False)():
+            # 27/10 : l'essai (sort sélectionné puis Échap) refait à chaque session ressemblait à un repérage ; une
+            # touche qui ne marche plus est quand même vue au moment de s'en servir (_numpad_missed).
+            self._numpad_checked = True
+            log.debug("Pavé numérique : la 2e rangée a marché à une session précédente, pas de nouvel essai")
+            return
         self._read_bar(frame)
         spell = next((s for s in self._second_row_attacks()
                       if s.pa <= self._use.pa and s.spell_id not in self._use.greyed), None)
@@ -1396,6 +1651,7 @@ class CombatAI:
                      spell.name, spell.slot, key)
             self._numpad_ok = True
             self._cancel_spell()
+            getattr(self.spellbook, "remember_numpad", lambda: None)()
             return
         path = self.game.recorder.save(self.game.look().image, "pave_numerique_sans_effet")
         log.info("Pavé numérique : %s (case %d) pas sélectionné par %s (capture : %s)%s", spell.name, spell.slot, key,
@@ -1461,14 +1717,27 @@ class CombatAI:
             log.debug("Portée de %s affichée %.2f s après sa touche : lente, pas une fenêtre sourde", spell.name,
                       RANGE_SHOWN + RANGE_LATE)
             return late
+        if not self._foes_standing(late):
+            # 25/10 (journaux 153121 à 181212) : 29 clics de déblocage, 25 suivis d'un clic sur la case du sort sans rien
+            # sélectionner, aucune fenêtre sourde trouvée ainsi ; 12 suivis aussitôt de « hors combat » (le sort d'avant
+            # venait de tuer le dernier ennemi : Pesopepe 18:54:21, Walitcoin 16:00:56). Plus d'ennemi debout :
+            # pas de clic, ni sur le fond ni sur la barre.
+            log.info("%s pas sélectionné et plus aucun ennemi debout (combat fini ?) : pas de clic de déblocage",
+                     spell.name)
+            return None
         what = f"touche {key.upper()} de {spell.name}"
         unlocked = unlock_click(self.game, frame)
-        self.game.press(key)
+        if not self._press_spell_key(key, spell):
+            return None
         shown = self._range_frame(watch=self._watching)
         if shown is not None:
             mark_heard(self.game)
             report_episode(what, True, "" if unlocked else "sans clic possible : la touche a pris au 2e appui")
             return shown
+        # 25/10 (journal 181212) : 1 à 2 s depuis la vérification de la barre ; combat fini entre-temps, clic sur la case
+        # hors combat. Barre revue juste avant le clic (une potion de la barre se boit d'un clic).
+        if not self._bar_shows(self.game.look(park=False), spell):
+            return None
         self.game.click(spell_slot_point(frame.layout, spell.slot), frame.layout.spread(*SPELL_SLOT_SPREAD))
         shown = self._range_frame(watch=self._watching)
         if shown is None:
@@ -1478,6 +1747,15 @@ class CombatAI:
         mark_deaf(self.game, f"{what} ignorée, le clic sur sa case l'a sélectionné")
         report_episode(what, False, "sélectionné par un clic sur sa case : sorts cliqués jusqu'à la fin du tour")
         return shown
+
+    def _foes_standing(self, frame: Frame) -> bool:
+        """Toujours en combat, et au moins un cercle d'une autre couleur que la mienne sur la carte. Vrai si ma couleur
+        n'est pas connue (rien à conclure)."""
+        if read_scene(frame).phase is not Phase.COMBAT:
+            return False
+        if not self._team:
+            return True
+        return any(f.team and f.team != self._team for f in find_fighters(frame))
 
     def _no_sight_shown(self, me: Fighter, target: Fighter, spell: CombatSpell) -> bool:
         """La portée affichée par le jeu dit que la cible est sans ligne de vue : sa case en bleu clair, ou (case cachée
@@ -1526,6 +1804,15 @@ class CombatAI:
             log.info("Portée de %s : %d à %d cases", spell.name, *view.spell_range)
         self._use.measured[spell.spell_id] = view.spell_range
         self.map.learn_range(view)
+        if not spell.needs_sight:
+            # Sort sans ligne de vue (Roulage de Pelle, Flèche Harcelante) : le jeu colore en bleu foncé toutes ses cases
+            # à portée, même derrière un bloc ; les comparer à la ligne de vue prédite ne dit rien. 25/10 (journaux
+            # 153121 à 181212) : 21 des 27 passages en « carte à relief » venaient de ces deux sorts (accord 50 à 86 %,
+            # 32 captures « ligne_de_vue_a_revoir » relues avec la carte officielle) ; ensuite 40 % des
+            # clics refusés (41 sur 103 : tirs au-delà de la portée, marge de 4 cases) contre 4 % avant (21 sur 579).
+            # (Pour les sorts à ligne de vue, sur ces captures : 4 cases sur 1757 vues bloquées alors que prédites dégagées.)
+            log.debug("Portée de %s (sans ligne de vue) : pas de contrôle de la ligne de vue prédite", spell.name)
+            return
         blockers = self.map.obstacles | ({f.cell for f in fighters} - {me.cell})
         agreement = sight_agreement(view, me.cell, blockers)
         log.debug("Obstacles connus : %d ; ligne de vue prédite juste sur %.0f %% des cases à portée",
@@ -1535,9 +1822,16 @@ class CombatAI:
         shown_cells = len(view.castable | view.no_sight)
         wrong = round((1 - agreement) * shown_cells) if shown_cells else 0
         if agreement < 0.9 and wrong >= RELIEF_MIN_WRONG and self._map_reliable:
-            self._map_reliable = False
-            log.info("Carte à relief (ligne de vue prédite juste sur %.0f %% des cases) : je ne me fie plus à mes "
-                     "prévisions de portée et de ligne de vue, je vérifie avec le sort", 100 * agreement)
+            if self.map.arena is not None:
+                # Carte officielle reconnue (brain/arena.py) : ses cases font foi, mes distances sont justes. Les écarts
+                # viennent de l'écran (25/10 : animation du sort d'avant sur la portée, cercle d'un ennemi qui vient de
+                # mourir) : pas de « carte à relief », la portée reste vérifiée avant le clic.
+                log.info("Ligne de vue prédite juste sur %.0f %% des cases seulement, mais carte officielle reconnue : "
+                         "je garde mes prévisions", 100 * agreement)
+            else:
+                self._map_reliable = False
+                log.info("Carte à relief (ligne de vue prédite juste sur %.0f %% des cases) : je ne me fie plus à mes "
+                         "prévisions de portée et de ligne de vue, je vérifie avec le sort", 100 * agreement)
         if agreement < 0.95 and not self._sight_saved:
             self._sight_saved = True  # une capture par combat suffit pour améliorer la prédiction
             path = self.game.recorder.save(shown.image, "ligne_de_vue_a_revoir", lossless=True)
@@ -1596,12 +1890,35 @@ class CombatAI:
 
         clicked = time.monotonic()
         window = self.settings.after_cast + self.settings.cast_confirm
+        self._chain_chat = None
+        net = self._net() if not self._watching else None
+        if net is not None:
+            # PA dépensés annoncés par le serveur (GA;102) : parti, ~0,2 s après le clic ; rien en NET_REFUSED s :
+            # refusé. Le chat d'avant le clic est gardé pour l'enchaînement (_effect_in_chat : fin de l'animation).
+            self._chain_chat = self._chat_before(before)
+            spent = net.wait_for("spent_at", self._clicked_at, NET_REFUSED)
+            after = self.game.look()
+            stats = self._turn_stats()
+            if spent is None and not gone(after):
+                log.debug("%s : pas de PA dépensés d'après le jeu en %.1f s : refusé", spell.name, NET_REFUSED)
+                stats.missed_clicks += 1
+                return after
+            if net.failed_at >= self._clicked_at:
+                # PA perdus sans effet ; si ce sort finit le tour sur un échec critique, le serveur passe la main
+                # (GTF) et mon tour s'arrête là (_my_turn).
+                log.info("%s : échec critique (d'après le jeu), PA perdus sans effet", spell.name)
+            log.debug("%s : parti en %.2f s (d'après le jeu)", spell.name,
+                      (spent if spent is not None else time.monotonic()) - self._clicked_at)
+            stats.casts += 1
+            self._sent = after
+            return None
         if self._watching:
             shown, after = self._watch("sort parti", gone, window)
             sent = shown is not None
             after = shown or after
         else:
             chat = self._chat_before(before)
+            self._chain_chat = chat
             announced_at, read_at = None, float("-inf")
             self.game.sleep(self.settings.after_cast)
             checks = 1 + round(max(0.0, window - self.settings.after_cast) / CONFIRM_EVERY)
@@ -1644,11 +1961,50 @@ class CombatAI:
         gap = time.monotonic() - self._target_cast_at
         if gap == float("inf"):
             return None
-        if gap < CHAIN_GAP and self.game_background:
-            log.debug("%s : j'attends la fin de l'animation du sort précédent (%.1f s après son clic, %.1f s au moins)",
-                      spell.name, gap, CHAIN_GAP)
-            self.game.sleep(CHAIN_GAP - gap)
+        if gap < NET_CHAIN_FIRST and self.game_background and self._net() is not None:
+            log.debug("%s : %.1f s après le sort précédent, je tente à %.1f s (écoute du serveur)", spell.name, gap,
+                      NET_CHAIN_FIRST)
+            self.game.sleep(NET_CHAIN_FIRST - gap)
+        elif gap < CHAIN_GAP and self.game_background and self._net() is None:
+            seen = self._effect_in_chat(self._target_cast_at + CHAIN_GAP)
+            if seen is not None:
+                log.debug("%s : effet de %s lu dans le chat %.1f s après son clic, je lance", spell.name,
+                          self._target_spell, seen)
+                self.game.sleep(CHAIN_CHAT_MARGIN)
+            else:
+                gap = time.monotonic() - self._target_cast_at
+                log.debug("%s : j'attends la fin de l'animation du sort précédent (%.1f s après son clic, %.1f s au "
+                          "moins)", spell.name, gap, CHAIN_GAP)
+                self.game.sleep(max(0.0, CHAIN_GAP - gap))
         return gap
+
+    def _animation_retry(self, previous: float, target: Fighter, after: Frame) -> bool:
+        """Clic sans réponse du serveur, sans doute pendant l'animation du sort précédent : on reclique si l'écoute est
+        là, moins de CHAIN_GAP s après le précédent, le sort encore sélectionné (portée affichée) et la cible encore
+        debout d'après le serveur (une case vide recevrait un déplacement)."""
+        net = self._net()
+        if net is None or not self.game_background or time.monotonic() - previous >= CHAIN_GAP:
+            return False
+        if not spell_range_visible(after):
+            return False
+        return not target.team or any(cell == target.cell for _, cell, _, _ in net.fighters())
+
+    def _effect_in_chat(self, deadline: float) -> float | None:
+        """Secondes entre le clic du sort précédent et son effet lu dans le chat de combat : une ligne après sa dernière
+        annonce « Nom lance Sort. », le chat changé depuis avant son clic. None si rien avant `deadline` (ou pas de chat
+        lisible : _chat_before)."""
+        before = self._chain_chat
+        if before is None or not self._target_spell:
+            return None
+        wanted = _plain(f"{self._name} lance {self._target_spell}")
+        while True:
+            lines = combat_lines(self.game.look(park=False)) or []
+            announced = [i for i, line in enumerate(lines) if _plain(line).startswith(wanted)]
+            if lines != before and announced and announced[-1] < len(lines) - 1:
+                return time.monotonic() - self._target_cast_at
+            if time.monotonic() + CHAIN_CHAT_EVERY >= deadline:
+                return None
+            self.game.sleep(CHAIN_CHAT_EVERY)
 
     def _forbidden_target(self, aim: tuple[float, float]) -> bool:
         """Curseur « interdit » sur la cible que la souris vient de survoler. Fixe : une capture après 0,25 s ;
@@ -1675,17 +2031,44 @@ class CombatAI:
         un combattant d'équipe "" pour une zone qui vise une case vide."""
         spell = spell or self.spells[0]
         self._turn_stats().tries += 1
+        self._sight_refused = False
         if spell.on_self:
             return self._cast_on_self(before, me, spell, my_team)
+        net = self._net() if self.game_background else None
+        if net is not None and time.monotonic() - self._cast_at < NET_KEY_AFTER_CAST:
+            self.game.sleep(NET_KEY_AFTER_CAST - (time.monotonic() - self._cast_at))
         shown = self._select_spell(before, spell)
         just_cast = time.monotonic() - self._cast_at < RESELECT_AFTER_CAST
-        # Ou après un déplacement ce tour : 19/10, touche pressée 0,5 s après le clic du pas, pendant la marche, refusée
-        # avec 4 PA (Pelle Fantomatique écartée du tour, Lancer de Pelle, plus faible, à la place).
-        if shown is None and (just_cast or self._turn_stats().moves) and spell.pa <= self._use.pa:
+        # Ou juste après un déplacement : 19/10, touche pressée 0,5 s après le clic du pas, pendant la marche, refusée
+        # avec 4 PA (Pelle Fantomatique écartée du tour, Lancer de Pelle, plus faible, à la place). 25/10 (journaux
+        # 153121 à 181212) : « juste après un déplacement » valait pour tout déplacement du tour ; 18 nouveaux essais,
+        # touche pressée 1,7 à 11 s après l'ordre de marche, 18 « non sélectionnable » ensuite. Seulement dans les
+        # RESELECT_AFTER_MOVE s qui suivent l'arrivée (ou l'échec) du déplacement.
+        just_moved = time.monotonic() - self._moved_at < RESELECT_AFTER_MOVE
+        if shown is None and (just_cast or just_moved) and spell.pa <= self._use.pa:
             log.info("%s pas sélectionné juste après %s : nouvel essai", spell.name,
                      "un lancer (animation)" if just_cast else "un déplacement")
-            self.game.sleep(RESELECT_PAUSE)
-            shown = self._range_frame(watch=self._watching) or self._select_spell(self.game.look(), spell)
+            self.game.sleep(NET_KEY_RETRY_EVERY if net is not None else RESELECT_PAUSE)
+            shown = self._range_frame(watch=self._watching)
+            if shown is None:
+                # 25/10 (journal 231114, et 19:01 journal 181212) : 2e appui sur num5 pour Flèche d'Immobilisation alors
+                # que le sort précédent venait de tuer le dernier Blop ; le jeu a remis la barre sur « Obj. » et la
+                # touche a bu la potion de Brâkmar de la case 12 (Elseiso téléporté, deux fois). Pas de nouvel essai
+                # sans ennemi debout.
+                fresh = self.game.look()
+                if self._foes_standing(fresh):
+                    shown = self._select_spell(fresh, spell)
+                else:
+                    log.info("%s : plus aucun ennemi debout (combat fini ?) : pas de nouvel essai", spell.name)
+                    return Cast.NO_SPELL
+            for _ in range(NET_KEY_RETRIES if net is not None else 0):
+                if shown is not None:
+                    break
+                self.game.sleep(NET_KEY_RETRY_EVERY)
+                fresh = self.game.look()
+                if not self._foes_standing(fresh):
+                    break
+                shown = self._select_spell(fresh, spell)
         if shown is None:
             key = self._slot_key(spell.slot)
             log.info("%s non sélectionnable (touche %s) : plus assez de PA, sort en relance ou raccourci différent",
@@ -1707,9 +2090,10 @@ class CombatAI:
         self._learn_range(shown, me, fighters, spell)
         if self._no_sight_shown(me, target, spell):
             log.info("Pas de ligne de vue sur %s d'après la portée affichée par le jeu : pas de clic", _aim_label(target))
+            self._sight_refused = True  # ni ce sort ni aucun autre à ligne de vue sur lui d'ici (_play_turn)
             return self._cancel_spell()
         high = spell_range(spell, self._use)[1]  # bonus de portée (Tir Éloigné) compris, dès le tour où il est lancé
-        if self._map_reliable and distance(me.cell, target.cell) > high:
+        if self._trusted_map and distance(me.cell, target.cell) > high:
             log.info("%s à %d cases, hors de portée (%d max)", _aim_label(target).capitalize(),
                      distance(me.cell, target.cell), high)
             return self._cancel_spell()
@@ -1729,14 +2113,32 @@ class CombatAI:
             if self._forbidden_target(aim):
                 log.info("Pas de ligne de vue sur %s", _aim_label(target))
                 return self._cancel_spell()
-            hp = self._read_life(self._hovered, target) if target.team and self._hovered is not None else None
+            # Arrière-plan : pas de survol ni de fiche ; la vie annoncée par le serveur suffit (31/10).
+            hp = self._read_life(self._hovered, target) if target.team else None
             gap = self._chain_wait(spell)
             log.info("%s lancé sur %s%s%s", spell.name, _aim_label(target), f" ({hp} PV)" if hp is not None else "",
                      f" ({gap:.1f} s après le sort précédent)" if gap is not None else "")
+            previous = self._target_cast_at  # clic du sort précédent sur une cible ce tour (-inf : aucun)
+            self._clicked_at = time.monotonic()
             self.game.click()  # sur place : la souris est déjà sur la cible vérifiée
             self._mouse_away()
             self._cast_at = self._target_cast_at = time.monotonic()
+            self._target_spell = spell.name
             after = self._confirm_cast(before, my_team, spell)
+            retries = 0
+            while after is not None and retries < NET_CLICK_RETRIES and self._animation_retry(previous, target, after):
+                retries += 1
+                # Clic ignoré pendant l'animation du sort précédent : le sort est toujours sélectionné, la cible debout
+                # (serveur) ; nouveau clic au même endroit.
+                self.game.sleep(NET_RETRY_EVERY)
+                self.game.move(point, spread)
+                log.debug("%s : clic ignoré (animation du sort précédent), nouveau clic %.1f s après lui", spell.name,
+                          time.monotonic() - previous)
+                self._clicked_at = time.monotonic()
+                self.game.click()
+                self._mouse_away()
+                self._cast_at = self._target_cast_at = time.monotonic()
+                after = self._confirm_cast(before, my_team, spell)
             if after is not None and target.team and self._left_its_cell(before, after, target):
                 # L'ennemi visé n'est plus sur sa case : le sort est parti (mort, repoussé), même si les PA ne l'ont pas
                 # montré. Jamais de nouvel essai sur une case vide (04/10 : Tempêtes de Puissance crues pas parties,
@@ -1780,9 +2182,13 @@ class CombatAI:
                         NOT_GONE_LIMIT)
         return Cast.NO_SPELL
 
-    @staticmethod
-    def _left_its_cell(before: Frame, after: Frame, target: Fighter) -> bool:
-        """Le combattant visé avait son cercle sur sa case avant le lancer, et ne l'a plus."""
+    def _left_its_cell(self, before: Frame, after: Frame, target: Fighter) -> bool:
+        """Le combattant visé avait son cercle sur sa case avant le lancer, et ne l'a plus (serveur : plus personne
+        debout sur sa case)."""
+        net = self._net()
+        if net is not None:
+            return all(cell != target.cell for _, cell, _, _ in net.fighters())
+
         def standing(frame: Frame) -> bool:
             return any(f.cell == target.cell and f.team == target.team for f in find_fighters(frame))
 
@@ -1800,16 +2206,20 @@ class CombatAI:
         self.map.wound({cell: expected * max(0.0, 1 - self.settings.zone_falloff * distance(step.cell, cell))
                         for cell in step.hits})
 
-    def _read_life(self, frame: Frame, target: Fighter) -> int | None:
+    def _read_life(self, frame: Frame | None, target: Fighter) -> int | None:
         """Vie de la cible survolée, lue sur sa fiche (perception/hp.py) ; None sans fiche ou illisible. Gardée pour
         toute l'équipe (MapMemory.life) : le moteur achève les ennemis entamés et concentre les coups.
 
         Si un seul sort est parti depuis la lecture précédente de sa vie, dans ce tour et sur sa case, ses dégâts sont
         mesurés (HitLog). Gardées pour vérifier : une capture de la fiche lue par combat, une de la fiche illisible
         (sans perte) par session."""
-        hp = read_hovered_hp(frame)
+        net = getattr(self.game, "net", None)
+        told = net.life_at(target.cell) if net is not None and hasattr(net, "life_at") and net.alive() else None
+        # 31/10, utilisateur : le réseau d'abord ; la vie annoncée par le serveur (début de tour, chaque coup, mort),
+        # la fiche survolée en secours (écoute absente ou combattant pas encore annoncé).
+        hp = told if told is not None else read_hovered_hp(frame) if frame is not None else None
         label = "vie_illisible" if hp is None else "vie_lue"
-        if label not in self._life_saved:
+        if told is None and frame is not None and label not in self._life_saved:
             self._life_saved.add(label)
             path = self.game.recorder.save(frame.image, label, lossless=hp is None)
             log.debug("Vie de %s au survol : %s (capture : %s)", _aim_label(target),
@@ -1880,8 +2290,8 @@ class CombatAI:
             if reason:
                 log.info("Rafale arrêtée : %s", reason)
                 break
-            if not self.settings.fast_end:
-                self.game.press(key)
+            if not self.settings.fast_end and not self._press_spell_key(key, spell):
+                break
             if self._aim is not None and self._aim[0] == target.cell:
                 point, spread = self._aim[1:]
             else:
@@ -1980,6 +2390,8 @@ class CombatAI:
         portée (sort sélectionné), None au bout de BURST_READY s. Le délai est noté au journal (mise au point)."""
         start = self.game.now()
         pressed = start
+        if read_scene(self.game.look(park=False)).phase is not Phase.COMBAT:
+            return None  # combat fini : la touche viserait la barre des objets (25/10)
         self.game.press(key)
         while True:
             self.game.sleep(BURST_HOVER if pressed == start else 0.1)
@@ -1992,6 +2404,8 @@ class CombatAI:
             if now - start >= BURST_READY:
                 return None
             if now - pressed >= BURST_REPRESS:
+                if read_scene(frame).phase is not Phase.COMBAT:
+                    return None  # combat fini entre deux pressions (25/10)
                 self.game.press(key)
                 pressed = now
 
@@ -2014,9 +2428,12 @@ class CombatAI:
         la façon qui a marché en dernier passe en premier, pour toute la session."""
         if not self._bar_shows(before, spell):
             return Cast.NO_SPELL
-        for method in sorted(SELF_CAST_METHODS, key=lambda m: m != self._self_cast):
+        for attempt, method in enumerate(sorted(SELF_CAST_METHODS, key=lambda m: m != self._self_cast)):
+            if attempt and not self._bar_shows(self.game.look(park=False), spell):
+                return Cast.NO_SPELL  # 2e façon, après un essai raté : combat peut-être fini, barre revue (25/10)
             if method == "clic droit":
                 log.info("%s lancé sur moi (clic droit sur sa case)", spell.name)
+                self._clicked_at = time.monotonic()  # écoute du serveur : sa réponse est attendue après ce clic
                 self.game.click(spell_slot_point(before.layout, spell.slot), before.layout.spread(*SPELL_SLOT_SPREAD),
                                 button="right")
             else:
@@ -2024,15 +2441,21 @@ class CombatAI:
                 if not key:
                     continue
                 # Portée 0 : seule ma case s'éclaire, trop peu pour spell_range_visible ; le clic sur moi tranche.
-                self.game.press(key)
+                if not self._press_spell_key(key, spell):
+                    return Cast.NO_SPELL
                 self.game.sleep(0.15)
                 if not self._self_cast_saved:
                     self._self_cast_saved = True  # une capture par session : ce que le jeu affiche
                     self.game.recorder.save(self.game.look(park=False).image, "sort_sur_moi_selectionne", lossless=True)
                 log.info("%s lancé sur moi (touche %s puis clic sur mon personnage)", spell.name, key)
+                self._clicked_at = time.monotonic()
                 self.game.click((me.x, me.y), before.grid.click_spread())
             after = self._confirm_cast(before, my_team, spell)  # after_cast compris (mode fixe)
             if after is None:
+                # 26/10 (journal 212835, Elseiso) : confirmé par le serveur en 0,28 s, la touche du sort suivant pressée
+                # pendant l'animation de celui-ci, ignorée ; Flèche Harcelante crue indisponible, Tir Éloigné à la place
+                # et pas d'attaque. Lancer noté : le sort suivant pas sélectionné juste après est retenté (_cast).
+                self._cast_at = time.monotonic()
                 if method != self._self_cast:
                     log.info("Sorts sur moi : %s, gardé pour la session", method)
                 self._self_cast = method
@@ -2043,7 +2466,15 @@ class CombatAI:
                 return Cast.STUCK
         return Cast.NO_SPELL
 
-    def _bar_shows(self, frame: Frame, spell: CombatSpell) -> bool:
+    def _press_spell_key(self, key: str, spell: CombatSpell) -> bool:
+        """Touche d'un sort, seulement si une capture fraîche montre encore le combat et ce sort dans sa case (25/10 :
+        le combat fini, la barre repasse sur « Obj. » et la même touche boit l'objet de la case). False : pas pressée."""
+        if not self._bar_shows(self.game.look(park=False), spell):
+            return False
+        self.game.press(key)
+        return True
+
+    def _bar_shows(self, frame: Frame, spell: CombatSpell, flash_retry: bool = True) -> bool:
         """Avant un clic droit sur la case d'un sort ou sa touche : toujours en combat, et la case montre bien ce sort
         (25/10, l'utilisateur : deux fois une potion de téléportation utilisée, la barre montrait les objets, combat fini
         ou onglet « Obj. » ouvert ; un clic droit sur la case d'une potion la boit). Sort sans icône connue : le combat
@@ -2051,11 +2482,21 @@ class CombatAI:
         if read_scene(frame).phase is not Phase.COMBAT:
             log.warning("%s : plus en combat, pas de clic sur la barre (elle montre peut-être les objets)", spell.name)
             return False
+        if spell_bar_tab(frame) == "objets":
+            # 25/10 (journal 231114) : combat fini, la barre repassée sur « Obj. » ; la touche du sort a bu une potion.
+            log.warning("%s : la barre montre l'onglet « Obj. » : ni touche ni clic", spell.name)
+            return False
         entry = self.spellbook.in_slot(spell.slot) if self.spellbook is not None else None
         if entry is None or getattr(entry, "icon_core", None) is None:
             return True
         if slot_scores(frame, entry, range(spell.slot, spell.slot + 1)).get(spell.slot, -1.0) >= BAR_ICON_MATCH:
             return True
+        # 25/10 (journal 171736, Elseiso) : le clic droit de Tir Puissant sur sa case l'a lancé ET a ouvert le menu de
+        # Flash, resté par-dessus la barre ; Oeil de Taupe refusé deux fois derrière. Fermé, puis la case relue.
+        if flash_retry and find_flash_menu(frame, anywhere=True) is not None:
+            log.info("Le menu de Flash cache la barre de sorts : je le ferme avant %s", spell.name)
+            if close_flash_menu(self.game, frame):
+                return self._bar_shows(self.game.look(park=False), spell, flash_retry=False)
         path = self.game.recorder.save(frame.image, "barre_sans_le_sort", lossless=True)
         log.warning("La case %d de la barre ne montre pas %s (onglet des objets ?) : pas de clic (capture : %s)",
                     spell.slot, spell.name, path)
@@ -2077,12 +2518,29 @@ class CombatAI:
         # cachée par mon propre corps : le clic m'a sélectionné, « n'a pas bougé »).
         point, spread = clear_point(frame.grid, best, fighters if me in fighters else fighters + [me],
                                     timeline_portraits(frame) + challenge_icons(frame))
+        if (wait := WALK_AFTER_CAST - (time.monotonic() - self._cast_at)) > 0:
+            self.game.sleep(wait)
+        clicked_at = self._walk_clicked_at = time.monotonic()
         self.game.click(point, spread)
         # Arrière-plan : souris virtuelle écartée, sinon elle reste sur la case d'arrivée, éclairée en bleu avec le
         # curseur du jeu par-dessus, et mon cercle n'y est plus vu (20/10, Leproduitlatte : 7 s de repérage pour rien).
         self._mouse_away()
         tracking = self._me_cell is not None or self._find_me is not None  # mode équipe : ma case suivie
         arrived, frame = self._wait_arrival(me, best, steps)
+        self._moved_at = time.monotonic()
+        net = getattr(self.game, "net", None)
+        if not arrived and net is not None and net.my_id is not None and net.in_fight() and net.moved_at >= clicked_at:
+            # Mon déplacement annoncé par le jeu (GA0;1, chemin jusqu'à sa dernière case : connection/network.py,
+            # 26/10) : où je suis arrivé, sans chercher mon cercle à l'écran.
+            now = net.my_grid_cell()
+            if now is not None:
+                if tracking:
+                    self._me_cell, self._me_sure, self._proven_now, self._doubt = now, True, True, False
+                if now == best:
+                    return steps
+                used = max(0, min(steps, net.move_steps))
+                log.info("Arrêté en %s au lieu de %s (%d PM dépensés sur %d, d'après le jeu)", now, best, used, steps)
+                return used
         if arrived:
             if tracking:
                 # Un cercle de ma couleur est apparu sur la case libre visée : c'est moi, preuve faite.
@@ -2121,6 +2579,12 @@ class CombatAI:
                 return used
             log.info("Arrivé en %s, mais mon cercle ne s'y voit pas : je vérifie où je suis", best)
             return steps
+        if net is not None and getattr(net, "tackled_at", 0.0) >= clicked_at:
+            # 27/10 : annoncé par le serveur (GA;104) dès le premier clic ; avant, un second clic et ~4 s pour conclure.
+            stats.stuck_moves += 1
+            log.info("Taclé en quittant le contact d'un ennemi (annoncé par le jeu : PM perdus) : je reste en %s",
+                     me.cell)
+            return 0
         if retry and self._my_turn(frame, me.team):
             # Clic tombé sur un combattant qui passait sur la case (03/10), ou pas pris juste après « Mon tour » (20/10 :
             # 4 premiers gestes sur 75, 0,13 s après) : un nouveau clic, d'après les positions de maintenant.
@@ -2130,6 +2594,9 @@ class CombatAI:
         stats.stuck_moves += 1
         path = self.game.recorder.save(frame.image, "deplacement_rate", lossless=True)
         log.warning("Mon personnage n'a pas bougé (capture : %s)", path)
+        if (net := getattr(self.game, "net", None)) is not None and hasattr(net, "heard_since"):
+            # 27/10 : souvent en quittant le contact d'un ennemi (tacle ?) ; ce que dit le serveur, pour le reconnaître.
+            log.debug("Serveur depuis le premier clic : %s", " | ".join(net.heard_since(clicked_at - 3.0)) or "rien")
         # Mon cercle toujours sur ma case et aucun autre apparu : personne n'a bougé (taclé, chemin bloqué). Ma case
         # reste ce qu'elle était (20/10, Vertdepomme taclé : revérifiée sans PA pour le faire, tour fini « sans preuve »).
         return 0
@@ -2143,6 +2610,27 @@ class CombatAI:
         def arrived(frame: Frame) -> bool:
             return best in {f.cell for f in find_fighters(frame) if f.team == me.team}
 
+        net = self._net()
+        if net is not None and not self._watching:
+            # Chemin annoncé par le serveur (GA0;1, sa dernière case) dès le départ ; la marche dure per_cell_moved s
+            # par case : attendue, sans chercher mon cercle à l'écran.
+            moved = net.wait_for(("moved_at", "tackled_at"), self._walk_clicked_at, ARRIVAL_CHECKS * ARRIVAL_EVERY)
+            if moved is not None and net.tackled_at >= self._walk_clicked_at:
+                return False, self.game.look()  # taclé : rien à attendre (_walk)
+            if moved is not None:
+                cells = max(1, net.move_steps)
+                self.game.sleep(max(0.0, self.settings.per_cell_moved * cells - (time.monotonic() - moved)))
+                # La marche dure plus que per_cell_moved par case (26/10, journal 234233 : Cupidité cliquée pendant la
+                # marche, ignorée, la façon de lancer sur soi changée à tort) : fin de la marche vue à l'écran, mon
+                # cercle sur la case annoncée, comme avant l'écoute ; la case, elle, vient du serveur.
+                there = net.my_grid_cell()
+                for _ in range(ARRIVAL_CHECKS):
+                    frame = self.game.look()
+                    if there in {f.cell for f in find_fighters(frame) if f.team == me.team}:
+                        break
+                    self.game.sleep(ARRIVAL_EVERY)
+                return there == best, frame
+            return False, self.game.look()
         if self._watching:
             shown, frame = self._watch(f"arrivée en {best}", arrived,
                                        self.settings.per_cell_moved * steps + ARRIVAL_CHECKS * ARRIVAL_EVERY)
@@ -2310,7 +2798,20 @@ class CombatAI:
 
     def _turn_passed(self, my_team: str, checks: int) -> bool:
         """Main passée, ou combat fini, dans les `checks` × 0,25 s qui suivent la touche ou le clic de fin de tour.
-        Fixe : une capture toutes les 0,25 s ; condition : captures dès le geste, une toutes les 0,1 s."""
+        31/10 : d'après le serveur d'abord (GTF de mon id, GTS d'un autre, GE) ; l'écran seulement sans écoute, flux
+        pas vivant, ou mon tour pas annoncé par le serveur (combat pas entendu depuis son début).
+        Écran, fixe : une capture toutes les 0,25 s ; condition : captures dès le geste, une toutes les 0,1 s."""
+        net = getattr(self.game, "net", None)  # pas _net : un combat fini (GE) dit aussi la main passée
+        if net is not None and getattr(net, "my_id", None) is not None and hasattr(net, "wait_turn_over") \
+                and net.alive():
+            turn, _, _ = net.fight_turn()
+            # Mon tour annoncé (GTS), maintenant ou au début de ce tour (play_turn) : sa fin le sera aussi.
+            if turn == net.my_id or getattr(self, "_turn_told", False):
+                if net.wait_turn_over(net.my_id, checks * TURN_PASSED_EVERY):
+                    return True
+                log.info("Main pas passée d'après le serveur (pas de fin de tour annoncée en %.1f s)",
+                         checks * TURN_PASSED_EVERY)
+                return False
 
         def passed(frame: Frame) -> bool:
             return not self._my_turn(frame, my_team)
