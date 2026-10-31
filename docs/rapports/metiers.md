@@ -2,6 +2,80 @@
 
 Recherche (données Dofus Rétro seulement) et conception. Aucune donnée importée : chaque source attend ton accord.
 
+## Validé en jeu le 27/10 (écoute du serveur)
+
+Toutes les données ci-dessous viennent du serveur du jeu (écoute passive, Npcap) et des fichiers du client déjà copiés
+dans `data/client_retro` ; rien n'est pris sur internet.
+
+### Qui a quel métier
+
+Annoncé par le serveur à la connexion : `JS|métier;compétences` et `JX|métier;niveau;...`. Pour l'avoir, on ferme la
+fenêtre et on relance `bot.connection`, qui reconnecte le compte (environ 20 s par fenêtre, moins de 2 min pour 7).
+
+| Personnage | Métiers (niveau) | Arme équipée | Outil de récolte dans le sac |
+|---|---|---|---|
+| Fourboun | Bijoutier 41, Sculpteur de Baguettes 50, Bricoleur 35, Tailleur 32, Alchimiste 2 | Dagues du Bandit | — |
+| Eldieso | aucun | Agride (hache) | — |
+| Walitcoin | Boulanger 1 | Marteau du Bouftou | — |
+| Waldarch-[Gal] | Paysan 3 | Agride (hache) | — |
+| Pesopepe | Paysan 15 | Dagues du Bandit | — |
+| Enu-six-[Gal] | Paysan 1, Chasseur 1 | Marteau du Bouftou | Faux de l'apprenti paysan |
+| Elseiso | **Bûcheron 23**, Chasseur 1 | Agride (hache) | — |
+| Fourbodeux | **Mineur 10**, Pêcheur 1, Chasseur 1 | Dagues du Bandit | — |
+
+Le sac complet vient du même moment (`ASK|id|nom|...|objets`, un objet par `uid~modèle~quantité~place~effets`, place 1 =
+arme). Les coffres de la banque ne sont pas vus.
+
+### Récolter : validé (Elseiso, Bûcheron 23, carte -1,-16)
+
+- **Où sont les ressources** : la carte arrive avec sa clé (`GDM|numéro|date|clé`), toujours la même pour une carte. Le
+  mapData du fichier de la carte, déchiffré avec cette clé (`tools/cles_cartes.py`), donne l'objet interactif de chaque
+  case ; la langue du client (IO, SK) donne la ressource, le métier et l'action. Exemple -1,-16 : 4 Frênes, 2
+  Châtaigniers, 1 Noyer.
+- **Leur état** : le serveur n'envoie que les ressources qui ne sont pas debout (`GDF|case;état;?` : 2 en cours, 3
+  récoltée, 4 repousse).
+- **Récolter** : clic sur la case de la ressource (joueurs cachés : E tenue), menu, clic sur « Couper ». Le serveur
+  annonce le début (`GA1;501;récolteur;case,durée` : 9,7 s pour un Frêne au niveau 23), la fin (`GDF` état 3), la
+  quantité (`IQ…|3`), l'objet (`OAKO…`) et l'expérience du métier (`JX`). 12 à 16 s par arbre, marche comprise.
+- **Code** : `bot/brain/harvest.py` (ressources d'une carte, récolte une par une) ; essai : `python -m tools.recolte
+  --personnage Elseiso --metier Bûcheron --niveau 23 --carte -1,-16`. 4 arbres récoltés sur 4 debout, les 3 déjà coupés
+  écartés.
+- Clés apprises : `data/cles_cartes.json` (30 cartes ce soir) ; il faudra que le bot les retienne à chaque carte.
+- **Mini-jeux de la 1.47** : pas vus, la récolte se fait comme avant.
+
+### Équiper l'outil : geste validé (Enu-six, Faux de l'apprenti paysan)
+
+- Inventaire : touche I. Équiper : **vrai double-clic** sur l'objet (en arrière-plan, deux clics séparés ne font que le
+  sélectionner). Le serveur confirme : `OM<uid>|1` (dans l'emplacement d'arme), l'ancienne arme repart au sac ; double-
+  clic sur l'ancienne arme pour la remettre (`OAKO…~1~1`).
+- L'arme compte dans les caractéristiques (Enu-six : 364 -> 334 PDV avec la faux) : à remettre avant un combat.
+- Trouver l'objet dans le sac : la liste des types (« Tous types ») ne propose que les types présents ; choisir « Faux »
+  laisse la faux seule, dans la première case. Code : `bot/brain/equipment.py` (`equip(game, "Faux")`), double-clic
+  réel ajouté à l'entrée en arrière-plan (`BackgroundInput.double_click`).
+- Essai complet (`tools.recolte ... --outil Faux --arme Marteau`) : faux équipée puis marteau remis, confirmés par le
+  serveur les deux fois ; 1 Blé récolté sur 8 visés. Les autres : menu sans « Faucher » (Blé déjà fauché : l'outil
+  démarre sans les états de la carte) ou « Faucher » cliqué sans récolte annoncée. À reprendre.
+- « Faucher » se lit à 0,71 (police du jeu) : seuil de l'action du menu à 0,68 (sans menu : 0,37 à 0,52).
+
+### 30/10 : blé réglé
+
+- Essai : 4 Blés fauchés sur 4 par Enu-six (7 au total ce jour-là), faux équipée puis marteau remis, confirmés.
+- Les épis se chevauchent : un clic sur une case prend souvent l'épi dessiné par-dessus (case 100 -> 129). Toute récolte
+  annoncée après le clic compte, à la case donnée par le serveur.
+- Action du menu cherchée seulement à côté du clic (un « Faucher » à 0,72 loin du blé était cliqué pour rien).
+- Fenêtre « Ton métier Paysan passe niveau 2 » : fermée après chaque récolte. Elle bloquait l'inventaire, et sa lecture
+  aurait donné « niveau 2 » comme niveau du personnage : corrigé (`read_level_up` ignore les métiers).
+- Inventaire : la liste des types et la grille du sac gardent leur place d'une ouverture à l'autre ; remises en haut
+  (molette) avant de chercher. Un type sous le bas de la liste (le blé ajoute « Céréale ») : molette vers le bas.
+- Clic droit sur une ressource : même menu que le clic gauche, pas de récolte directe (essai sur un Châtaignier).
+
+### 30/10 : échanges entre nos personnages (essai, annulé à la fin)
+
+- `ERK<de>|<à>|1` (demande, aux deux), `ECK1` (échange ouvert), `EMKO+<uid>|<quantité totale dans mon offre>` (moi),
+  `EmKO+<uid>|<quantité>|<modèle>|` (l'autre), `EV` (fermé).
+- Pile entière en arrière-plan (Ctrl impossible) : glisser LENT de la pile vers l'offre -> fenêtre de quantité
+  [min] [max] [1] [✓] ; « max » puis ✓ = toute la pile (`EMKO+…|10`). Le double-clic n'en met qu'une.
+
 ## Ce qui est établi pour Rétro
 
 1. **Métiers de récolte** : Bûcheron, Paysan, Mineur, Alchimiste, Pêcheur.
