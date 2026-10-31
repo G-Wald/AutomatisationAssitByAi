@@ -330,3 +330,27 @@ def test_zone_mode_started_away_from_the_zone_travels_to_it(caplog):
             break
     assert atlas.zone("Monde des Douze", sim.pos) == "Le coin des Tofus" and not roamer.done
     assert "Hors de la zone Le coin des Tofus : trajet jusqu'à" in caplog.text
+
+
+def test_route_only_through_the_reference_exits_of_a_described_map():
+    # 25/10 (journal 201109) : Taïnéla vers les Blops, l'itinéraire passait par des sorties absentes de la référence (en
+    # bas de 1,-29, à gauche de -2,-30), cherchées puis notées bloquées l'une après l'autre. Sur une carte que la
+    # référence décrit, seules ses sorties (et celles déjà prises en jeu) sont des passages.
+    from bot.brain.travel import Passages
+
+    sim = GameSim(grid(3, 3), (0, 0))
+    journey = Journey(sim, (2, 0))
+    journey.passages = Passages({}, {"1,0": {"sorties": {"gauche": {"vers": "0,0"}}},  # long détour par la 3e rangée
+                                     "1,1": {"sorties": {"gauche": {"vers": "0,1"}}}})
+    journey.step()
+    route = [journey.at] + [coords for _, coords in journey.path or []]
+    steps = list(zip(route, route[1:]))
+    assert ((1, 0), (2, 0)) not in steps and ((1, 1), (2, 1)) not in steps and route[-1] == (2, 0)
+
+
+def test_last_digit_lost_in_the_reading_is_not_a_teleport():
+    # 25/10 (journal 201109) : « 0,-2 » lu en 0,-29, « 0,-3 » en 0,-30 : cru téléporté, aller-retour sans fin.
+    from bot.brain.travel import _truncated
+
+    assert _truncated((0, -2), (0, -29)) and _truncated((0, -3), (0, -30)) and _truncated((1, -3), (12, -3))
+    assert not _truncated((0, -2), (0, -3)) and not _truncated((0, -2), (1, -29)) and not _truncated((0, -29), (0, -29))

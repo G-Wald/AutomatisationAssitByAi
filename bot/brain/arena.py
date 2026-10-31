@@ -8,6 +8,11 @@ blocs à tort à l'écran) ; sur 7 captures de placement, toutes les cases lues 
 
 La carte est reconnue d'après ce que montre l'écran, sans les coordonnées : le terrain lu en mode tactique, ou les
 cases de placement. Sans référence (fichiers absents), rien n'est reconnu et le combat lit tout à l'écran, comme avant.
+
+31/10 : source prioritaire, la carte du client déchiffrée avec la clé entendue du serveur (brain/mapdata.py,
+fight_arena) : la carte où l'on est, sans reconnaissance, et la version du jeu installé (mises à jour comprises). Les
+références restent en secours (clé inconnue) ; celles des cartes changées depuis leur construction (changed_maps) ne sont
+plus reconnues (blocs d'une autre version).
 """
 
 import contextlib
@@ -45,6 +50,9 @@ class Arena:
     blocks: frozenset[Cell]  # ni marche ni ligne de vue
     holes: frozenset[Cell]  # pas de marche, ligne de vue (fosse, vide autour de la carte)
     placements: tuple[frozenset[Cell], ...] = ()  # cases de placement des deux camps (couleur selon le combat)
+    # 31/10 : cases praticables sans ligne de vue (carte du client seulement : 21 sur 60 cartes déchiffrées) ; les
+    # références les comptent comme du sol.
+    sight_only: frozenset[Cell] = frozenset()
 
     @property
     def unwalkable(self) -> frozenset[Cell]:
@@ -56,11 +64,13 @@ class Arenas:
 
     _loaded: "Arenas | None" = None
 
-    def __init__(self, entries: dict[str, dict]) -> None:
-        self.arenas = [Arena(ident, e.get("carte", "?"), frozenset(map(tuple, e.get("blocs", ()))),
-                             frozenset(map(tuple, e.get("trous", ()))),
-                             tuple(frozenset(map(tuple, camp)) for camp in e.get("placements") or ()))
-                       for ident, e in entries.items()]
+    def __init__(self, entries: dict[str, dict], stale: frozenset[str] = frozenset()) -> None:
+        every = [Arena(ident, e.get("carte", "?"), frozenset(map(tuple, e.get("blocs", ()))),
+                       frozenset(map(tuple, e.get("trous", ()))),
+                       tuple(frozenset(map(tuple, camp)) for camp in e.get("placements") or ()))
+                 for ident, e in entries.items()]
+        self.idents = {arena.ident: arena for arena in every}  # toutes, périmées comprises (coordonnées, placements)
+        self.arenas = [arena for arena in every if arena.ident not in stale]  # celles qu'on peut reconnaître
         self._matrix: np.ndarray | None = None
         self._placed: list[tuple[frozenset[Cell], Arena]] | None = None
 
@@ -73,7 +83,12 @@ class Arenas:
             path = (directory or ARENA_DIR) / name
             if path.exists():
                 entries.update(json.loads(path.read_text(encoding="utf-8")))
-        arenas = cls(entries)
+        # 31/10 : une carte changée par une mise à jour du jeu n'a plus les blocs de la référence : pas reconnue.
+        stale = frozenset(str(ident) for ident in changed_maps()) & set(entries) if entries else frozenset()
+        if stale:
+            log.info("Références de combat : %d carte(s) changée(s) depuis leur construction écartée(s) de la "
+                     "reconnaissance (%s) ; carte du client si la clé est connue", len(stale), ", ".join(sorted(stale)))
+        arenas = cls(entries, stale)
         if directory is None:
             cls._loaded = arenas
         return arenas
@@ -114,6 +129,10 @@ class Arenas:
         log.debug("Carte de combat reconnue au terrain : %s (%s), accord %.0f %% (suivante %.0f %%)",
                   self.arenas[best].coords, self.arenas[best].ident, 100 * agreement[best], 100 * agreement[second])
         return self.arenas[best]
+
+    def by_ident(self, ident: int | str) -> Arena | None:
+        """La référence de la carte `ident` (numéro du client), périmée ou non."""
+        return self.idents.get(str(ident))
 
     def by_coords(self, coords: tuple[int, int]) -> list[Arena]:
         key = f"{coords[0]},{coords[1]}"
@@ -198,3 +217,31 @@ def walk_area(arena: Arena, start: Cell | None) -> set[Cell] | None:
     if not areas or (len(areas) > 1 and len(areas[1]) >= SECOND_AREA):
         return None
     return areas[0]
+
+
+def client_arena(map_id: int | None, key: str | None = None, net=None, date: str | None = None) -> Arena | None:
+    """Carte de combat d'après la carte du client (31/10, brain/mapdata.py) : blocs et trous de la version du jeu,
+    coordonnées et placements de la référence s'il y en a une (placements gardés s'ils sont tous praticables : une mise
+    à jour a pu les déplacer). `key` : celle du GDM, sinon net.map_key ou data/cles_cartes.json. None sans clé ni
+    fichier de la carte, ou carte d'une autre largeur que notre grille."""
+    from bot.brain.mapdata import known_key, load_map  # import local : mapdata.py importe ce module
+
+    found = load_map(map_id, key or known_key(map_id, net), date)
+    if found is None or found.width != 15:
+        return None
+    reference = Arenas.load().by_ident(map_id)
+    placements = reference.placements if reference is not None else ()
+    if placements and not all(camp <= found.walkable for camp in placements):
+        log.info("Carte %d : placements de la référence hors des cases praticables de la carte du client : ignorés",
+                 map_id)
+        placements = ()
+    return Arena(str(map_id), reference.coords if reference is not None else "?", found.blocks, found.holes,
+                 placements, found.sight_blockers & found.walkable)
+
+
+def fight_arena(net) -> Arena | None:
+    """Carte de combat de la carte où l'on est (net.map_id du dernier GDM), d'après la carte du client ; None si la
+    carte ou sa clé ne se savent pas (reconnaissance par les références alors, Arenas.by_terrain / by_placement)."""
+    if net is None or getattr(net, "map_id", None) is None:
+        return None
+    return client_arena(net.map_id, net=net, date=getattr(net, "map_date", None))

@@ -105,8 +105,10 @@ def test_start_read_elsewhere_than_the_given_position_is_not_a_teleport():
     t.look()
     assert t.coords == (2, 4) and not t.jumped  # au départ, la lecture l'emporte sur la position donnée
     t.coords = (9, 9)
+    # 25/10 : en route, une lecture contraire est d'abord vérifiée par « /p » ; le jeu la confirme ici.
+    t.asker.ask = lambda force=False: (2, 4)
     t.look()
-    assert t.jumped  # en route, toujours vu comme un déplacement ailleurs
+    assert t.jumped and t.coords == (2, 4)  # alors vu comme un déplacement ailleurs
 
 def test_crossing_reported_with_the_coordinates_completed_by_the_path(without_digit_3):
     # 20/10, 11,-23 : le principal lisait « 11,-2? » et passait ce nom tel quel à son équipe ; ses suiveurs lisaient
@@ -737,6 +739,8 @@ def test_place_is_the_sure_map_and_the_arrival_side():
     assert t.place() is None  # position pas encore lue
     frame, label = t.look()
     assert t.place() == ("Incarnam 2,4", START)
+    # 25/10 : 4,3 lu là où l'estime attend 3,4 (le test recolle deux cartes pas voisines) : vérifié par « /p ».
+    t.asker.ask = lambda force=False: (4, 3)
     t.go(frame, label, "droite")
     assert t.place() == ("Incarnam 4,3", "gauche")
     t.learns = False  # trajet d'un suiveur qui rejoint : rien n'est noté
@@ -929,3 +933,89 @@ def test_failed_passage_unknown_to_the_reference_is_still_learned():
     frame, label = t.look()
     assert t.go(frame, label, "droite") is None
     assert t.world.blocked_from(t.key(label), "gauche") == {"droite"}  # rien dans la référence : appris, comme avant
+
+
+def test_follower_reads_the_reference_suns_without_writing_anything():
+    # 25/10 (journal 180222) : les 7 suiveurs, qui rejoignaient le principal depuis 0,-33, ne lisaient pas la référence
+    # complétée (réservée à qui écrit dans la mémoire) : soleils pris à l'écran, de l'autre côté des murets, 10 min
+    # sans rejoindre. La carte sûre suffit pour lire ; un suiveur n'écrit toujours rien.
+    from bot.brain.travel import Passages
+
+    frame = load_frame("hors_combat")
+    t = Traveler(FakeGame(frame), TravelSettings(mode="aller", start=(0, -33)), World(None), Atlas.load())
+    t.learns = False
+    t.coords, t.entry = (0, -33), "droite"
+    t._passages, t._passages_region = Passages({}, {"0,-33": {"sorties": {
+        "droite": {"vers": "1,-33", "cases": [[27, 23]]}, "bas": {"vers": "0,-32", "cases": [[17, 31]]}}}}), t.region
+    exits = t.exits(frame, "bas")
+    assert exits["bas"].cell == (17, 31) and exits["droite"].cell == (27, 23)
+    assert presses(t.game) == []  # ni recherche, ni touche A
+    assert not t._sure_here()
+
+
+def test_a_sun_click_without_any_server_answer_is_lost(monkeypatch):
+    # 31/10, revue : « clic pris » au réseau en 1,2 s (déplacement GA0;1 de mon personnage ou nouvelle carte), au lieu
+    # d'attendre l'immobilité à l'écran.
+    import bot.brain.travel as travel
+    from bot.brain.travel import Traveler
+    from bot.connection.network import ClientFeed
+
+    clock = [100.0]
+    monkeypatch.setattr(travel.time, "monotonic", lambda: clock[0])
+    net = ClientFeed("Fourboun")
+    net.feed("GM|+300;1;0;55;Fourboun;8;80^100;0", now=50.0)
+    net.heard_at = 100.0
+    traveler = Traveler.__new__(Traveler)
+    traveler.net = net
+    clicked = 100.0
+    clock[0] = 100.5
+    assert not traveler._click_lost(clicked)  # trop tôt pour dire
+    clock[0] = 101.5
+    assert traveler._click_lost(clicked)  # rien d'annoncé : perdu
+    net.moved_at = 100.8
+    assert not traveler._click_lost(clicked)  # déplacement annoncé : pris
+    traveler.net = None
+    assert not traveler._click_lost(clicked)  # sans écoute : l'écran décide
+
+
+def test_a_failed_zaap_checks_where_we_really_are_before_anything_else():
+    # 31/10 : Pesopepe cru sur la carte du zaap (1,-32), en fait en 0,-32 : zaap « raté », puis trois autres zaaps
+    # essayés de la même mauvaise carte. Désormais : la carte du serveur ; ailleurs, nouvel itinéraire ; sinon arrêt.
+    from types import SimpleNamespace
+
+    from bot.brain.itinerary import Leg
+    from bot.brain.travel import Journey
+
+    def journey(told):
+        traveler = SimpleNamespace(coords=(1, -32), doubt=True, arrival_cell=(3, 3), entry=None,
+                                   told_coords=lambda: told, asker=None)
+        trip = Journey.__new__(Journey)
+        trip.traveler, trip.legs, trip.refused, trip.done, trip.goal = traveler, ["étape"], set(), False, (4, -19)
+        return trip, traveler
+
+    leg = Leg((1, -32), None, (14, 20), (4, -19), None, zaap="Cité d'Astrub")
+    trip, traveler = journey((0, -32))
+    trip._missed(leg)
+    assert traveler.coords == (0, -32) and not trip.done and not trip.refused  # repart de la vraie carte
+    trip, traveler = journey((1, -32))
+    trip._missed(leg)
+    assert trip.done and trip.refused == {(4, -19)}  # bien au zaap : arrêt, pas d'autre zaap
+
+
+def test_map_coords_from_the_client_language_only_for_outdoor_maps_of_the_region():
+    # 31/10 : 416 cartes extérieures du continent hors de la référence ; les salles de donjon et les intérieurs ont les
+    # coordonnées du dehors (donjon Bouftou en 2,-34 comme son entrée) : jamais pris pour la carte du dehors.
+    from bot.brain.travel import WORLDS, client_coords
+
+    maps = {"m": {"1856": {"x": 2, "y": -34, "sa": 30, "o": True},
+                  "2073": {"x": 2, "y": -34, "sa": 82, "d": 1},
+                  "500": {"x": 4, "y": -16, "sa": 30},
+                  "9000": {"x": 1, "y": 1, "sa": 40, "o": True}},
+            "sa": {"30": {"a": 5}, "82": {"a": 5}, "40": {"a": 6}},
+            "a": {"5": {"sua": 0}, "6": {"sua": 3}}}
+    douze, incarnam = WORLDS["douze"], WORLDS["incarnam"]
+    assert client_coords(1856, douze, maps) == (2, -34)
+    assert client_coords(2073, douze, maps) is None  # salle de donjon
+    assert client_coords(500, douze, maps) is None  # intérieur
+    assert client_coords(9000, douze, maps) is None and client_coords(9000, incarnam, maps) == (1, 1)  # autre continent
+    assert client_coords(1856, None, maps) is None and client_coords(4242, douze, maps) is None

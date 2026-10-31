@@ -10,6 +10,11 @@ Sortie : d'abord les soleils visibles sans rien faire ; si celui du côté voulu
 entoure de blanc (perception/exits.py). Un clic sur le soleil fait marcher le personnage jusqu'à la carte
 voisine ; on attend que le nom de la carte change.
 
+Depuis le 25/10, sur les cartes que la référence complétée décrit (data/references) : itinéraire complet calculé avant
+de partir (brain/itinerary.py), soleil prévu cliqué sans recherche à l'écran, passage confirmé par le décor, position à
+l'estime ; la lecture du nom ne fait que la contrôler (compatible, même tronquée : confirmée ; franchement contraire :
+« /p %pos% »). Zaap quand aucun chemin à pied n'existe (brain/zaap.py).
+
 Mémoire (data/carte.json) : pour chaque carte, sa zone, son dernier passage, la case de ses soleils et ce que
 donne chaque sortie (carte voisine, « bloquée »), d'une session à l'autre ; selon le côté d'arrivée, les zones de
 groupes hors d'atteinte (brain/engage.py). Références (config/monde, voir brain/atlas.py) : cases des soleils, carte
@@ -43,7 +48,9 @@ import numpy as np
 
 from bot.brain.atlas import Atlas, MapInfo
 from bot.brain.game import Game
-from bot.brain.popups import close_context_menu
+from bot.brain.harvest import remember_key
+from bot.brain.itinerary import Leg, Planner, complete, reading_fits
+from bot.brain.popups import close_any_menu, close_context_menu
 from bot.brain.position import PositionAsker
 from bot.brain.recovery import mark_deaf, mark_heard, report_episode, unlock_click
 from bot.debug.draw import annotate
@@ -51,7 +58,7 @@ from bot.perception.exits import DELTA, OPPOSITE, SAME_SUN, SIDES, Exit, find_ma
 from bot.perception.grid import distance
 from bot.perception.frame import Frame
 from bot.perception.maplabel import MapLabel, learn_digits, read_map_label, unreadable_label
-from bot.perception.popups import find_context_menu, find_known_popup, load_popup_specs
+from bot.perception.popups import find_context_menu, find_known_popup, find_unknown_window, load_popup_specs
 from bot.state.scene import Phase, read_scene
 
 log = logging.getLogger(__name__)
@@ -61,6 +68,7 @@ MENU = "menu"  # le clic a ouvert le menu d'un personnage ou d'un monstre posé 
 START = "départ"  # côté d'arrivée inconnu : carte du début du trajet (Traveler.place)
 # Toujours sur la carte de départ, décor inchangé : le soleil est recliqué toutes les RECLICK_EVERY s (un personnage passait
 # dessus, le clic l'a visé lui : 03/10, 12 s perdues). En marche, recliquer la même case ne change rien.
+CLICK_TAKEN_WAIT = 1.2  # s : un clic sur un soleil sans déplacement ni carte annoncés par le jeu est perdu (31/10)
 RECLICK_EVERY = 3.0
 A_REREAD = 0.4  # touche A sans aucun contour : relue après ce délai, avant le clic de déblocage (20/10, S14)
 # Écart moyen (niveaux de gris, 0-255) entre deux vues réduites de la carte. Mesuré le 28/09 : 0,1 à 0,3 sur une
@@ -70,6 +78,12 @@ SCENE_CHANGED, SCENE_STABLE = 12.0, 3.0
 # personnage ne bouge plus et n'a pas changé de carte. Mouvement : vue réduite de la carte, autres joueurs cachés
 # (touche E tenue) ; une case qui change de plus de MOTION_LEVEL niveaux de gris entre deux captures (0,4 s) bouge.
 STILL = "immobile"
+# Autre décor, stable, sans fenêtre par-dessus, mais nom de carte lu comme au départ : arrivé au bout de ce nombre de
+# regards (0,4 s chacun) ; le décor fait foi (25/10).
+DECOR_OVER_NAME = 3
+# Écoute réseau : nouvelle carte annoncée (GDM, GDK) ; le décor de la capture suit d'un instant, attendu au plus
+# NET_SCENE_WAIT s avant de garder la capture d'arrivée (26/10 : GDM 0,5 s après le clic, carte chargée aussitôt).
+NET_SCENE_WAIT = 1.5
 MOTION_SIZE, MOTION_LEVEL = (160, 90), 12.0
 # Nom de carte illisible (20 % des arrivées dans la cité, bilan du 12/10) : la position déduite du chemin reste sûre
 # SURE_UNREAD cartes au plus après une carte lue, sans saut. Avant, rien n'était appris sur ces cartes : la sortie du
@@ -113,6 +127,9 @@ class TravelSettings:
     avoid_zones: tuple[tuple[str | None, str], ...] = ()  # « Incarnam (Cimetière) » ou « Cimetière »
     destination: tuple[int, int] | None = None  # mode aller : coordonnées de la carte d'arrivée
     waypoints: tuple[tuple[int, int], ...] = ()  # mode aller : cartes à rejoindre l'une après l'autre (--etapes)
+    # Zaap quand aucun chemin à pied n'existe (25/10 : le Berceau de Taïnéla n'a pas de sortie à pied) ; coûte des
+    # kamas à chaque personnage. False : le trajet s'arrête avec un message à la place.
+    zaap: bool = True
 
     @classmethod
     def from_settings(cls, settings: dict, mode: str | None = None, start: tuple[int, int] | None = None,
@@ -142,6 +159,7 @@ class TravelSettings:
             avoid_zones=tuple(_parse_zone(text) for text in travel.get("avoid_zones") or ()),
             destination=destination,
             waypoints=tuple(tuple(w) for w in travel.get("etapes") or ()),
+            zaap=bool(travel.get("zaap", cls.zaap)),
         )
 
 
@@ -349,6 +367,7 @@ class Traveler:
         self.atlas = atlas or Atlas()
         self.coords: tuple[int, int] | None = settings.start  # lues, sinon déduites (départ donné, chemin parcouru)
         self.asker = PositionAsker(game, _character(game))  # « /p %pos% » quand la position reste inconnue
+        self._keys_noted: set[int] = set()  # cartes dont la clé est retenue (told_coords)
         self.region = settings.region  # réglage : le nom de la région n'est pas lu à l'écran
         self.jumped = False  # coordonnées lues loin de celles attendues : mort, téléportation...
         # Mode équipe (team/loop.py) : appelée après chaque passage réussi avec (côté, case du soleil, carte de départ,
@@ -378,6 +397,20 @@ class Traveler:
         self._hiding = False  # touche E déjà tenue : un clic sur un soleil ne la réappuie pas
         self._walked = False  # au dernier STILL : il avait marché avant de s'arrêter
         self._unread_steps = 0  # cartes d'affilée au nom illisible depuis la dernière carte lue (ou la position donnée)
+        # Position à l'estime (25/10) : chaque passage est confirmé par le décor ; la lecture du nom de la carte ne fait
+        # que la contrôler. `doubt` : une lecture contraire n'a pas pu être vérifiée par « /p » (position pas sûre).
+        self.doubt = False
+        self._checked: dict[tuple, tuple[int, int] | None] = {}  # (carte attendue, lecture) -> position retenue
+        self.interrupted = False  # dernier passage arrêté par un combat (ou une autre fenêtre), pas raté
+        # Soleils prévus par l'itinéraire pour le prochain passage (Journey) : cliqués dans l'ordre, sans recherche à
+        # l'écran ni touche A ; None : le Traveler choisit (mémoire, référence, écran).
+        self.plan_cells: list[tuple[int, int]] | None = None
+        self.teleported: tuple[tuple[int, int], tuple[int, int]] | None = None  # dernier zaap pris : (départ, arrivée)
+        # Écoute du trafic du jeu (connection/network.py, 26/10) : carte et case annoncées par le serveur, préférées à la
+        # lecture du nom de la carte et à « /p ». None sans Npcap : l'écran seul, comme avant.
+        self.net = getattr(game, "net", None)
+        self._sun_clicked_at = 0.0  # time.monotonic() du dernier clic sur un soleil (arrivée annoncée après lui)
+        self._told: tuple[int, int] | None = None  # dernière carte annoncée par le jeu, pour ne le dire qu'une fois
 
     def look(self) -> tuple[Frame, MapLabel]:
         """Capture et nom de la carte actuelle (celle dont les coordonnées sont `self.coords`).
@@ -385,18 +418,109 @@ class Traveler:
         La souris reste où elle est : elle n'est écartée que pour chercher des soleils à l'écran."""
         frame = self.game.look(park=False)
         label = read_map_label(frame) or unreadable_label()
-        self._locate(frame, label, self.coords)
-        if self.coords is None:
-            # 16/10 : coordonnées illisibles au départ (Incarnam 0,3 et 6,1) : trajet arrêté, mode zone bloqué 11 min.
-            asked = self.asker.ask()
-            if asked is not None:
-                self._locate(frame, label, asked)  # comme une position donnée : chiffres inconnus appris
-                self._unread_steps = 0
+        told = self.told_coords()
+        if told is not None:
+            # Carte annoncée par le serveur (GDM) : elle fait foi, ni lecture du nom ni « /p ».
+            if told != self._told:
+                self._told = told
+                if self.coords is not None and told != self.coords:
+                    log.info("Carte annoncée par le jeu : %s,%s (je me croyais en %s,%s)", *told, *self.coords)
+                elif self.coords is None:
+                    log.info("Carte annoncée par le jeu : %s,%s", *told)
+            self.coords, self.doubt, self._unread_steps = told, False, 0
+            self._last_label = label
+            return frame, label
+        if self._last_label is None:
+            self._start(frame, label)
+        else:
+            self._locate(frame, label, self.coords)
+            if self.doubt and hasattr(self, "asker"):
+                # Lecture contraire restée sans réponse du jeu : nouvel essai (FORCED_EVERY s au plus souvent).
+                asked = self.asker.ask(force=True)
+                if asked is not None:
+                    log.info("Position donnée par le jeu : %s,%s (je me croyais en %s)", *asked,
+                             f"{self.coords[0]},{self.coords[1]}" if self.coords else "?")
+                    self.coords, self.doubt, self._unread_steps = asked, False, 0
+            if self.coords is None:
+                # 16/10 : coordonnées illisibles au départ (Incarnam 0,3 et 6,1) : trajet arrêté, mode zone bloqué 11 min.
+                asked = self.asker.ask()
+                if asked is not None:
+                    self._locate(frame, label, asked)  # comme une position donnée : chiffres inconnus appris
+                    self._unread_steps = 0
         self._last_label = label
         return frame, label
 
+    def told_coords(self) -> tuple[int, int] | None:
+        """Coordonnées de la carte annoncée par le serveur (écoute réseau) ; None sans écoute, avant le premier
+        changement de carte (le jeu ne la répète pas), ou pour une carte hors de la référence de la région."""
+        if self.net is None or not self.net.alive():
+            return None  # pas d'écoute, ou flux périmé (fenêtre reconnectée, écoute arrêtée) : l'écran
+        map_id = self.net.snapshot()[0]
+        key, noted = getattr(self.net, "map_key", None), self.__dict__.setdefault("_keys_noted", set())
+        if map_id is not None and key and map_id not in noted:
+            # Clé de la carte (la même à chaque passage) retenue pour la récolte : ressources de la carte même quand on
+            # y est déjà au lancement (brain/harvest.py, 27/10).
+            noted.add(map_id)
+            remember_key(map_id, key)
+        return self.passages.coords_of(map_id) if map_id is not None else None
+
+    def _start(self, frame: Frame, label: MapLabel) -> None:
+        """Premier regard : où l'on est. Lecture complète et cohérente (carte de la référence, zone lue d'accord avec
+        elle) : elle l'emporte sur la position donnée au lancement (21/10 : --combat-zone 11,-28, l'équipe restée en
+        10,-25). Sinon le jeu est interrogé (« /p %pos% ») : 25/10 (journal 201109), nom illisible à Taïnéla, la position
+        de --combat-zone (-3,-25) gardée, Elseiso envoyé seul aux Blops. La position donnée ne sert qu'en dernier recours
+        (pas de réponse du jeu), si la lecture ne la contredit pas."""
+        hint = self.coords
+        if label.coords is not None and complete(label.text) and self._coherent(label):
+            if hint is not None and label.coords != hint and _truncated(label.coords, hint):
+                log.info("Départ lu en %s,%s : %s,%s donné, dernier chiffre perdu à la lecture ; je pars de %s,%s",
+                         *label.coords, *hint, *hint)
+                return
+            if hint is not None and label.coords != hint:
+                log.info("Départ lu en %s,%s (position donnée : %s,%s) : je pars d'ici", *label.coords, *hint)
+            self.coords = label.coords
+            return
+        asked = self.asker.ask(force=True)
+        if asked is not None:
+            if label.readable and reading_fits(label.text, asked):
+                learned = learn_digits(label, asked) if label.coords is None else []
+                if learned:
+                    log.info("Chiffre(s) %s appris sur la carte %s,%s (lu « %s »)", ", ".join(learned), *asked, label.text)
+            self.coords, self._unread_steps = asked, 0
+            return
+        if hint is not None and reading_fits(label.text if label.readable else None, hint):
+            log.warning("Départ : %s, pas de réponse à « /p » : je pars de la position donnée %s,%s (supposée)",
+                        f"coordonnées lues « {label.text} »" if label.readable else "nom de la carte illisible", *hint)
+            self._locate(frame, label, hint)
+            return
+        if label.coords is not None and self._coherent(label):
+            self.coords = label.coords
+            return
+        log.warning("Départ : coordonnées lues « %s »%s, pas de réponse à « /p » : position inconnue",
+                    label.text, f", position donnée {hint[0]},{hint[1]} contredite" if hint else "")
+        self.coords = None
+        self._locate(frame, label, None)
+
+    def _coherent(self, label: MapLabel) -> bool:
+        """Lecture plausible : carte connue de la référence (ou de config/monde), et zone lue (si son nom est reconnu)
+        celle que les références donnent à ces coordonnées."""
+        if label.coords is None:
+            return False
+        described = bool(self.passages.reference) or any(m.region == self.region for m in self.atlas.maps.values())
+        if described and not self.passages.describes(label.coords) \
+                and self.atlas.get(self.region, label.coords) is None:
+            return False  # région décrite, carte inconnue : lecture fausse (sans description, rien ne se vérifie)
+        zone = self.atlas.zone(self.region, label.coords)
+        return label.zone_name is None or zone is None or zone == label.zone_name
+
     def _locate(self, frame: Frame, label: MapLabel, expected: tuple[int, int] | None) -> None:
-        """Coordonnées de la carte : lues, sinon `expected` ; un chiffre inconnu est alors appris."""
+        """Coordonnées de la carte : lues, sinon `expected` ; un chiffre inconnu est alors appris.
+
+        25/10 (estime) : une lecture qui va avec `expected`, même partielle ou tronquée (reading_fits), le confirme ;
+        une lecture franchement contraire est vérifiée par « /p %pos% » (_contradicted) avant d'y croire."""
+        if label.readable and expected is not None and not reading_fits(label.text, expected):
+            self._contradicted(frame, label, expected)
+            return
         if not label.readable:
             self.coords = expected
             if ("illisible", expected) not in self._unknown_saved:
@@ -406,29 +530,21 @@ class Traveler:
                          f" : carte {expected[0]},{expected[1]} d'après le chemin" if expected else "", path)
             return
         if label.coords is not None:
-            if expected is not None and label.coords != expected and self._last_label is None:
-                # 21/10 : --combat-zone=11,-28 donné, l'équipe restée en 10,-25 (même zone) après la session d'avant :
-                # cru téléporté dès le départ, plus aucun changement de carte de la session (2 sessions, 0 carte).
-                # Au premier regard, la position donnée n'est qu'une indication : la lecture l'emporte.
-                log.info("Départ lu en %s,%s (position donnée : %s,%s) : je pars d'ici", *label.coords, *expected)
-            elif expected is not None and label.coords != expected:
-                far = max(abs(label.coords[0] - expected[0]), abs(label.coords[1] - expected[1])) > 1
-                self.jumped = self.jumped or far
-                log.warning("Coordonnées lues %s,%s : j'attendais %s,%s%s", *label.coords, *expected,
-                            " (personnage déplacé ailleurs : mort, téléportation ?)" if far else "")
+            if expected is not None and label.coords != expected:
+                # 25/10 (journal 201109) : « 0,-2 » lu en 0,-29, « 0,-3 » en 0,-30 (dernier chiffre perdu sur le décor) :
+                # cru téléporté, itinéraire de 32 cartes recalculé, aller-retour sans fin entre 0,-30 et 0,-29.
+                log.info("Coordonnées lues %s,%s : %s,%s attendu, dernier chiffre perdu à la lecture ; je suis en %s,%s",
+                         *label.coords, *expected, *expected)
+                self.coords = expected
+                return
             self.coords = label.coords
+            self.doubt = False
             return
         if expected is not None:
-            merged, consistent = merge_reading(label.text, expected)
-            if not consistent:
-                # 11/10, cité d'Astrub : « ?,-18 » lu, 5,-17 attendu ; les joueurs qui passent ont fait croire à un
-                # changement de carte. Le chemin cru plutôt que la lecture : position fausse, chiffres appris faux
-                # (le 5 de « -15 » appris comme un 7), le principal a tourné en rond.
-                far = max(abs(merged[0] - expected[0]), abs(merged[1] - expected[1])) > 1
-                self.jumped = self.jumped or far
-                log.warning("Coordonnées lues « %s » : pas la carte %s,%s attendue ; je me crois en %s,%s (rien "
-                            "d'appris)", label.text, *expected, *merged)
-                self.coords = merged
+            if not merge_reading(label.text, expected)[1]:
+                # Lecture qui va avec l'attendu sans en avoir la forme exacte (« -2,-32? » : tache du décor après le
+                # nombre) : rien d'appris, la position attendue est gardée.
+                self.coords = expected
                 return
             learned = learn_digits(label, expected)
             if learned:
@@ -439,6 +555,35 @@ class Traveler:
             path = self.game.recorder.save(frame.image, "coordonnees_a_apprendre", lossless=True)
             log.info("Coordonnées lues « %s »%s (capture : %s)", label.text,
                      f", carte {expected[0]},{expected[1]} d'après le chemin" if expected else " : position inconnue", path)
+
+    def _contradicted(self, frame: Frame, label: MapLabel, expected: tuple[int, int]) -> None:
+        """Lecture franchement contraire à la carte attendue (chiffre lu différent, signe en trop) : vérifiée par
+        « /p %pos% » avant d'y croire. 11/10, cité d'Astrub : « -1,-23 » lu pour 1,-23 (tache du décor prise pour un
+        tiret), Brawli s'est cru deux cartes plus loin ; 25/10 (journal 201109) : 7 itinéraires recalculés sur 12 à
+        cause d'une lecture fausse. Le jeu tranche ; sans réponse, la position à l'estime est gardée (`doubt`).
+        Une même lecture sur la même carte n'est vérifiée qu'une fois."""
+        key = (expected, label.text)
+        if key in self._checked:
+            self.coords = self._checked[key]
+            return
+        asked = self.asker.ask(force=True) if hasattr(self, "asker") else None
+        if asked is None:
+            log.warning("Coordonnées lues « %s » : pas la carte %s,%s attendue, et pas de réponse à « /p » : je garde "
+                        "%s,%s (estime, à vérifier)", label.text, *expected, *expected)
+            self.coords, self.doubt = expected, True
+            return
+        self.doubt = False
+        if asked == expected:
+            log.info("Coordonnées lues « %s » : le jeu confirme %s,%s (lecture fausse)", label.text, *expected)
+        else:
+            far = max(abs(asked[0] - expected[0]), abs(asked[1] - expected[1])) > 1
+            self.jumped = self.jumped or far
+            log.warning("Coordonnées lues « %s » : le jeu me donne en %s,%s au lieu de %s,%s%s", label.text, *asked,
+                        *expected, " (personnage déplacé ailleurs : mort, téléportation ?)" if far else "")
+            if reading_fits(label.text, asked) and label.coords is None:
+                learn_digits(label, asked)
+        self.coords = self._checked[key] = asked
+        self._unread_steps = 0
 
     @property
     def passages(self) -> "Passages":
@@ -494,7 +639,7 @@ class Traveler:
         for side, cells in (info.client_suns.items() if info else ()):
             reference.setdefault(side, cells[0])  # case donnée par le client (soleil « conditionnel »)
         chosen = {}
-        if self.coords is not None and self._sure_here():
+        if self.coords is not None and self._map_sure():
             for side in DELTA:
                 cell = self.passages.sun_cell(self.coords, side, self.entry, self.arrival_cell,
                                               self.next_side if side == wanted else None)
@@ -602,15 +747,26 @@ class Traveler:
                 self._hiding = False
 
     def _sure_here(self, label: MapLabel | None = None) -> bool:
-        """La carte où l'on est est sûre, et ce Traveler écrit dans la mémoire partagée (pas le trajet d'un suiveur qui
-        rejoint le principal) : coordonnées lues à l'écran ; nom illisible, position déduite du chemin à SURE_UNREAD
-        cartes au plus d'une carte lue, sans saut."""
-        label = label if label is not None else self._last_label
-        if not self.learns or self.coords is None:
+        """La carte où l'on est est sûre pour ÉCRIRE dans la mémoire partagée : coordonnées lues à l'écran ; nom
+        illisible, position déduite du chemin à SURE_UNREAD cartes au plus d'une carte lue, sans saut ; et ce Traveler
+        écrit (pas le trajet d'un suiveur qui rejoint le principal)."""
+        if not self.learns or self.coords is None or self.doubt:
             return False
+        label = label if label is not None else self._last_label
         if label is not None and label.readable and label.coords is not None:
             return label.coords == self.coords
         return not self.jumped and self._unread_steps <= SURE_UNREAD
+
+    def _map_sure(self, label: MapLabel | None = None) -> bool:
+        """La carte où l'on est est sûre pour LIRE la référence complétée : position à l'estime (chaque passage confirmé
+        par le décor), qu'aucune lecture ne contredit sans avoir été vérifiée (25/10 : la référence est juste, la
+        lecture du nom se trompe ; « 0,-2 » lu en 0,-29 n'enlève plus la référence). Avant : SURE_UNREAD cartes au nom
+        illisible au plus, puis les soleils cherchés à l'écran (journal 180222 : de l'autre côté des murets de 1,-33 et
+        0,-33, 10 min sans rejoindre le principal)."""
+        label = label if label is not None else self._last_label
+        if self.coords is None or self.jumped or self.doubt:
+            return False
+        return label is None or not label.readable or reading_fits(label.text, self.coords)
 
     def place(self) -> tuple[str, str] | None:
         """(carte, côté par lequel on y est arrivé, START au début du trajet) si la carte est sûre (_sure_here), None
@@ -638,7 +794,7 @@ class Traveler:
         # Toujours pour ce trajet aussi : la référence complétée l'emporte sur un « bloquée » appris (Passages), un échec
         # vu à l'instant ne doit pas être retenté en boucle (24/10, -1,-21 bas : 25 essais en 4 min).
         self.blocked_here.add((key, side))
-        if self.coords is not None and self._sure_here(label) and self.passages.referenced(self.coords).get(side):
+        if self.coords is not None and self._map_sure(label) and self.passages.referenced(self.coords).get(side):
             self._anomaly(side, label, tried or [])
             return True
         if self._sure_here(label) and everywhere:
@@ -686,7 +842,17 @@ class Traveler:
             log.debug("Anomalie non écrite (%s)", error)
 
     def go(self, frame: Frame, label: MapLabel, side: str, exits: dict[str, Exit] | None = None) -> MapLabel | None:
-        """Passe sur la carte voisine par le côté `side` ; None si c'est impossible (ou si un combat commence)."""
+        """Passe sur la carte voisine par le côté `side` ; None si c'est impossible (ou si un combat commence :
+        `interrupted`).
+
+        `plan_cells` (itinéraire de la référence, Journey) : ces soleils seulement, dans l'ordre, sans recherche à
+        l'écran ni touche A (25/10, journal 201109 : 6 recherches à la touche A sur des cartes que la référence décrit,
+        dont 4 sans voir le bon soleil). Tous ratés : anomalie notée, l'itinéraire décide de la suite."""
+        self.interrupted = False
+        planned = list(self.plan_cells or ())
+        if planned:
+            return self._cross(frame, label, side, [Exit(side, c, _point(frame, c), 1.0, remembered=True)
+                                                    for c in planned], searched=True)
         exits = exits if exits is not None and side in exits else self.exits(frame, side)
         exit_ = exits.get(side)
         if self.coords is not None and self.passages.reachable(self.coords, side, self.arrival_cell) == []:
@@ -714,11 +880,15 @@ class Traveler:
             if not self._note_blocked(self.key(label), side, label, everywhere=True):
                 log.info("Pas de sortie vers le %s sur cette carte, même avec la touche A : je la note bloquée", side)
             return None
-        before_key, before_coords, entry = self.key(label), self.coords, self.entry
         queue = [exit_] + [e for e in self.candidates.get(side, []) if distance(e.cell, exit_.cell) > SAME_SUN]
+        return self._cross(frame, label, side, queue, searched=not exit_.remembered)
+
+    def _cross(self, frame: Frame, label: MapLabel, side: str, queue: list[Exit], searched: bool) -> MapLabel | None:
+        """Clic sur les soleils de `queue` l'un après l'autre jusqu'au passage ; `searched` : ceux de ce côté ont déjà
+        été cherchés à l'écran (sinon, le dernier raté, on les y cherche)."""
+        before_key, before_coords, entry = self.key(label), self.coords, self.entry
         self.game.recorder.save(annotate(frame, marks=[(e.point, f"sortie {side}") for e in queue]), "changement_de_carte")
         tried: list[Exit] = []
-        searched = not exit_.remembered  # soleils de ce côté déjà cherchés à l'écran
         fast = self.settings.still_for > 0
         while queue and len(tried) < MAX_CANDIDATES:
             exit_ = queue.pop(0)
@@ -744,6 +914,7 @@ class Traveler:
                     reclick = None if fast else (lambda point=point, spread=spread: self.click_sun(point, spread))
                     arrived = self._wait_arrival(label, frame, before_coords, reclick=reclick)
                 if arrived is None:
+                    self.interrupted = True
                     return None  # combat (agression) ou autre fenêtre : la boucle principale s'en charge
                 if arrived == MENU:
                     # Quelqu'un sur le soleil, souvent soi-même (arrivé par ce soleil) : son menu au lieu du déplacement.
@@ -752,7 +923,7 @@ class Traveler:
                     log.info("Un menu de personnage s'est ouvert au lieu de la marche (quelqu'un sur le soleil, "
                              "peut-être moi) : je le ferme en m'écartant, puis je reclique le soleil")
                     if not close_context_menu(self.game, self.game.look(park=False)):
-                        escape_menu(self.game)
+                        close_any_menu(self.game, "Soleil")  # 31/10 : plus d'Échap (Menu principal derrière un menu)
                     if menus < MENU_RETRIES:
                         menus += 1
                         attempt -= 1
@@ -783,7 +954,7 @@ class Traveler:
                     log.warning("Toujours sur la même carte après %.0f s (soleil en %s, essai %d/%d)",
                                 self.settings.walk_timeout, exit_.cell, attempt, CANDIDATE_TRIES)
                 spot += 1
-            if exit_.remembered and self.learns:
+            if exit_.remembered and self.learns and not self.plan_cells:
                 self.world.forget_sun(before_key, side)
             if not queue and not searched:
                 # Soleil de la mémoire raté : là seulement, on cherche à l'écran (souris écartée) ceux de ce côté.
@@ -800,15 +971,47 @@ class Traveler:
             log.warning("Sortie du %s inutilisable, je la note bloquée (capture : %s)", side, path)
         return None
 
+    def teleport(self, leg: Leg) -> MapLabel | None:
+        """Zaap de la carte (case `leg.cell`) vers le zaap `leg.zaap` (carte `leg.dest`), brain/zaap.py ; None si c'est
+        impossible (fenêtre refermée). Arrivée contrôlée comme après un soleil : lecture compatible, sinon « /p »."""
+        from bot.brain.zaap import use_zaap  # évite un import circulaire (zaap -> itinerary)
+
+        self.interrupted = False
+        if not use_zaap(self.game, leg.cell, leg.zaap, leg.dest, self.settings.hide_players_key):
+            return None
+        frame = self.game.look(park=False)
+        label = read_map_label(frame) or unreadable_label()
+        # Le personnage apparaît au pied du zaap d'arrivée : sa case sert de case d'arrivée (cases joignables d'après
+        # la carte officielle, Planner).
+        self.entry, self.entry_cell = None, None
+        self.arrival_cell = Planner(self.passages.reference).zaap_cell(leg.dest)
+        self._unread_steps = 0
+        self.teleported = (leg.coords, leg.dest)
+        self._locate(frame, label, leg.dest)
+        self._last_label = label
+        log.info("Nouvelle carte (zaap) : %s%s", label.describe(),
+                 f" (coordonnées {self.coords[0]},{self.coords[1]})" if self.coords else "")
+        return label
+
     def click_sun(self, point: tuple[float, float], spread: tuple[float, float], game: Game | None = None) -> bool:
         """Clic sur un soleil, la touche qui cache les autres joueurs tenue (travel.hide_players_key) ; `game` : la
         fenêtre d'un suiveur (même réglage). False si le clic a été annulé."""
         game = game or self.game
+        if game is self.game:
+            self._sun_clicked_at = time.monotonic()
         key = self.settings.hide_players_key
         if not key or (game is self.game and self._hiding):
             return game.click(point, spread) is not False
         with game.holding(key):
             return game.click(point, spread) is not False
+
+    def _click_lost(self, clicked: float) -> bool:
+        """Clic sur un soleil perdu d'après le jeu : CLICK_TAKEN_WAIT s passées, mon personnage connu, et ni déplacement
+        annoncé (GA0;1) ni nouvelle carte depuis le clic. False sans écoute vivante (l'écran décide, comme avant)."""
+        net = self.net
+        if net is None or not net.alive() or net.my_id is None or time.monotonic() - clicked < CLICK_TAKEN_WAIT:
+            return False
+        return net.moved_at < clicked and net.new_map_since(clicked) is None
 
     def _wait_arrival(self, before: MapLabel, before_frame: Frame, before_coords: tuple[int, int] | None,
                       reclick: Callable[[], object] | None = None) -> tuple[Frame, MapLabel] | str | bool | None:
@@ -821,8 +1024,19 @@ class Traveler:
         deadline = time.monotonic() + self.settings.walk_timeout
         departure, previous, clicked = _scene(before_frame), None, time.monotonic()
         motion, last_motion, counts = None, clicked, []
+        same_name = 0  # regards d'affilée : autre décor stable, nom lu comme au départ
+        announced = None  # time.monotonic() où la nouvelle carte a été annoncée par le jeu (écoute réseau)
+        taken_checked = False  # « clic pris » vérifié au réseau (CLICK_TAKEN_WAIT)
         while time.monotonic() < deadline:
             self.game.sleep(0.4)
+            if not taken_checked and reclick is not None and self._click_lost(clicked):
+                # 31/10, revue : rien d'annoncé par le jeu (ni déplacement de mon personnage, ni carte) : clic perdu ;
+                # recliqué tout de suite, au lieu d'attendre l'immobilité à l'écran (plusieurs secondes).
+                taken_checked = True
+                log.info("Clic sur le soleil pas pris d'après le jeu (aucun déplacement annoncé en %.1f s) : je reclique",
+                         CLICK_TAKEN_WAIT)
+                reclick()
+                clicked = last_motion = time.monotonic()
             frame = self.game.look(park=False)
             if read_scene(frame).phase is not Phase.OUT_OF_COMBAT:
                 log.info("Combat pendant le trajet")
@@ -831,6 +1045,17 @@ class Traveler:
                 return MENU
             scene = _scene(frame)
             changed = _gap(scene, departure) > SCENE_CHANGED
+            if self.net is not None and self.net.new_map_since(self._sun_clicked_at) is not None:
+                # Nouvelle carte annoncée et chargée (GDM puis GDK) : arrivé. Le décor suit d'un instant ; attendu
+                # NET_SCENE_WAIT s au plus pour que la capture d'arrivée montre la nouvelle carte.
+                announced = announced or time.monotonic()
+                if changed or time.monotonic() - announced >= NET_SCENE_WAIT:
+                    log.debug("Nouvelle carte annoncée par le jeu, %.1f s après le clic", announced - clicked)
+                    new_frame, new_label = self._settled(frame, read_map_label(frame) or unreadable_label())
+                    if new_label.coords is not None and new_label.coords == before_coords:
+                        new_label = unreadable_label()  # nom de la carte de départ encore affiché : il ne dit rien
+                    return new_frame, new_label
+                continue
             stable = previous is not None and _gap(scene, previous) < SCENE_STABLE
             previous = scene
             view = _motion_view(frame)
@@ -871,6 +1096,15 @@ class Traveler:
             if moved:
                 log.debug("Arrivé (cases qui bougeaient : %s)", counts)
                 return self._settled(frame, label)
+            if stable and find_unknown_window(frame) is None:
+                # 25/10 : le décor fait foi, pas la lecture. Tout le décor a changé et ne bouge plus, aucune fenêtre
+                # par-dessus, mais le nom se lit encore comme au départ (lecture fausse sur le nouveau décor) : avant,
+                # attente jusqu'à walk_timeout puis passage cru raté alors qu'il avait eu lieu.
+                same_name += 1
+                if same_name >= DECOR_OVER_NAME:
+                    log.info("Décor changé et stable, nom lu comme au départ (« %s ») : je me fie au décor, nouvelle "
+                             "carte", label.text)
+                    return self._settled(frame, label)
         label = read_map_label(self.game.look(park=False))
         if label is not None and label.coords and before_coords and label.coords != before_coords:
             log.debug("Arrivé, décor presque pareil (coordonnées %s,%s lues)", *label.coords)
@@ -895,14 +1129,31 @@ class Traveler:
         if before_coords is not None:
             info = self.atlas.get(self.region, before_coords)
             dx, dy = DELTA[side]
-            expected = (info.leads_to.get(side) if info else None) or (before_coords[0] + dx, before_coords[1] + dy)
-        self._locate(frame, label, expected)
-        self._last_label = label  # carte sûre ou non (place) dès l'arrivée, avant le look suivant
-        log.info("Nouvelle carte : %s%s", label.describe(),
-                 f" (coordonnées {self.coords[0]},{self.coords[1]} d'après le chemin)"
-                 if label.coords is None and self.coords else "")
+            # Carte où mène le côté d'après la référence complétée (sauts du jeu compris), sinon config/monde, sinon la
+            # voisine d'à côté : la position à l'estime, que la lecture ne fait que contrôler (_locate).
+            expected = self.passages.referenced(before_coords).get(side) \
+                or (info.leads_to.get(side) if info else None) or (before_coords[0] + dx, before_coords[1] + dy)
+        told = self.told_coords()
+        if told is not None:
+            # Carte et case d'arrivée annoncées par le serveur (GDM, GM) : exactes, ni lecture ni « /p ».
+            self.coords, self.doubt, self._unread_steps, self._told = told, False, 0, told
+            cell = self.net.my_grid_cell()
+            if cell is not None:
+                self.arrival_cell = cell
+            self._last_label = label
+            log.info("Nouvelle carte : %s,%s, case d'arrivée %s (annoncées par le jeu)%s", *told,
+                     cell if cell is not None else "inconnue",
+                     f" ; attendue {expected[0]},{expected[1]}" if expected is not None and expected != told else "")
+        else:
+            self._locate(frame, label, expected)
+            self._last_label = label  # carte sûre ou non (place) dès l'arrivée, avant le look suivant
+            log.info("Nouvelle carte : %s%s", label.describe(),
+                     f" (coordonnées {self.coords[0]},{self.coords[1]} d'après le chemin)"
+                     if self.coords and label.coords != self.coords else "")
         key = self.key(label)
-        if key and self.learns:  # 11/10 : le regroupement d'un suiveur effaçait les sorties bloquées du principal
+        # 11/10 : le regroupement d'un suiveur effaçait les sorties bloquées du principal ; 25/10 : lecture contraire
+        # pas vérifiée (`doubt`) : rien d'appris sur une position incertaine.
+        if key and self.learns and not self.doubt:
             self.world.link(before_key, side, key)
             if before_key and self.world.destination(key, OPPOSITE[side]) != BLOCKED:
                 # Le soleil d'en face ramène d'où l'on vient, sauf s'il a été vu inutilisable : une carte coupée par un
@@ -1333,10 +1584,21 @@ class ZoneRoamer:
         self._back: Journey | None = None  # trajet jusqu'à la zone quand on en est loin (_back_to_zone)
         # Hors de la zone (None : pas encore regardé) : pas de combat en chemin (24/10, retour d'Astrub vers les
         # Porkass : un groupe attaqué en 4,-20, cité d'Astrub, équipe transformée en citrouilles) ; voir locate.
-        self.away: bool | None = None
+        self._away: bool | None = None
+        # Carte de la zone donnée au lancement (--combat-zone) : rendez-vous de l'équipe quand elle en est loin (26/10 :
+        # principal ressuscité au Berceau, les 7 autres à Astrub ; ils prenaient le zaap vers lui, puis tous le zaap du
+        # retour : 15 zaaps). Le principal y va par son trajet, chacun des autres par le sien (team/loop.py, _regroup).
+        self.meeting: tuple[int, int] | None = None
+        # Course hors de la zone (banque quand les pods sont pleins, team/loop.py) : trajet jusqu'à cette carte sans
+        # combat, `errand_reached` à l'arrivée ; effacée ensuite (end_errand), retour dans la zone.
+        self.errand: tuple[int, int] | None = None
+        self.errand_reached = False
+        self._errand_trip: Journey | None = None
+        self._saved_meeting: tuple[int, int] | None = None
         info = traveler.here()  # coordonnées données au lancement : la sous-zone se lit dans les références
         if info is not None and info.zone:
             self.zone_name = info.zone
+            self.meeting = info.coords
             maps = sorted(traveler.atlas.zone_maps(traveler.region, info.zone))
             log.info("Combat en zone : carte %s,%s de %s -> région %s, sous-zone %s (%d cartes : %s)",
                      *info.coords, traveler.region, info.area or traveler.region, info.zone, len(maps),
@@ -1344,6 +1606,21 @@ class ZoneRoamer:
         elif traveler.coords is not None:
             log.warning("Carte %s,%s absente des références de %s : sous-zone d'après le nom lu à l'écran",
                         *traveler.coords, traveler.region)
+
+    @property
+    def away(self) -> bool | None:
+        """Hors de la zone ; aussi, en équipe, juste après un zaap du principal tant que ses suiveurs n'ont pas été
+        envoyés le rejoindre (team/loop.py, _regroup, efface `teleported`) : pas de combat seul au zaap d'arrivée, même
+        dans la zone. En équipe : `on_crossed` est posé par team/loop.py."""
+        if getattr(self.traveler, "teleported", None) and getattr(self.traveler, "on_crossed", None) is not None:
+            return True
+        if self.errand is not None:
+            return True  # en course (banque) : pas de combat en chemin
+        return self._away
+
+    @away.setter
+    def away(self, value: bool | None) -> None:
+        self._away = value
 
     def locate(self) -> bool:
         """Regarde la carte : True si elle est hors de la zone (ou interdite) ; met `away` à jour. Coordonnées
@@ -1360,6 +1637,38 @@ class ZoneRoamer:
         self.away = here_zone != zone or bool(self.traveler.forbidden(self.traveler.coords, here_zone))
         return self.away
 
+    def start_errand(self, goal: tuple[int, int], why: str) -> None:
+        """Course jusqu'à `goal` (banque) : pas de combat en chemin ; les suiveurs suivent le principal, pas le rendez-vous
+        de la zone (gardé pour le retour)."""
+        if self.errand is not None:
+            return
+        log.info("%s : trajet jusqu'à %s,%s, sans combat en chemin", why, *goal)
+        self.errand, self.errand_reached, self._errand_trip = goal, False, None
+        self._saved_meeting, self.meeting = self.meeting, None
+
+    def end_errand(self) -> None:
+        """Course finie : retour dans la zone (trajet jusqu'au rendez-vous, comme après une mort)."""
+        log.info("Course finie : je retourne dans la zone %s", self.zone_name)
+        self.errand, self.errand_reached, self._errand_trip = None, False, None
+        self.meeting, self._saved_meeting = self._saved_meeting, None
+        self._away = None
+        self.came_from = None
+
+    def _errand_step(self) -> None:
+        if self.traveler.coords == self.errand:
+            self.errand_reached = True
+            return
+        if self._errand_trip is None:
+            self._errand_trip = Journey(self.traveler, self.errand)
+        self._errand_trip.step()
+        if self._errand_trip.done:
+            if self.traveler.coords == self.errand:
+                self.errand_reached = True
+            else:
+                log.warning("Pas de trajet jusqu'à %s,%s : course abandonnée", *self.errand)
+                self.end_errand()
+            self._errand_trip = None
+
     def _back_to_zone(self) -> None:
         """Hors de la zone sans côté par où revenir (lancé ailleurs, mort, téléporté) : trajet jusqu'à la carte de la
         zone la plus proche (Journey), une carte par appel. 24/10 : --combat-zone donné depuis Astrub, le bot est resté
@@ -1372,8 +1681,10 @@ class ZoneRoamer:
                             "je m'arrête", self.zone_name)
                 self.done = True
                 return
-            goal = min(maps, key=lambda c: (abs(c[0] - here[0]) + abs(c[1] - here[1]), c))
-            log.info("Hors de la zone %s : trajet jusqu'à %s,%s, sa carte la plus proche", self.zone_name, *goal)
+            goal = self.meeting if self.meeting in maps else min(
+                maps, key=lambda c: (abs(c[0] - here[0]) + abs(c[1] - here[1]), c))
+            log.info("Hors de la zone %s : trajet jusqu'à %s,%s%s", self.zone_name, *goal,
+                     " (rendez-vous de l'équipe)" if goal == self.meeting else ", sa carte la plus proche")
             self._back = Journey(self.traveler, goal)
         self._back.step()
         if self._back.done:
@@ -1387,6 +1698,9 @@ class ZoneRoamer:
         return (info.zone if info else None) or label.zone_name
 
     def step(self) -> None:
+        if self.errand is not None:
+            self._errand_step()
+            return
         frame, label = self.traveler.look()
         if self.traveler.jumped:
             if not self.done:
@@ -1407,7 +1721,7 @@ class ZoneRoamer:
         key = self.traveler.key(label)
         forbidden = self.traveler.forbidden(self.traveler.coords, here_zone)
         self.away = here_zone != self.zone_name or bool(forbidden)
-        if self.away:
+        if self._away:
             if key:
                 self.world.visit(key, label, [])
             if not self.came_from:
@@ -1464,6 +1778,48 @@ REFERENCES_DIR = PROJECT_DIR / "data" / "references"
 ANOMALIES = PROJECT_DIR / "data" / "anomalies_passages.jsonl"  # passages officiels ratés (Traveler._anomaly)
 
 
+_REFERENCES: dict[str, tuple[tuple[int, int], dict]] = {}  # chemin -> (date et taille du fichier, contenu)
+
+
+def _reference(path: Path) -> dict:
+    """Référence complétée d'une région (13 Mo pour le Monde des Douze), lue une fois tant que le fichier ne change pas :
+    chaque trajet de suiveur (team/loop.py, _regroup) la relisait (Journey), ~0,5 s à chaque fois. Lecture seule."""
+    try:
+        stat = path.stat()
+    except OSError:
+        return {}
+    stamp = (stat.st_mtime_ns, stat.st_size)
+    cached = _REFERENCES.get(str(path))
+    if cached is None or cached[0] != stamp:
+        cached = _REFERENCES[str(path)] = (stamp, json.loads(path.read_text(encoding="utf-8")))
+    return cached[1]
+
+
+def _arena_area(reference: dict) -> Callable[[tuple[int, int], tuple[int, int] | None], set | None]:
+    """Cases joignables à pied depuis une case d'une carte, d'après la carte officielle (brain/arena.walk_area, carte
+    de combat de même identifiant que la carte extérieure de la référence) ; None si elle n'est pas connue. Sert quand
+    la case d'arrivée n'est pas une de celles de `depuis_arrivee` (début de trajet, pied du zaap)."""
+    from bot.brain.arena import Arenas, walk_area  # chargées seulement si un itinéraire en a besoin
+
+    by_id: dict[str, object] = {}
+
+    def area(coords: tuple[int, int], cell: tuple[int, int] | None) -> set | None:
+        if not by_id:
+            by_id.update({arena.ident: arena for arena in Arenas.load().arenas} or {"": None})
+        ids = (reference.get(f"{coords[0]},{coords[1]}") or {}).get("ids") or ()
+        found = [by_id[str(i)] for i in ids if by_id.get(str(i)) is not None]
+        return walk_area(found[0], cell) if len(found) == 1 else None
+
+    return area
+
+
+def _truncated(read: tuple[int, int], expected: tuple[int, int]) -> bool:
+    """`read` est `expected` amputé d'un dernier chiffre sur une coordonnée (l'autre identique) : « 0,-2 » pour 0,-29."""
+    pairs = list(zip(read, expected))
+    cut = [str(e)[:-1] == str(r) and abs(e) >= 10 for r, e in pairs]
+    return any(cut) and all(c or r == e for c, (r, e) in zip(cut, pairs))
+
+
 class Passages:
     """Référence des passages d'une région (config/monde/passages/<région>.json), construite à partir de ce que le bot a
     vu en jeu (tools/passages.py, depuis data/carte.json) et relue à la main : les cases des cartes du client sont
@@ -1476,9 +1832,10 @@ class Passages:
     émulateur contrôlées sur les cartes officielles : tools/reference_complete.py), au format {"x,y": {"sorties":
     {côté: {"vers": "x,y", "cases": [[i, j], ...]}}, "bloquees_depuis": {...}}} ; ce qui a été vu en jeu prime."""
 
-    def __init__(self, maps: dict | None = None, reference: dict | None = None) -> None:
+    def __init__(self, maps: dict | None = None, reference: dict | None = None, region: str | None = None) -> None:
         self.maps = maps or {}
         self.reference = reference or {}
+        self.region = region  # pour les coordonnées tirées de la langue du client (client_coords)
 
     @staticmethod
     def path(region: str | None) -> Path:
@@ -1489,9 +1846,23 @@ class Passages:
     def load(cls, region: str | None) -> "Passages":
         path = cls.path(region)
         maps = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
-        reference_path = REFERENCES_DIR / path.name
-        reference = json.loads(reference_path.read_text(encoding="utf-8")) if reference_path.exists() else {}
-        return cls(maps, reference)
+        return cls(maps, _reference(REFERENCES_DIR / path.name), region)
+
+    def coords_of(self, map_id: int) -> tuple[int, int] | None:
+        """Coordonnées de la carte de numéro `map_id` (numéro du client, annoncé par le serveur : GDM), d'après le champ
+        « ids » de la référence complétée, sinon d'après la langue du client (client_coords) ; None si elle n'est pas
+        une carte extérieure de cette région."""
+        index = getattr(self, "_ids", None)
+        if index is None:
+            index = self._ids = {}
+            for key, info in self.reference.items():
+                x, _, y = key.partition(",")
+                if x.lstrip("-").isdigit() and y.lstrip("-").isdigit():
+                    for ident in info.get("ids") or ():
+                        index[int(ident)] = (int(x), int(y))
+        found = index.get(map_id)
+        return found if found is not None else client_coords(map_id, getattr(self, "region", None))
+
 
     def seen(self, coords: tuple[int, int]) -> dict[str, tuple[int, int] | str]:
         """Sorties vues en jeu (référence des passages)."""
@@ -1573,6 +1944,40 @@ class Passages:
         return set(((self.maps.get(key) or {}).get("bloquees_depuis") or {}).get(entry) or [])
 
 
+# Continent de chaque région (« sua » de la table MA de la langue du client).
+SUPER_AREAS = {WORLDS["douze"]: 0, WORLDS["incarnam"]: 3}
+
+
+def client_coords(map_id: int, region: str | None, maps: dict | None = None) -> tuple[int, int] | None:
+    """Coordonnées d'une carte d'après la langue du client (table MA : x, y, sous-zone, extérieur), pour les cartes
+    absentes de la référence (31/10 : 416 cartes extérieures du continent, aucun désaccord sur les 4861 communes).
+    Seulement une carte extérieure du continent de `region` : une salle de donjon ou un intérieur porte les mêmes
+    coordonnées que la carte du dehors (salles du donjon Bouftou en 2,-34 comme l'entrée) ; None sinon, ou sans la
+    langue du client."""
+    if region not in SUPER_AREAS:
+        return None
+    if maps is None:
+        maps = _client_maps()
+    table = maps.get("m", {}).get(str(map_id))
+    if not table or not table.get("o") or table.get("d"):
+        return None
+    subarea = maps.get("sa", {}).get(str(table.get("sa")), {})
+    area = maps.get("a", {}).get(str(subarea.get("a")), {})
+    if area.get("sua") != SUPER_AREAS[region]:
+        return None
+    return int(table["x"]), int(table["y"])
+
+
+def _client_maps() -> dict:
+    try:
+        from tools.langue_client import LangueClient  # import local : langue du client (data/client_retro)
+
+        return LangueClient().table("MA")
+    except (OSError, KeyError, ValueError):
+        log.debug("Langue du client illisible : cartes hors de la référence inconnues", exc_info=True)
+        return {}
+
+
 class Journey:
     """Mode aller (--aller x,y) : jusqu'à la carte d'arrivée par le plus court chemin, sans combat.
 
@@ -1582,7 +1987,12 @@ class Journey:
     jeu). Jamais par une carte ou une zone interdite (travel.avoid_maps / avoid_zones). Une carte à la fois, par le
     Traveler (soleil de la mémoire ou des références, sinon cherché à l'écran, touche A si besoin). Nouvel itinéraire
     quand le personnage arrive ailleurs que prévu (liaison différente des références, mort, téléportation) ou qu'une
-    sortie est introuvable (le Traveler la note bloquée). Arrêt à l'arrivée, ou avec un message si aucun chemin."""
+    sortie est introuvable (le Traveler la note bloquée). Arrêt à l'arrivée, ou avec un message si aucun chemin.
+
+    25/10 : sur une carte que la référence complétée décrit, itinéraire COMPLET calculé sur elle seule avant de partir
+    (brain/itinerary.py : état (carte, case d'arrivée), soleil à cliquer à chaque étape, zaap si aucun chemin à pied),
+    suivi à l'estime (_walk). Passage raté : les autres soleils du même côté, puis « /p » et nouvel itinéraire
+    (_missed)."""
 
     def __init__(self, traveler: Traveler, goal: tuple[int, int]) -> None:
         self.traveler = traveler
@@ -1596,6 +2006,29 @@ class Journey:
         self.reroutes = 0  # itinéraires recalculés
         self.passages = Passages.load(traveler.region)  # passages vus en jeu, gardés (config/monde/passages)
         self._zones_ok: set[str | None] = set()  # zones du départ et de l'arrivée (_cost)
+        # Itinéraire complet de la référence (25/10) : étapes (carte, soleil, carte suivante, case d'arrivée) ; None :
+        # pas d'itinéraire de la référence (carte qu'elle ne décrit pas : liaisons apprises, `path`).
+        self.legs: list[Leg] | None = None
+        self.avoid: set[tuple[tuple[int, int], str | None]] = set()  # (carte, côté) ratés pendant ce trajet
+        self.refused: set[tuple[int, int]] = set()  # zaaps d'arrivée impossibles (pas connus du personnage)
+        self._planner: Planner | None = None
+
+    @property
+    def planner(self) -> Planner:
+        """Itinéraires sur la référence complétée (brain/itinerary.py), cartes interdites exclues."""
+        if self._planner is None:
+            region = self.traveler.region
+            zaaps = {}
+            for place in getattr(self.traveler.atlas, "places", ()):
+                coords = _coords_of(f"x {place.get('carte', '')}")
+                name = place.get("nom") or ""
+                # Nom à taper dans la liste des zaaps : un nom générique (« Zaap », Incarnam) ne désigne aucune ligne.
+                if place.get("type") == "zaap" and place.get("region") == region and coords is not None \
+                        and name and name.lower() != "zaap":
+                    zaaps[coords] = name
+            reference = self.passages.reference
+            self._planner = Planner(reference, self._allowed, _arena_area(reference), zaaps)
+        return self._planner
 
     def step(self) -> None:
         frame, label = self.traveler.look()
@@ -1615,7 +2048,11 @@ class Journey:
         key = self.traveler.key(label)
         if key:
             self.world.visit(key, label, [])  # zone (cartes interdites) et dernier passage, comme les autres modes
-        if self.path is not None and here != self.at:
+        if self.legs is not None and self.legs and here != self.legs[0].coords:
+            log.warning("Carte %s,%s au lieu de %s,%s%s : nouvel itinéraire", *here, *self.legs[0].coords,
+                        " (personnage déplacé ailleurs : mort, téléportation ?)" if self.traveler.jumped else "")
+            self.legs = None
+        elif self.path is not None and here != self.at:
             log.warning("Carte %s,%s au lieu de %s,%s%s : nouvel itinéraire", *here, *self.at,
                         " (personnage déplacé ailleurs : mort, téléportation ?)" if self.traveler.jumped else "")
             self.path = None
@@ -1625,7 +2062,10 @@ class Journey:
                      else " : déjà sur la carte d'arrivée")
             self.done = True
             return
-        if self.path is None and not self._plan(here):
+        if not self.legs and self.path is None and not self._plan(here):
+            return
+        if self.legs:
+            self._walk(frame, label)
             return
         side, dest = self.path[0]
         log.info("Trajet : côté %s, vers %s,%s (encore %d carte(s) jusqu'à %s,%s)", side, *dest, len(self.path),
@@ -1645,8 +2085,92 @@ class Journey:
         self.path.pop(0)
         self.at = dest  # vérifié au pas suivant, sur les coordonnées lues
 
+    def _walk(self, frame: Frame, label: MapLabel) -> None:
+        """Étape suivante de l'itinéraire de la référence, à l'estime : clic sur la case prévue (pas de recherche à
+        l'écran, pas de touche A), passage confirmé par le décor, carte d'arrivée seulement contrôlée (Traveler)."""
+        leg = self.legs[0]
+        traveler = self.traveler
+        if leg.zaap:
+            arrived = traveler.teleport(leg) if traveler.settings.zaap else None
+        else:
+            # « Trajet : côté X, vers x,y » : comme avant (tools/bilan_sessions.py, temps d'un changement de carte).
+            log.info("Trajet : côté %s, vers %s,%s : soleil %s%s%s (encore %d carte(s) jusqu'à %s,%s)", leg.side, *leg.dest,
+                     leg.cell, f", arrivée {leg.arrival}" if leg.arrival is not None else "",
+                     "" if leg.sure else ", à confirmer", len(self.legs), *self.goal)
+            traveler.next_side = self.legs[1].side if len(self.legs) > 1 else None
+            traveler.plan_cells = [leg.cell, *leg.others]
+            try:
+                arrived = traveler.go(frame, label, leg.side)
+            finally:
+                traveler.plan_cells, traveler.next_side = None, None
+        if arrived is None:
+            if getattr(traveler, "interrupted", False):
+                self.legs = None  # combat en chemin : itinéraire recalculé après, d'où l'on sera
+                return
+            self.failures += 1
+            if self.failures >= JOURNEY_FAILURES:
+                self._stop(f"{self.failures} changements de carte ratés d'affilée")
+                return
+            self._missed(leg)
+            return
+        self.failures = 0
+        self.crossed += 1
+        here = traveler.coords
+        if here != leg.dest:
+            self.legs = None  # vérifié par « /p » (Traveler._contradicted) : ailleurs que prévu, nouvel itinéraire
+            return
+        self.legs.pop(0)
+        self.at = here
+        arrival = getattr(traveler, "arrival_cell", None)
+        if self.legs and arrival != leg.arrival:
+            # Autre soleil pris que celui prévu (secours du même côté) : autre case d'arrivée, peut-être de l'autre
+            # côté d'un muret ; la suite est recalculée depuis elle.
+            log.info("Arrivé en %s,%s sur la case %s (prévue : %s) : itinéraire recalculé depuis elle", *here, arrival,
+                     leg.arrival)
+            self.legs = None
+
+    def _missed(self, leg: Leg) -> None:
+        """Passage (ou zaap) raté, autres soleils du même côté compris : la position est vérifiée par « /p » ; ailleurs,
+        nouvel itinéraire depuis là ; sinon ce passage est évité pour ce trajet. Jamais d'errance."""
+        traveler = self.traveler
+        self.legs = None
+        if leg.zaap:
+            # 31/10 : Pesopepe et Walitcoin, cru sur la carte du zaap (1,-32) alors qu'ils étaient ailleurs : zaap
+            # « raté », puis les zaaps des Craqueleurs, de Madrestam, de Cania essayés depuis la même mauvaise carte.
+            # La carte d'après le serveur d'abord (sinon « /p ») : ailleurs, nouvel itinéraire depuis là ; bien sur la
+            # carte du zaap, trajet arrêté (tous les zaaps partent du même : en essayer un autre n'y changerait rien).
+            told = traveler.told_coords() if hasattr(traveler, "told_coords") else None
+            asker = getattr(traveler, "asker", None)
+            here = told or (asker.ask(force=True) if asker is not None else None)
+            if here is not None and here != traveler.coords:
+                log.warning("Zaap vers %s raté : le jeu me donne en %s,%s, pas en %s,%s ; nouvel itinéraire depuis là",
+                            leg.zaap, *here, *traveler.coords)
+                traveler.coords, traveler.doubt = here, False
+                traveler.arrival_cell = traveler.entry = None
+                return
+            self.refused.add(leg.dest)
+            self._stop(f"zaap vers {leg.zaap} raté depuis {leg.coords[0]},{leg.coords[1]} (les autres zaaps partent "
+                       f"du même : pas d'autre essai)")
+            return
+        asker = getattr(traveler, "asker", None)
+        asked = asker.ask(force=True) if asker is not None else None
+        if asked is not None and asked != traveler.coords:
+            log.warning("Passage du %s raté : le jeu me donne en %s,%s, pas en %s,%s ; nouvel itinéraire depuis là",
+                        leg.side, *asked, *traveler.coords)
+            traveler.coords, traveler.doubt = asked, False
+            traveler.arrival_cell = traveler.entry = None
+            return
+        log.warning("Passage du %s de %s,%s raté (soleils %s)%s : évité pour ce trajet, nouvel itinéraire", leg.side,
+                    *leg.coords, ", ".join(str(c) for c in (leg.cell, *leg.others)),
+                    " ; position confirmée par le jeu" if asked is not None else "")
+        self.avoid.add((leg.coords, leg.side))
+        traveler.arrival_cell = None  # il a pu marcher vers le soleil : sa case n'est plus celle d'arrivée
+
     def _plan(self, here: tuple[int, int]) -> bool:
-        """Calcule l'itinéraire depuis `here` et le journalise ; False (et arrêt) s'il n'y en a pas."""
+        """Calcule l'itinéraire depuis `here` et le journalise ; False (et arrêt) s'il n'y en a pas.
+
+        Carte décrite par la référence complétée : itinéraire complet sur elle seule (soleil par soleil, case d'arrivée
+        comprise), zaap seulement si aucun chemin à pied n'existe. Sinon : liaisons apprises et références (avant)."""
         x, y = self.goal
         why = self._forbidden(self.goal)
         if why:
@@ -1661,6 +2185,8 @@ class Journey:
             if self.reroutes > JOURNEY_REROUTES:
                 self._stop(f"plus de {JOURNEY_REROUTES} itinéraires recalculés (liaisons qui se contredisent ?)")
                 return False
+        if self.passages.reference and self.planner.describes(here):
+            return self._plan_reference(here)
         zone = self.traveler.atlas.zone
         self._zones_ok = {zone(self.traveler.region, here), zone(self.traveler.region, self.goal)}
         path = shortest_route(here, getattr(self.traveler, "entry", None), {self.goal},
@@ -1671,6 +2197,27 @@ class Journey:
         log.info("%s de %s,%s à %s,%s : %d carte(s) : %s", "Itinéraire" if self.at is None else "Nouvel itinéraire",
                  *here, x, y, len(path), " ".join(f"{cx},{cy}" for _, (cx, cy) in path))
         self.path, self.at = path, here
+        return True
+
+    def _plan_reference(self, here: tuple[int, int]) -> bool:
+        x, y = self.goal
+        cell = getattr(self.traveler, "arrival_cell", None)
+        legs = self.planner.route(here, cell, {self.goal}, self.avoid)
+        zaap = False
+        if legs is None and self.traveler.settings.zaap:
+            legs = self.planner.route(here, cell, {self.goal}, self.avoid, zaap=True, refused=self.refused)
+            zaap = legs is not None
+        if legs is None:
+            avoided = f" (passages ratés évités : {', '.join(f'{c[0]},{c[1]} {s}' for c, s in sorted(self.avoid))})" \
+                if self.avoid else ""
+            self._stop(f"aucun chemin de {here[0]},{here[1]} à {x},{y} d'après la référence{avoided} : "
+                       f"{self._no_path(here)}" + ("" if self.traveler.settings.zaap else " (zaap désactivé : "
+                                                    "travel.zaap)"))
+            return False
+        log.info("%s de %s,%s à %s,%s : %d carte(s)%s%s : %s", "Itinéraire" if self.at is None else "Nouvel itinéraire",
+                 *here, x, y, len(legs), f" depuis la case {cell}" if cell is not None else "",
+                 " par zaap (aucun chemin à pied)" if zaap else "", " ; ".join(leg.describe() for leg in legs))
+        self.legs, self.at, self.path = legs, here, None
         return True
 
     def _links(self, coords: tuple[int, int], blocked: bool = True,
@@ -1690,6 +2237,16 @@ class Journey:
             else:
                 links[side] = dest
         referenced = self.passages.referenced(coords)
+        if self.passages.describes(coords):
+            # 25/10 (journal 201109) : la référence fait foi. Un côté sans sortie dans la référence (vérifiée sur les
+            # cartes officielles) n'est pas un passage « à confirmer » : en bas de 1,-29, à gauche de -2,-30 et -2,-31,
+            # l'itinéraire passait par des sorties qui n'existent pas, cherchées puis notées bloquées l'une après
+            # l'autre (11 min sans atteindre les Blops). Restent ses sorties et celles déjà prises en jeu.
+            seen = {s for s, d in self.passages.seen(coords).items() if d != BLOCKED}
+            taken = {s for s, d in ((self.world.maps.get(World.key(region, coords)) or {}).get("sorties") or {}).items()
+                     if d and d != BLOCKED}
+            for side in [s for s in links if s not in referenced and s not in seen and s not in taken]:
+                links.pop(side)
         for side, dest in (self.world.maps.get(World.key(region, coords)) or {}).get("sorties", {}).items():
             if dest == BLOCKED:
                 if blocked and side not in referenced:  # la référence complétée prime sur un « bloquée » appris
@@ -1757,6 +2314,11 @@ class Journey:
                 if self.world.destination(World.key(region, at), side) == BLOCKED:
                     blocked.append(f"{at[0]},{at[1]} côté {side}")
                 at = dest
+            if not blocked:
+                # 25/10 : le Berceau de Taïnéla, plateau fermé ; ses sorties ne se joignent pas depuis l'intérieur
+                # (murets, falaises de la carte officielle : référence complétée). On n'en sort que par le zaap.
+                return ("aucune sortie à pied ne se joint d'ici d'après la carte officielle (zone fermée par des murets "
+                        "ou des falaises) : il faut un zaap ou une potion de rappel")
             return (f"il passe par des sorties notées « {BLOCKED} » ({', '.join(blocked)}) dans "
                     f"{self.world.path or 'la mémoire des cartes'} : remplace-les par null si le passage existe")
         if shortest_path(here, {self.goal}, self._links, self._known) is not None:
