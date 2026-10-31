@@ -132,19 +132,21 @@ def find_character(frame: Frame, view: LoginView, names: list[str]) -> tuple[int
     """(emplacement, nom) du premier de `names` présent sur l'écran de choix du personnage ; None si aucun. Chaque nom
     est cherché sur chaque plaque, la plus ressemblante l'emporte (au-dessus du seuil) ; son texte, lu par l'OCR de
     Windows, doit être ce nom à une ou deux lettres près (25/10 : « Fourboquatre » pris pour « Fourboun », même début
-    de nom ; « Gela » ressemble à 0,98 à la plaque « Gela-[A13] »)."""
+    de nom ; « Gela » ressemble à 0,98 à la plaque « Gela-[A13] »). Chaque plaque au-dessus du seuil est essayée, la
+    plus ressemblante d'abord : un nom voisin (« Fourboquatre ») mieux placé ne cache plus le bon nom sur une autre
+    plaque du même compte (« Fourbodeux », « Fourbohuit » et « Fourboquatre » sur un même compte le 25/10)."""
     size = frame.layout.length(CHARACTER_SIZE)
     for name in names:
         scores = [text_score(frame.crop(slot_box(frame, view, slot)), name, size, bold=True)[0]
                   for slot in range(len(SLOTS_DX))]
-        best = max(range(len(scores)), key=scores.__getitem__)
-        if scores[best] < NAME_THRESHOLD:
-            continue
-        read = plate_text(frame, view, best)
-        if read is not None and same_name(read, name) < PLATE_MATCH:
-            log.info("Plaque %d : « %s » lu, pas %s (nom qui lui ressemble)", best + 1, read, name)
-            continue
-        return best, name
+        for slot in sorted(range(len(scores)), key=lambda k: -scores[k]):
+            if scores[slot] < NAME_THRESHOLD:
+                break
+            read = plate_text(frame, view, slot)
+            if read is not None and same_name(read, name) < PLATE_MATCH:
+                log.info("Plaque %d : « %s » lu, pas %s (nom qui lui ressemble)", slot + 1, read, name)
+                continue
+            return slot, name
     return None
 
 

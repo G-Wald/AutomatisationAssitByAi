@@ -31,6 +31,14 @@ VOID_IN_RANGE = (45, 30, 10)  # BGR, bleu nuit : le vide autour de la carte, tei
 FIGHT_BUTTONS = (1756, 664, 1918, 707)
 HIDDEN_CENTER_MARGIN = 0.1  # range_center : avance (indice de Jaccard) qu'il faut à une case cachée sur une case vue
 RANGE_SCAN = (2, 6)  # locate_caster : portées essayées sous et au-dessus de l'attendue (malus, bonus d'un allié)
+# locate_caster : écart d'indice de Jaccard sous lequel deux centres sur deux de mes cercles sont aussi plausibles l'un
+# que l'autre (26/10 : 0,925 contre 0,925 et 0,916 sur un losange coupé ; sur les losanges entiers, le bon centre
+# devance le suivant de 0,06 au moins).
+AMBIGUOUS_FIT = 0.02
+# locate_caster, portée modifiable : plateau de la portée retenue, les portées voisines qui collent à PEAK_FIT près
+# (losange coupé : 0,925 puis 0,916 ; losange entier : 0,05 à 0,3 de moins dès la portée voisine), jusqu'à PLATEAU_MAX.
+PEAK_FIT = 0.03
+PLATEAU_MAX = 20
 
 
 @dataclass(frozen=True)
@@ -68,10 +76,11 @@ def range_center(frame: Frame, spell_range: tuple[int, int], min_match: float = 
 
 
 def range_fit(frame: Frame, spell_range: tuple[int, int], exclude: set[Cell] | frozenset[Cell] = frozenset(),
-              in_line: bool = False) -> tuple[Cell | None, float]:
+              in_line: bool = False, view: RangeView | None = None) -> tuple[Cell | None, float]:
     """range_center sans seuil : (meilleur centre, son indice de Jaccard) ; (None, 0) sans portée affichée. Pour
-    comparer plusieurs portées possibles (bonus de portée d'un allié, inconnu du lanceur : 18/10, voir combat.py)."""
-    view = read_range(frame, Fighter("", -1e4, -1e4, (-10_000, -10_000)), [])
+    comparer plusieurs portées possibles (bonus de portée d'un allié, inconnu du lanceur : 18/10, voir combat.py).
+    `view` : la portée déjà lue sur cette capture (plusieurs portées comparées sans la relire)."""
+    view = view or read_range(frame, Fighter("", -1e4, -1e4, (-10_000, -10_000)), [])
     if not (view.castable | view.no_sight):
         return None, 0.0
     # 16/10, Incarnam 6,1 : la portée de Lancer de Pièces débordait sur le vide (bleu nuit) et sous la timeline ; le
@@ -131,26 +140,60 @@ def locate_caster(frame: Frame, spell_range: tuple[int, int], mine: set[Cell], f
        celle dont le centre est sur un de mes cercles et qui colle le mieux ;
     3. sinon, le centre de la portée attendue, si un cercle peut s'y cacher : sous la timeline ou l'interface du bas
        (03/10, 18/10), derrière le corps d'un combattant debout devant.
-    None sinon : un centre sur une case vide, où rien ne cache de cercle, n'est pas le lanceur."""
+    None sinon : un centre sur une case vide, où rien ne cache de cercle, n'est pas le lanceur.
+
+    Jamais quand une autre portée voisine place le centre sur un AUTRE de mes cercles, aussi bien ou mieux
+    (AMBIGUOUS_FIT) : 26/10 (journal 190101), losange coupé par deux bords de la carte, portées 11 à 15 toutes à 0,92,
+    chacune centrée sur le cercle d'un allié différent (équipe serrée en diagonale) ; Elseiso s'est pris pour Pesopepe,
+    2 déplacements ratés, et 3 personnages se sont crus sur la même case dans un autre combat."""
     low, high = spell_range
-    center, score = range_fit(frame, spell_range, exclude, in_line)
+    view = read_range(frame, Fighter("", -1e4, -1e4, (-10_000, -10_000)), [])
+    fits = {high: range_fit(frame, spell_range, exclude, in_line, view)}
+    if modifiable:
+        # Portée modifiable (bonus ou malus inconnus) : les portées voisines disent aussi si le losange, coupé par un
+        # bord, irait aussi bien à un autre cercle. Une portée fixe est connue : son centre fait foi.
+        for reach in range(max(low, high - RANGE_SCAN[0]), high + RANGE_SCAN[1] + 1):
+            if reach != high:
+                fits[reach] = range_fit(frame, (low, reach), exclude, in_line, view)
+
+    def rivals(cell: Cell, fit: float) -> list[Cell]:
+        """Autres de mes cercles aussi plausibles : centre d'une portée essayée qui colle aussi bien (AMBIGUOUS_FIT), ou
+        sur le plateau de la portée retenue : losange coupé par un bord, les portées plus longues (ou plus courtes)
+        collent presque aussi bien (PEAK_FIT), leur centre glissant d'une case à chaque fois, au-delà de RANGE_SCAN au
+        besoin (26/10 : 0,925 à la portée 11 sur Pesopepe, 0,916 à 12 et 13 sur des cases vides, 0,925 à 14 et 15 sur
+        deux autres alliés). Un plateau qui ne passe que sur des cases vides ne dit rien contre la portée retenue."""
+        found = {c for c, f in fits.values() if c in mine and c != cell and f >= fit - AMBIGUOUS_FIT}
+        if modifiable:
+            reach = next(r for r, (c, f) in fits.items() if c == cell and f == fit)
+            for step in (-1, 1):
+                other = reach + step
+                while max(low, 1) <= other <= PLATEAU_MAX:
+                    if other not in fits:
+                        fits[other] = range_fit(frame, (low, other), exclude, in_line, view)
+                    c, f = fits[other]
+                    if c is None or f < fit - PEAK_FIT:
+                        break
+                    if c in mine and c != cell:
+                        found.add(c)
+                    other += step
+        return sorted(found)
+
+    center, score = fits[high]
     if score < min_match:
         center = None
     if center is not None and center in mine:
-        return Located(center, spell_range, False)
+        if not rivals(center, score):
+            return Located(center, spell_range, False)
+        return None
     if modifiable:
-        tries = []
-        for reach in range(max(low, high - RANGE_SCAN[0]), high + RANGE_SCAN[1] + 1):
-            if reach == high:
-                continue
-            cell, fit = range_fit(frame, (low, reach), exclude, in_line)
-            if fit >= min_match and cell in mine:
-                tries.append((fit, cell, reach))
+        tries = [(fit, cell, reach) for reach, (cell, fit) in fits.items()
+                 if reach != high and fit >= min_match and cell in mine]
         if tries:
             fit, cell, reach = max(tries)
+            if rivals(cell, fit):
+                return None
             return Located(cell, (low, reach), False)
     if center is not None:
-        view = read_range(frame, Fighter("", -1e4, -1e4, (-10_000, -10_000)), [])
         if center in view.hidden or center in _hidden_by_sprites(frame, fighters):
             return Located(center, spell_range, True)
     return None
@@ -196,15 +239,15 @@ def _in_relief(grid, raised: set[Cell], px: float, py: float) -> bool:
 
 def read_range(frame: Frame, me: Fighter, fighters: list[Fighter]) -> RangeView:
     grid = frame.grid
-    dark = near(frame.image, RANGE_BLUE, 25)
-    light = near(frame.image, NO_SIGHT_BLUE, 22)
+    image = frame.day_image  # couleurs du jour : 26/10, la nuit sortait le bleu de la portée de sa tolérance
+    dark = near(image, RANGE_BLUE, 25)
+    light = near(image, NO_SIGHT_BLUE, 22)
     # Vide autour de la carte (noir, ou bleu nuit dans la portée) : un trou, on tire par-dessus ; pas un obstacle.
     # 16/10, Incarnam 6,1 : plus de cent cases du vide prises pour des blocs, lignes de vue justes sur 57 à 70 %.
-    void = near(frame.image, VOID_IN_RANGE, 14) | (frame.image.max(axis=2) <= 35)
+    tinted = near(image, VOID_IN_RANGE, 14)
+    void = tinted | (image.max(axis=2) <= 35)
     height, width = dark.shape
-    image = frame.image
     castable, no_sight, uncolored, void_cells, hidden_cells, wall_cells = set(), set(), set(), set(), set(), set()
-    tinted = near(frame.image, VOID_IN_RANGE, 14)
     portraits = timeline_portraits(frame)
     # La rangée des portraits, jusqu'au bord droit (flèches de défilement), et le bas de la carte sous l'interface.
     row = (min(b[0] for b in portraits), min(b[1] for b in portraits), max(b[3] for b in portraits)) if portraits else None
@@ -347,7 +390,7 @@ def read_terrain(frame: Frame, fighters: list[Fighter]) -> Terrain:
     accord marche 99 % et ligne de vue 100 % (400 cases lues), contre 90 % et 84 % avec les 4 points (blocs à tort).
     """
     grid = frame.grid
-    image = frame.image
+    image = frame.day_image  # couleurs du jour (sol, dessus et côtés des blocs) : la nuit teinte la carte (26/10)
     height, width = image.shape[:2]
     left, _, right, bottom = grid.bounds
     banner = _banner_rows(image, max(0, round(left)), min(width, round(right)), round(2 * grid.half_h))

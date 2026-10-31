@@ -139,7 +139,7 @@ LEVEL_STEP = 13.5  # px (repère de référence) : une marche de niveau de sol �
 
 def find_fighters(frame: Frame) -> list[Fighter]:
     box = frame.layout.map_box
-    region = frame.crop(box)
+    region = frame.day_crop(box)  # couleurs du jour (la nuit teinte les cercles aussi : rouge 255 -> 245, 26/10)
     fighters: list[Fighter] = []
     arcs: list[tuple[str, Blob, np.ndarray, np.ndarray]] = []
     for team in TEAMS:

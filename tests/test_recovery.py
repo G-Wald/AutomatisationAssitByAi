@@ -783,6 +783,10 @@ def test_level_read_in_the_level_up_window_before_closing_it():
     frame = load_frame("niveau_14_par_dessus_resultat_calanques")
     match = find_known_popup(frame, load_popup_specs())
     assert match.spec.name == LEVEL_UP and read_level_up(frame, match.box) == 14
+    # 30/10 : même fenêtre pour un métier (« Ton métier Paysan passe niveau 2 ») : pas le niveau du personnage.
+    frame = load_frame("informations_metier_paysan_niveau_2")
+    match = find_known_popup(frame, load_popup_specs())
+    assert match.spec.name == LEVEL_UP and read_level_up(frame, match.box) is None
 
 
 def test_level_limit_follows_the_team_cumulated_level():

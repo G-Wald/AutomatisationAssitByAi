@@ -51,10 +51,17 @@ def mark_heard(game) -> None:
 
 def unlock_click(game, frame: Frame | None = None) -> bool:
     """Clic gauche sur le fond beige sûr (flash_close_point), jamais sur la carte. False si ce fond n'est pas libre
-    (une fenêtre assombrit l'écran) : aucun clic."""
-    frame = frame if frame is not None else game.look(park=False)
+    (une fenêtre assombrit l'écran) : aucun clic.
+
+    Le fond est toujours vérifié sur une capture fraîche, pas seulement sur `frame` (celle de l'appelant, qui doit
+    aussi le montrer libre) : la capture de l'appelant date d'avant la touche ignorée, parfois de plus d'une seconde
+    (combat : avant la touche du sort et l'attente de sa portée) ; une fenêtre, un menu ou l'œil « combats en cours »
+    (25/10) ont pu se poser depuis sur ce fond. Une capture de plus par épisode de clavier sourd (32 clics de déblocage
+    dans les journaux du 25/10, 5 h de jeu)."""
+    stale = frame is not None and flash_close_point(frame) is None
+    frame = game.look(park=False)
     point = flash_close_point(frame)
-    if point is None or frame.layout.on_map(point):
+    if stale or point is None or frame.layout.on_map(point):
         log.info("Clic de déblocage impossible : le fond beige sous la barre de sorts n'est pas libre")
         return False
     reach = frame.layout.length(FLASH_CLOSE_CLEARANCE / 2)

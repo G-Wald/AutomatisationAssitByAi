@@ -12,6 +12,9 @@ import logging
 from dataclasses import dataclass
 
 from bot.brain.game import Game
+from bot.brain.popups import still_open
+from bot.perception.frame import Frame
+from bot.perception.layout import Point
 from bot.perception.party import (ACCEPT, CANCEL, INVITE_ENTRY, find_friend, find_friends_icon, find_friends_window,
                                   find_invitation, find_invite_entry, find_pending_invite, group_arrow,
                                   read_friend_level)
@@ -25,6 +28,12 @@ MENU_WAIT = 3.0  # menu du clic droit
 INVITATION_WAIT = 8.0  # invitation reçue chez l'autre
 JOINED_WAIT = 5.0  # cadre du groupe apparu chez l'autre après « Oui »
 ARROW_SPREAD = (3, 4)  # flèche du cadre du groupe : petite
+# Fenêtre « Groupe » de l'invitation vue chargée avant de cliquer « Oui » : bouton revu au même endroit, STILL_LAG s plus
+# tard, à STILL_TOLERANCE px de référence près.
+STILL_LAG = 0.15
+STILL_TOLERANCE = 3
+ACCEPT_TRIES = 2  # clics sur « Oui » au plus, si l'invitation est encore là après le premier
+CANCEL_WAIT = 2.0  # « Annuler » cliqué -> fenêtre « Tu invites... » partie
 
 
 @dataclass(frozen=True)
@@ -42,11 +51,19 @@ def open_friends(leader: Player):
     frame = leader.game.look(park=False)
     # 18/10 (journal 112233) : « Résultat du combat » resté ouvert chez le principal (bot arrêté juste après un combat),
     # par-dessus l'icône « Amis » : fenêtre jamais ouverte, Dinarpepe hors du groupe. Fenêtre connue fermée d'abord.
-    known = find_known_popup(frame, load_popup_specs())
+    specs = load_popup_specs()
+    known = find_known_popup(frame, specs)
     if known is not None and known.close_point is not None:
-        log.info("%s : fenêtre « %s » fermée avant d'ouvrir « Amis »", leader.name, known.spec.name)
-        leader.game.click(known.close_point, known.close_spread)
-        leader.game.sleep(0.5)
+        # Revue immobile avant le clic (25/10 : un « Fermer » vu sur une fenêtre en train de s'ouvrir était un objet de
+        # la barre de raccourcis) : sinon, pas de clic, la fenêtre reste au tour des fenêtres.
+        seen = still_open(leader.game, known, specs, frame)
+        if seen is None:
+            log.info("%s : fenêtre « %s » pas encore immobile, pas de clic avant d'ouvrir « Amis »", leader.name,
+                     known.spec.name)
+        else:
+            log.info("%s : fenêtre « %s » fermée avant d'ouvrir « Amis »", leader.name, known.spec.name)
+            leader.game.click(seen.close_point, seen.close_spread)
+            leader.game.sleep(0.5)
         frame = leader.game.look(park=False)
     title = find_friends_window(frame)
     if title is None:
@@ -79,6 +96,19 @@ def invite(leader: Player, member: Player) -> bool:
     if opened is None:
         return False
     frame, title = opened
+    if find_pending_invite(frame) is not None:
+        # 25/10 (journal 201109, 20:12:09) : « Oui » d'Enu-six-[Gal] pas pris, sa fenêtre « Tu invites... / Annuler »
+        # restée ouverte chez Fourboun ; le clic suivant, sur Elseiso, n'a ouvert aucun menu (« pas d'entrée « Inviter
+        # dans mon groupe » »). L'invitation en attente est annulée d'abord.
+        log.info("%s : une invitation est encore en attente, je l'annule avant d'inviter %s", leader.name, member.name)
+        _cancel(leader, frame)
+        frame = leader.game.look(park=False)
+        title = find_friends_window(frame)
+        if title is None:
+            opened = open_friends(leader)
+            if opened is None:
+                return False
+            frame, title = opened
     found = find_friend(frame, title, member.name)
     if found is None:
         path = leader.game.recorder.save(frame.image, "amis_introuvable", lossless=True)
@@ -99,20 +129,66 @@ def invite(leader: Player, member: Player) -> bool:
         log.warning("%s n'a pas reçu l'invitation de %s", member.name, leader.name)
         _cancel(leader)
         return False
-    member.game.click(find_invitation(invited), template_spread(invited, ACCEPT))
-    if member.game.wait_until(lambda f: group_arrow(f) is not None, JOINED_WAIT) is None:
-        log.warning("%s : « Oui » cliqué, mais pas de cadre du groupe", member.name)
-        return False
-    log.info("%s a rejoint le groupe de %s", member.name, leader.name)
-    return True
+    if accept(member):
+        log.info("%s a rejoint le groupe de %s", member.name, leader.name)
+        return True
+    _cancel(leader)  # sa fenêtre « Tu invites... » bloquerait l'invitation suivante (20:12, journal 201109)
+    return False
 
 
-def _cancel(leader: Player) -> None:
-    frame = leader.game.look(park=False)
+def accept(member: Player) -> bool:
+    """« Oui » cliqué dans la fenêtre « Groupe » de l'invitation, vue chargée (bouton immobile sur deux captures) ;
+    recliqué une fois si l'invitation est encore là sans cadre du groupe. True si le cadre du groupe est apparu.
+
+    25/10 (journal 201109, 20:12:04) : « Oui » d'Enu-six-[Gal] cliqué 0,6 s après l'invitation, pas pris (pas de cadre du
+    groupe en 5 s) ; réinvité 11 s plus tard, il a rejoint du premier coup."""
+    for attempt in range(1, ACCEPT_TRIES + 1):
+        seen = _stable_invitation(member)
+        if seen is None:
+            if in_group(member):
+                return True
+            if attempt < ACCEPT_TRIES:
+                continue  # fenêtre « Groupe » encore en train de s'ouvrir : revue
+            log.warning("%s : invitation plus visible (ou pas encore immobile), pas de clic sur « Oui »", member.name)
+            return False
+        point, frame = seen
+        member.game.click(point, template_spread(frame, ACCEPT))
+        if member.game.wait_until(lambda f: group_arrow(f) is not None, JOINED_WAIT) is not None:
+            return True
+        if attempt < ACCEPT_TRIES and find_invitation(member.game.look(park=False)) is not None:
+            log.info("%s : « Oui » pas pris, l'invitation est encore là : je reclique", member.name)
+            continue
+        break
+    log.warning("%s : « Oui » cliqué, mais pas de cadre du groupe", member.name)
+    return False
+
+
+def _stable_invitation(member: Player) -> tuple[Point, Frame] | None:
+    """Bouton « Oui » de l'invitation, vu au même endroit sur deux captures à STILL_LAG s d'écart (fenêtre « Groupe »
+    chargée), et la seconde capture ; None sinon."""
+    first = member.game.look(park=False)
+    point = find_invitation(first)
+    if point is None:
+        return None
+    member.game.sleep(STILL_LAG)
+    second = member.game.look(park=False)
+    again = find_invitation(second)
+    if again is None:
+        return None
+    before, after = first.layout.to_reference(point), second.layout.to_reference(again)
+    if max(abs(a - b) for a, b in zip(before, after)) > STILL_TOLERANCE:
+        return None
+    return again, second
+
+
+def _cancel(leader: Player, frame=None) -> None:
+    """« Annuler » de l'invitation en attente chez le principal (fenêtre « Tu invites... »), s'il est là."""
+    frame = frame if frame is not None else leader.game.look(park=False)
     cancel = find_pending_invite(frame)
     if cancel is not None:
         leader.game.click(cancel, template_spread(frame, CANCEL))
-        leader.game.sleep(0.4)
+        if leader.game.wait_until(lambda f: find_pending_invite(f) is None, CANCEL_WAIT) is None:
+            log.warning("%s : l'invitation en attente ne s'annule pas", leader.name)
 
 
 def collapse(player: Player) -> None:

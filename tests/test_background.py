@@ -227,3 +227,24 @@ def test_team_focus_never_brings_a_window_forward_in_background():
     window = GameWindow(GAME, "Gela-[A13] - Dofus Retro v1.49.6")
     focus.to(window)  # passive : retenue pour le journal, jamais passée devant
     assert focus.current is window
+
+
+def test_numpad_not_tried_again_when_it_worked_in_a_previous_session():
+    # 27/10 : sort sélectionné puis Échap à chaque session, pris pour un repérage par l'utilisateur.
+    from test_brain import FakeGame, presses
+
+    class Book:
+        remembered = False
+
+        def numpad_known(self):
+            return True
+
+    expiation = CombatSpell(9, "fleche_d_expiation", "Flèche d'Expiation", 4, (8, 10), damage=38)
+    turn = load_frame("combat_mon_tour")
+    game = FakeGame(turn)
+    game.background = True
+    ai = CombatAI(game, CombatSettings(), Book())
+    ai._spells = [expiation]
+    ai._use.new_turn(6)
+    ai._check_numpad(turn)
+    assert presses(game) == [] and ai._numpad_checked and not ai._numpad_ok  # une touche morte reste vue en combat

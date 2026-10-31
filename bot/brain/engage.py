@@ -28,10 +28,12 @@ Flash s'ouvre ; Échap ne le ferme pas (il ouvre le Menu principal derrière), u
 import logging
 import math
 import random
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
+from functools import lru_cache
 
 from bot.brain.arena import ALL_CELLS, STEPS
 from bot.brain.game import WATCH_SLACK, Game
@@ -39,10 +41,12 @@ from bot.brain.popups import close_flash_menu, close_npc_dialog, close_small_men
 from bot.brain.recovery import capture_once, keyboard_answers, mark_deaf, mark_heard, report_episode, unlock_click
 from bot.debug.draw import annotate
 from bot.perception.frame import Frame
+from bot.perception.grid import distance
 from bot.perception.groups import (OFF_COLUMN, TITLE_SHIFT, GroupTooltip, can_be_under_its_group, column_offset,
                                    find_group_tooltips, read_group_level, under_its_group)
 from bot.perception.layout import Layout, Point
-from bot.perception.popups import find_context_menu, find_flash_menu, find_small_menu
+from bot.perception.popups import (find_context_menu, find_flash_menu, find_known_popup, find_small_menu,
+                                   load_popup_specs)
 from bot.perception.templates import match_template
 from bot.state.scene import Phase, read_scene
 
@@ -53,8 +57,28 @@ ATTACK_ENTRY, ATTACK_SPREAD = "menu_attaquer.png", (22, 5)
 # les 14 attaques réussies des journaux (nombre de monstres relu), le clic qui a ouvert le menu était 12 à 16 px
 # au-dessus du centre de la case du groupe (son corps) et 0 à 5 px à gauche de sa colonne, du côté donné par la case
 # (groups.under_its_group) 14 fois sur 14. Sous l'infobulle, ce corps est à 50 px de son bas ; au-dessus, 35 px de
-# son haut. Puis un peu plus bas et plus haut (monstre plus petit ou plus grand).
-BELOW_OFFSETS, ABOVE_OFFSETS = (50, 62, 38), (35, 20, 52)
+# son haut.
+# 25/10 (journaux 155334 et 181212, captures menu_attaquer_absent) : les petits monstres ratés ainsi. Une Arakne a le
+# corps 5 à 9 px au-dessus du centre de sa case, haut de 16 px : à 14 px, le clic tombe sur son bord haut, ou à côté
+# (menus de Flash : 155334 n° 0339 et 0341, 181212 n° 0328 et 0329, clics sur ses bords). Un Boufton, un Tournesol,
+# un Bouftou d'Halouine descendent tous jusqu'au centre de leur case (bas du dessin à 3 px près, 4 captures). D'abord
+# 7 px au-dessus du centre de la case (57 sous l'infobulle, 27 au-dessus d'elle) : dans le corps des deux. Puis plus
+# haut (monstre plus grand).
+# Groupe dont le 1er point visé est à moins de TOP_GROUP_BAND px de référence du haut de la carte : épée du combat
+# coupée par le bord ou sous le nom de la carte (95 px), pas attaqué (Engager._not_at_the_top).
+TOP_GROUP_BAND = 150
+# Clic sur un groupe annoncé par le serveur (_engage_by_net) : au-dessus du centre de sa case de 0, puis 18, puis 36 px
+# de référence selon les ratés (26/10, Porkass : 6 clics sur 9 au centre de la case sans combat, le corps d'un gros
+# monstre est dessiné au-dessus de sa case).
+NET_AIM_UP = (0, 18, 36)
+# Ratés d'un groupe oubliés après ce délai (s) : 31/10, donjon Bouftou, le groupe d'une salle réapparaît avec le même
+# numéro (-1) après avoir été pris par d'autres joueurs ; 3 ratés l'écartaient pour toujours, l'équipe 15 min bloquée.
+NET_MISS_FORGET = 90.0
+DUNGEON_MISS_FORGET = 15.0  # en farm de donjon (31/10, utilisateur) : le groupe de la salle revient vite
+BELOW_OFFSETS, ABOVE_OFFSETS = (57, 47, 38), (27, 37, 46)
+# Étendue du clic direct (arrière-plan) : ±2 px en hauteur, la moitié du corps d'une Arakne de part et d'autre du point
+# (avant : ±3, et un clic de 0329 tombé sur son bord bas).
+PROBE_SPREAD = (3, 2)
 EDGE_SHIFTS = (0, 45, 90)  # infobulle collée à un bord : le groupe peut être plus près du bord
 EDGE_COLUMNS = 3  # infobulle repoussée par un bord : colonnes de cases essayées vers ce bord (puis sous son centre)
 # Puis les 4 cases voisines en diagonale (une demi-case de côté et de haut, réseau de grid.py), au niveau du corps :
@@ -123,6 +147,29 @@ class Outcome(Enum):
     COMBAT = "combat lancé"
     NO_MENU = "pas de menu « Attaquer »"
     LEFT = "groupe parti"
+    BLOCKED = "fenêtre ouverte sur la carte"  # pas de clic : la boucle la ferme, puis nouvelle recherche
+
+
+@lru_cache(maxsize=1)
+def _popup_specs() -> tuple:
+    """Fenêtres connues (assets/popups.yaml), lues une fois ; aucune si le fichier manque."""
+    try:
+        return tuple(load_popup_specs())
+    except (OSError, TypeError, ValueError):
+        return ()
+
+
+def window_over_map(frame: Frame) -> str | None:
+    """Nom d'une fenêtre connue ouverte (« combats en cours »...) : un clic sur un groupe tomberait dessus. None sinon.
+
+    25/10 (journal 155334) : le clic qui fermait le menu de Flash ouvrait « Combats en cours » (l'œil juste au-dessus
+    de l'ancien point de fermeture), 5 fois ; la boucle ne la fermait que 7 à 13 s plus tard. Entre-temps, à 16:01:11,
+    clic de sonde en plein sur le Boufton Blanc du groupe, derrière elle (capture 0269) : menu de Flash ; et 2
+    recherches Z juste après ne revoyaient plus l'infobulle (cachée par la fenêtre ?), groupe cru parti (15:58:50,
+    16:01:21)."""
+    specs = _popup_specs()
+    found = find_known_popup(frame, list(specs)) if specs else None
+    return found.spec.name if found is not None else None
 
 
 @dataclass(frozen=True)
@@ -140,6 +187,7 @@ class EngageSettings:
     # Arrière-plan : bouton du clic direct sur le groupe (engage.clic_sonde). Gauche : à côté, le personnage y marche ;
     # droit : à côté, il ne bouge pas (menu « Attaquer » ou attaque directe sur un groupe : à essayer en jeu).
     probe_click: str = "droit"
+    fight_at_night: bool = False  # engage.combats_de_nuit : combats lancés la nuit (perception de nuit pas encore sûre)
 
     @classmethod
     def from_settings(cls, settings: dict) -> "EngageSettings":
@@ -158,6 +206,7 @@ class EngageSettings:
             pause_between_fights=tuple(float(v) for v in engage.get("pause_between_fights", cls.pause_between_fights)),
             retry_delay=float(engage.get("retry_delay", cls.retry_delay)),
             probe_click=probe_click,
+            fight_at_night=bool(engage.get("combats_de_nuit", cls.fight_at_night)),
         )
 
 
@@ -302,12 +351,18 @@ class Engager:
         self.settings = settings
         self.missed = False  # dernier échec : des groupes restent à essayer (on refait une recherche tout de suite)
         self.none_found = False  # dernière recherche : aucun groupe attaquable sur la carte (ou tous ratés)
+        self.night = False  # dernière recherche : infobulles lues avec le seuil de nuit (pas de combat la nuit)
         self.groups_seen = 0  # dernière recherche : groupes vus sur la carte, ratés compris (salle de donjon finie : 0)
         self._skipped: list[_Skip] = []
         self._no_menu: list[tuple[GroupTooltip, float]] = []  # (infobulle, quand) : clics sans menu « Attaquer »
         self._z_until = float("-inf")  # jusqu'à quand les infobulles de Z peuvent rester affichées (game.now)
         self._unreachable: list[tuple[Point, float]] = []  # (clic, quand) : groupe touché, combat jamais lancé
         self._probed: list[tuple[GroupTooltip, list[tuple[float, float]]]] = []  # points cliqués par groupe (_probe)
+        # Écoute du serveur (_engage_by_net) : carte dont la nuit a été vérifiée, clics sans combat par (carte, groupe).
+        self._night_map: int | None = None
+        self._net_misses: dict[tuple[int | None, int], int] = {}
+        self._net_missed_at: dict[tuple[int | None, int], float] = {}  # dernier raté (time.monotonic())
+        self.miss_forget = NET_MISS_FORGET  # s : ratés d'un groupe oubliés (team/dungeon.py : DUNGEON_MISS_FORGET)
         self._hit = False  # dernier clic sans menu « Attaquer » : quelque chose a été touché (ni menu de Flash, ni autre)
         self._last_click: Point | None = None  # dernier clic sur un groupe de cette recherche
         # Mémoire des zones hors d'atteinte (remember_in) : où l'écrire (World de travel.py) et où l'on est
@@ -422,11 +477,24 @@ class Engager:
         self.none_found = False
         self._last_click = None
         self._arrive()
+        net = getattr(self.game, "net", None)
+        if net is not None and net.alive() and net.map_at > 0 and net.my_cell() is not None and not net.in_fight():
+            # Carte annoncée par le jeu, moi compris (GM, connection/network.py, 26/10) : les groupes, leurs cases et
+            # leurs niveaux viennent du serveur ; ni infobulles à lire (sauf une fois par carte, pour la nuit), ni
+            # survol, ni points cherchés autour d'une infobulle.
+            return self._engage_by_net(net)
         background = getattr(self.game, "background", False)  # arrière-plan : pas de survol, clics directs (08/10)
         frame = self._show_groups()
         if read_scene(frame).phase is not Phase.OUT_OF_COMBAT:
             return False  # un combat a commencé entre-temps (agression, lancement tardif)
         seen = find_group_tooltips(frame)
+        self.night = any(t.night for t in seen)
+        if self.night and not self.settings.fight_at_night:
+            # 26/10 (journal 012810) : de nuit, teinte plus profonde qu'à minuit pas reconnue en combat : aucun des 8
+            # personnages ne s'est repéré, tours passés 40 min, les 8 morts. Pas de combat la nuit tant que sa
+            # perception n'est pas sûre (engage.combats_de_nuit) : team/loop.py arrête la session.
+            log.warning("Il fait nuit dans le jeu (infobulles teintées) : je ne lance pas de combat")
+            return False
         self.keyboard_ok = None
         self._empty_z = 0 if seen else self._empty_z + 1
         if not seen and self.probe_key and (self.probe_first or self._empty_z >= DEAF_PROBE_AFTER):
@@ -438,6 +506,7 @@ class Engager:
         tooltips = [t for t in seen if t.monsters <= self.settings.max_monsters]
         if self.settings.max_level or self.settings.max_level_auto:
             tooltips = self._not_too_strong(frame, tooltips)
+        tooltips = self._not_at_the_top(frame, tooltips)
         self.game.recorder.save(frame.image, "groupes_z", quality=92)  # capture brute, pour réanalyse
         firsts = [points[0] for points in (hover_points(t, frame) for t in tooltips) if points]  # 1er survol prévu
         self.game.recorder.save(
@@ -481,11 +550,7 @@ class Engager:
             self.none_found = True  # la boucle attend (engage.retry_delay), ou change de carte en mode zone
             return False
 
-        def difficulty(t: GroupTooltip) -> tuple:
-            overlapped = any(t is not o and t.overlaps(o) for o in tooltips)
-            return self._no_menu_count(t, frame), t.clipped, overlapped, t.monsters, random.random()
-
-        for tooltip in sorted(candidates, key=difficulty)[:3]:
+        for tooltip in self.attack_order(candidates, seen, frame)[:3]:  # chevauchements : toutes les infobulles vues
             if background:
                 outcome = self._probe(frame, tooltip)
             else:
@@ -500,8 +565,10 @@ class Engager:
                 self._forget(tooltip, frame)
                 self._reached(self._last_click, frame)
                 return True
-            if outcome is Outcome.LEFT:
-                self.missed = True  # il a bougé : nouvelle recherche aussitôt, avec Z
+            if outcome in (Outcome.LEFT, Outcome.BLOCKED):
+                # Il a bougé, ou une fenêtre couvre la carte (fermée au tour des fenêtres) : nouvelle recherche bientôt,
+                # avec Z ; pas compté comme un clic sans menu.
+                self.missed = True
                 return False
             self._no_menu.append((tooltip, self.game.now()))
             count = self._no_menu_count(tooltip, frame)
@@ -516,6 +583,145 @@ class Engager:
         self.missed = any(not self._skipped_now(t, frame) for t in tooltips)
         self.none_found = not self.missed
         return False
+
+    def _engage_by_net(self, net) -> bool:
+        """Lancement d'un combat d'après le serveur (26/10, demande de l'utilisateur) : groupes de la carte avec leur
+        case et le niveau de chacun de leurs monstres (GM|+), suivis quand ils bougent (GA;1) ; clic sur la case du
+        groupe choisi, combat confirmé par « GJK ». Mêmes règles qu'à l'écran : nombre de monstres, niveau maximal,
+        pas tout en haut de la carte, case joignable à pied, groupe raté plusieurs fois laissé."""
+        map_id = net.snapshot()[0]
+        if self._night_map != map_id:
+            # Une lecture des infobulles par carte : la nuit ne se voit hors combat qu'à leur teinte (règle des combats
+            # de nuit, engage.combats_de_nuit).
+            self._night_map = map_id
+            frame = self._show_groups()
+            if read_scene(frame).phase is not Phase.OUT_OF_COMBAT:
+                return False
+            self.night = any(t.night for t in find_group_tooltips(frame))
+            if self.night and not self.settings.fight_at_night:
+                log.warning("Il fait nuit dans le jeu (infobulles teintées) : je ne lance pas de combat")
+                return False
+        frame = self.game.look()
+        if read_scene(frame).phase is not Phase.OUT_OF_COMBAT:
+            return False
+        groups = net.group_list()
+        self.groups_seen = len(groups)
+        if not groups:
+            log.info("Aucun groupe de monstres sur la carte (d'après le jeu)")
+            self.none_found = True
+            return False
+        limit = self.level_limit() if (self.settings.max_level or self.settings.max_level_auto) else None
+        top = frame.layout.map_box[1] + frame.layout.length(TOP_GROUP_BAND)
+        area = self.walk_area() if self.walk_area is not None else None
+        me = net.my_grid_cell()
+        kept, left = [], []
+        for group_id, cell, levels in groups:
+            if time.monotonic() - self._net_missed_at.get((map_id, group_id), 0.0) > self.miss_forget:
+                self._net_misses.pop((map_id, group_id), None)
+            misses = self._net_misses.get((map_id, group_id), 0)
+            if len(levels) > self.settings.max_monsters:
+                left.append(f"{len(levels)} monstres")
+            elif limit is not None and sum(levels) > limit:
+                left.append(f"niveau {sum(levels)} (max {limit})")
+            elif frame.grid.center(cell)[1] < top:
+                left.append("tout en haut de la carte")
+            elif area and cell not in area:
+                left.append("injoignable d'ici")
+            elif misses >= len(NET_AIM_UP):
+                left.append("raté déjà")  # les 3 hauteurs de clic essayées
+            else:
+                kept.append((misses, len(levels), sum(levels), distance(me, cell) if me else 0, group_id, cell, levels))
+        if left:
+            log.info("Groupe(s) laissé(s) d'après le jeu : %s", ", ".join(left))
+        if not kept:
+            log.info("Aucun groupe de monstres attaquable sur la carte (d'après le jeu)")
+            self.none_found = True
+            return False
+        *_, group_id, cell, levels = min(kept)
+        window = window_over_map(frame)
+        if window is not None:
+            log.info("Fenêtre « %s » ouverte sur la carte : pas de clic sur le groupe tant qu'elle y est", window)
+            self.missed = True
+            return False
+        cell = net.group_cell(group_id) or cell  # il a pu bouger depuis la liste
+        button = PROBE_BUTTONS[self.settings.probe_click]
+        clicked_at = time.monotonic()
+        x, y = frame.grid.center(cell)
+        up = frame.layout.length(NET_AIM_UP[self._net_misses.get((map_id, group_id), 0) % len(NET_AIM_UP)])
+        aim = self.game.move((x, y - up), frame.layout.spread(*PROBE_SPREAD))
+        log.info("%d groupe(s) attaquable(s) d'après le jeu : j'attaque celui en %s (%d monstre(s), niveaux %s), clic "
+                 "%s en (%d, %d)", len(kept), cell, len(levels), "+".join(map(str, levels)), self.settings.probe_click,
+                 *aim)
+        self._last_click = aim
+        self.game.click(button=button)
+        end = time.monotonic() + RIGHT_CLICK_WAIT
+        said = False
+        while time.monotonic() < end:
+            if net.fight_since(clicked_at):
+                self._net_misses.pop((map_id, group_id), None)
+                self._reached(aim, frame)
+                return True
+            moved = net.group_cell(group_id)
+            if moved != cell and not said:
+                # 26/10 (journal 225358) : groupe parti de la case cliquée, combat lancé 0,5 s plus tard quand même
+                # (le personnage le rattrape) : on attend jusqu'au bout, sans conclure à un raté.
+                said = True
+                log.info("Le groupe a bougé (%s -> %s) pendant que j'y allais", cell, moved)
+            self.game.sleep(0.2)
+        if read_scene(self.game.look(park=False)).phase is not Phase.OUT_OF_COMBAT:
+            return True
+        self._close_after_miss(aim)
+        self._net_misses[(map_id, group_id)] = self._net_misses.get((map_id, group_id), 0) + 1
+        self._net_missed_at[(map_id, group_id)] = time.monotonic()
+        log.info("Pas de combat après le clic sur le groupe en %s : nouvel essai à la prochaine recherche", cell)
+        self.missed = True
+        return False
+
+    def _close_after_miss(self, group: Point) -> None:
+        """Après un clic sur un groupe sans combat : menu de Flash, bulle de PNJ ou autre menu fermés (comme
+        _no_menu_after_click)."""
+        frame = self.game.look(park=False)
+        if find_flash_menu(frame, around=group) is not None:
+            log.info("Le clic sur le groupe a ouvert le menu de Flash : je le ferme (pas d'Échap)")
+            close_flash_menu(self.game, frame, around=group)
+        elif close_npc_dialog(self.game, frame):
+            pass
+        elif find_context_menu(frame) is not None or find_small_menu(frame, around=group) is not None:
+            close_small_menu(self.game, frame, lambda f: find_context_menu(f) is not None
+                             or find_small_menu(f, around=group) is not None)
+
+    def _not_at_the_top(self, frame: Frame, tooltips: list[GroupTooltip]) -> list[GroupTooltip]:
+        """Sans les groupes tout en haut de la carte : l'épée du combat y est coupée par le bord ou cachée sous le nom de
+        la carte, les suiveurs ne la voient pas. 25/10 (journal 171736) et 26/10 (journal 175632) : 3 combats lancés
+        sur un groupe du haut, aucun suiveur entré, le principal seul (mort une fois). Mieux vaut un autre groupe, ou
+        une autre carte."""
+        limit = frame.layout.map_box[1] + frame.layout.length(TOP_GROUP_BAND)
+        kept = []
+        for tooltip in tooltips:
+            points = hover_points(tooltip, frame)
+            if points and points[0][1] < limit:
+                log.info("Groupe tout en haut de la carte (vers %.0f, %.0f) : l'épée y serait hors de vue des suiveurs, "
+                         "je ne l'attaque pas", *points[0])
+                continue
+            kept.append(tooltip)
+        return kept
+
+    def attack_order(self, candidates: list[GroupTooltip], tooltips: list[GroupTooltip],
+                     frame: Frame) -> list[GroupTooltip]:
+        """Groupes du plus sûr au moins sûr : pas encore ratés, infobulle entière (pas coupée par une autre), pas collée
+        à un bord, pas chevauchée, peu de monstres.
+
+        Infobulle coupée par celle d'en dessous (truncated) en dernier : son bas n'est pas lu, ses points sont trop haut
+        d'autant de lignes cachées, et ses monstres comptés en moins la faisaient passer en premier. 25/10 (journal
+        181212, 18:50, 2 groupes qui se chevauchent) : une ligne au plus lue, deux clics ~140 px au-dessus du groupe
+        (menus de Flash) ; à la recherche suivante, son infobulle entière (l'autre groupe avait bougé), attaqué du 1er
+        clic 143 px plus bas. L'autre groupe, lu en entier, d'abord ; ensuite elle se lit en entier."""
+
+        def difficulty(t: GroupTooltip) -> tuple:
+            overlapped = any(t is not o and t.overlaps(o) for o in tooltips)
+            return self._no_menu_count(t, frame), t.truncated, t.clipped, overlapped, t.monsters, random.random()
+
+        return sorted(candidates, key=difficulty)
 
     def level_limit(self) -> int:
         """Niveau total maximal d'un groupe attaqué : engage.max_level, ou (auto) level_ratio x niveau cumulé de
@@ -660,13 +866,19 @@ class Engager:
         button = PROBE_BUTTONS[self.settings.probe_click]
         tried = self._probed_points(tooltip, frame)
         for probe in range(1, PROBES + 1):
+            window = window_over_map(frame)
+            if window is not None:
+                # Jamais de clic derrière une fenêtre : il ne touche pas le groupe (menu de Flash), et compté comme un
+                # clic sans menu, il ferait sauter un groupe qui est là.
+                log.info("Fenêtre « %s » ouverte sur la carte : pas de clic sur le groupe tant qu'elle y est", window)
+                return Outcome.BLOCKED
             near = frame.layout.length(8)
             point = next((p for p in hover_points(tooltip, frame)
                           if all(abs(p[0] - x) + abs(p[1] - y) > near for x, y in tried)), None)
             if point is None:
                 break
             tried.append(point)
-            aim = self.game.move(point, frame.layout.spread(4, 3))  # souris virtuelle : rien n'est survolé ni envoyé
+            aim = self.game.move(point, frame.layout.spread(*PROBE_SPREAD))  # souris virtuelle : rien n'est survolé
             log.info("Groupe visé sans survol (arrière-plan), clic %s %d/%d en (%d, %d)", self.settings.probe_click,
                      probe, PROBES, *aim)
             self._last_click = aim
@@ -683,6 +895,10 @@ class Engager:
                 self._note_unreachable(aim, frame)
                 log.info("Groupe touché mais pas de combat : hors d'atteinte ? (endroit noté, pas d'autre clic dessus)")
                 return outcome
+            if outcome is Outcome.COMBAT:
+                # 25/10 (journal 181212) : le groupe combattu, un autre réapparu au même endroit (même infobulle) a
+                # hérité de ses points cliqués ; le bon point (sous l'infobulle) sauté, 2 clics à côté, menu de Flash.
+                self._probed = [(known, points) for known, points in self._probed if points is not tried]
             if outcome is not Outcome.NO_MENU or probe == PROBES:
                 return outcome
             log.info("Clic à côté du groupe%s : je réaffiche les groupes (Z) avant le clic suivant",
@@ -690,6 +906,8 @@ class Engager:
             frame = self._show_groups()
             if read_scene(frame).phase is not Phase.OUT_OF_COMBAT:
                 return Outcome.COMBAT
+            if window_over_map(frame) is not None:
+                continue  # elle cache peut-être l'infobulle : pas « groupe parti » ; pas de clic (début de boucle)
             again = [t for t in find_group_tooltips(frame) if _same_tooltip(tooltip, t, frame)]
             if not again:
                 log.info("Son infobulle n'est plus près de (%.0f, %.0f) : le groupe est parti", tooltip.x,

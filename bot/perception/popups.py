@@ -39,6 +39,9 @@ class PopupSpec:
     # (journal 201321) : résultat du combat à 0,874 (titre) et 0,88 (bouton) sur la capture JPEG, pas reconnu sur la
     # capture du jeu : resté ouvert, l'équipe a cherché des groupes derrière lui.
     pair_threshold: float = 0.0
+    # Abscisse (repère de référence) du centre du bouton `close`, quand elle ne varie pas : exigée à CLOSE_X_TOLERANCE
+    # près pour un bouton trouvé sous la carte (0 : pas vérifiée). Voir _match_popup.
+    close_x: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -80,6 +83,24 @@ def find_quit_dialog_no(frame: Frame) -> Point | None:
     return no[0]
 
 
+BELOW_MAP_BUTTON = 0.88  # bouton de fermeture sous la carte, au-dessus de la barre : 0,89 à 1,0 sur les vrais (25/10)
+# Écart toléré (px de référence) à l'abscisse connue d'un bouton sous la carte (PopupSpec.close_x). « Fermer » du
+# résultat : 1672,9 à 1676,0 sur 13 captures (fenêtres de 1008, 1009 et 1057 px de haut, 1 à 8 personnages) ; le faux
+# « Fermer » du 25/10 (objet de la barre, combat 17 du journal 181212) était à 1692 : les cases de la barre sont à
+# 1533 + 51 k (1635, 1686...).
+CLOSE_X_TOLERANCE = 6
+# Bouton sous la carte à sa place connue (close_x tenu) : 26/10 (journal 181017, combat 6), « Fermer » du résultat à
+# 0,877, titre à 0,95, refusé à BELOW_MAP_BUTTON ; la fenêtre restée ouverte cachait le cœur, vie lue à 0 % chez les 8
+# et repos sans fin. Le faux du 25/10 (0,80) reste dessous, et il n'était pas à sa place.
+BELOW_MAP_AT_PLACE = 0.85
+
+
+def below_map(frame: Frame, point: tuple[float, float]) -> bool:
+    """Point sous le bas de la carte : dans l'interface (barre de raccourcis, minimap, cœur...), où un clic à côté
+    déclenche quelque chose (25/10 : une potion de la barre bue)."""
+    return point[1] >= frame.layout.map_box[3]
+
+
 def find_known_popup(frame: Frame, specs: list[PopupSpec]) -> PopupMatch | None:
     """Fenêtre connue ouverte. On ne cherche ses modèles qu'autour d'une grande surface beige (une fenêtre) :
     les chercher sur tout l'écran prenait 0,2 s, à chaque coup d'œil. Le titre n'est cherché que dans le haut de la
@@ -118,6 +139,19 @@ def _match_popup(frame: Frame, spec: PopupSpec, window: Box, margin: int) -> Pop
     button = match_template(frame, spec.close, box=box, threshold=low)
     if button is None or max(title_score, button[1]) < spec.threshold:
         return None  # l'un des deux au moins doit être sûr
+    if below_map(frame, button[0]):
+        # 25/10 (journal 181212, combat 17) : « Résultat du combat » en train de s'ouvrir, titre sûr, bouton pas encore
+        # dessiné ; « Fermer » cru à 0,80 sur un objet de la barre de raccourcis, en (1682, 1003), et cliqué dans les 8
+        # fenêtres : Elseiso a bu une potion de rappel (Brâkmar). Sous la carte (8 personnages : le vrai bouton y est,
+        # en (1663, 964), juste au-dessus des objets), le bouton doit être à sa place connue (en x : sa hauteur suit le
+        # nombre de lignes de la fenêtre ; un objet de la barre qui lui ressemblerait est presque toujours ailleurs) et
+        # sûr : BELOW_MAP_BUTTON, ou BELOW_MAP_AT_PLACE quand sa place est connue et tenue.
+        at_place = bool(spec.close_x) and \
+            abs(frame.layout.to_reference(button[0])[0] - spec.close_x) <= CLOSE_X_TOLERANCE
+        if spec.close_x and not at_place:
+            return None
+        if button[1] < (BELOW_MAP_AT_PLACE if at_place else BELOW_MAP_BUTTON):
+            return None
     height, width = load_template(spec.close).shape[:2]
     return PopupMatch(spec, button[0], frame.layout.spread(width * 0.3, height * 0.25), window)
 
@@ -144,6 +178,10 @@ def find_generic_close(frame: Frame, window: Box | None = None) -> tuple[Point, 
                min(layout.height, y1 + 2 * margin))
         for name in GENERIC_BUTTONS:
             found = match_template(frame, name, box=box, threshold=GENERIC_THRESHOLD)
+            if found is not None and below_map(frame, found[0]) and found[1] < BELOW_MAP_BUTTON:
+                # 25/10 (journal 181212) : à 0,80, « Fermer » a été trouvé sur un objet de la barre de raccourcis. Sous
+                # la carte, ce diagnostic (seuil 0,75) cliquerait la barre : le bouton doit y être sûr à lui seul.
+                found = None
             if found is not None:
                 return found[0], name
         cross = find_title_cross(frame, (x0, y0, x1, y1))
@@ -189,11 +227,12 @@ def find_context_menu(frame: Frame) -> Box | None:
 def find_small_menu(frame: Frame, around: Point | None = None, radius: float = 250) -> Box | None:
     """Petit menu ouvert par un clic (une seule entrée beige, comme « Pipelette Nhin / Parler » sur un PNJ, ou
     « Combat / Rejoindre ») : trop bas pour find_context_menu. Entrée beige pleine d'au moins 18 px de haut (33 px pour
-    « Parler », le 01/10), près de `around` (le clic) s'il est donné."""
+    « Parler », le 01/10), près de `around` (le clic) s'il est donné. Au moins 70 px de large : 30/10, « Altaïr /
+    Parler » (donjon Bouftou), nom court, entrée de 85 px dans une fenêtre de 1057 px (81 de référence)."""
     layout = frame.layout
     box = layout.map_box
     for blob in find_blobs(near(frame.crop(box), UI_BEIGE, 10), offset=box[:2], close=3):
-        if not (layout.length(90) <= blob.w <= layout.length(450) and layout.length(18) <= blob.h <= layout.length(400)
+        if not (layout.length(70) <= blob.w <= layout.length(450) and layout.length(18) <= blob.h <= layout.length(400)
                 and blob.fill >= 0.8):
             continue
         x, y = blob.center
@@ -209,6 +248,9 @@ FLASH_MENU_REACH = (350, 300)  # px de référence autour du clic : le menu s'ou
 # d'un bord), d'environ 300 x 220
 FLASH_CLOSE_REF = (1465, 997)  # repère de référence : fond beige en bas à gauche de la barre de sorts (15/10, 25/10)
 FLASH_CLOSE_IN_COMBAT_REF = (1700, 1000)  # sous la 2e rangée de sorts : beige en combat (bouton de fin de tour à gauche)
+# 25/10 (journal 171736) : menu de Flash ouvert par le clic droit sur la case 8 (Tir Puissant), par-dessus le point
+# précédent. Bande beige du bas, juste à droite du bouton de fin de tour (beige uni sur 99 captures de tour sur 99).
+FLASH_CLOSE_UNDER_BAR_REF = (1505, 996)
 FLASH_CLOSE_CLEARANCE = 6  # px de référence autour de ce point : beige uni exigé, étendue du clic
 # Beige uni exigé aussi sur cette hauteur au-dessus du point (px de référence) : 25/10, l'œil « combats en cours »
 # (affiché quand un autre combat a lieu sur la carte) était juste au-dessus de l'ancien point (1465, 991) ; le clic de
@@ -254,11 +296,12 @@ def flash_close_point(frame: Frame) -> Point | None:
     """Où cliquer pour fermer le menu de Flash sans rien déclencher : le fond beige en bas à gauche de la barre de
     sorts, sous aucun raccourci. Un clic dans le chat ne le ferme pas (15/10, deux fois en jeu : le chat n'est pas
     dans la scène Flash). En combat, le bouton de fin de tour y est : le fond beige sous la 2e rangée de sorts, à
-    droite de ce bouton (17/10 : menu de Flash ouvert en rejoignant un combat). None si aucun des deux n'est beige uni
+    droite de ce bouton (17/10 : menu de Flash ouvert en rejoignant un combat), ou la bande beige du bas juste à droite
+    de ce bouton (25/10 : le menu cachait le point précédent). None si aucun n'est beige uni
     (une fenêtre assombrit l'écran)."""
     r = round(frame.layout.length(FLASH_CLOSE_CLEARANCE))
     up = round(frame.layout.length(FLASH_CLOSE_UP))
-    for ref, above in ((FLASH_CLOSE_REF, up), (FLASH_CLOSE_IN_COMBAT_REF, r)):
+    for ref, above in ((FLASH_CLOSE_REF, up), (FLASH_CLOSE_IN_COMBAT_REF, r), (FLASH_CLOSE_UNDER_BAR_REF, r)):
         x, y = frame.layout.point(*ref)
         patch = frame.image[max(0, y - above) : y + r + 1, max(0, x - r) : x + r + 1]
         if patch.size and near(patch, UI_BEIGE, 10).all():

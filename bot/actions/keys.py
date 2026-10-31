@@ -22,6 +22,7 @@ KEYEVENTF_KEYUP = 0x0002
 NAMED = {
     "escape": 0x1B, "esc": 0x1B, "enter": 0x0D, "space": 0x20, "tab": 0x09, "backspace": 0x08,
     "ctrl": 0x11, "shift": 0x10, "alt": 0x12,
+    "left": 0x25, "up": 0x26, "right": 0x27, "down": 0x28,  # flèches (31/10 : liste des types du sac)
     **{f"f{n}": 0x6F + n for n in range(1, 13)},
     **{f"num{n}": 0x60 + n for n in range(10)},  # VK_NUMPAD0 à VK_NUMPAD9
 }

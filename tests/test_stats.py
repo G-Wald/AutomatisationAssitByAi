@@ -460,3 +460,33 @@ def test_advanced_window_of_fourbocinq_read_entirely():
     reading = perception.read_advanced_window(load_frame("caracteristiques_avancees_fourbocinq"))
     assert reading.values["intelligence"] == 36 and reading.values["force"] == 81
     assert reading.values["dommages"] == 11 and reading.values["dommages_pourcent"] == 6
+
+
+def test_characteristics_announced_by_the_server_replace_the_screen(tmp_path, caplog):
+    # 27/10 : « As » écouté, plus de fenêtre des caractéristiques ; retenues, et mises à jour si elles changent.
+    from bot.connection.network import ClientFeed
+    from test_reseau import AS_ENU_SIX
+
+    closed, spells = screen(), screen(spells=True)
+    game = FakeGame(closed, spells, spells, closed, name="Jesuisleking")
+    game.net = ClientFeed("Jesuisleking")
+    game.net.feed(AS_ENU_SIX)
+    book = SpellBook(game, session=session(tmp_path))
+    with caplog.at_level(logging.INFO):
+        assert book.read()
+    assert book.read_done and len(clicks(game)) == 2  # baguette et croix des sorts : pas le bouton des caractéristiques
+    assert book.stats.force == 92 and book.stats.intelligence == 85 and book.stats.source == "serveur"
+    assert "Caractéristiques annoncées par le serveur : Force 92, Intelligence 85" in caplog.text
+    game.net.feed(AS_ENU_SIX.replace("|0,92,0,100,0|", "|0,102,0,100,0|"))  # nouvel équipement
+    book.combat_spells()
+    assert book.stats.force == 102
+    record = json.loads((tmp_path / "personnages" / "Jesuisleking.json").read_text(encoding="utf-8"))
+    assert record["caracteristiques"]["force"] == 102 and record["caracteristiques"]["source"] == "serveur"
+
+
+def test_numpad_success_is_remembered_for_the_next_sessions(tmp_path):
+    book = SpellBook(FakeGame(screen(), name="Jesuisleking"), session=session(tmp_path))
+    assert not book.numpad_known()
+    book.remember_numpad()
+    again = SpellBook(FakeGame(screen(), name="Jesuisleking"), session=session(tmp_path))
+    assert again.numpad_known()

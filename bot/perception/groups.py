@@ -20,6 +20,7 @@ from dataclasses import dataclass
 import cv2
 import numpy as np
 
+from bot.perception.daylight import NIGHT_GAIN, NIGHT_OFFSET
 from bot.perception.frame import Frame
 from bot.perception.layout import SCENE_LEFT, Box, Layout
 from bot.perception.templates import load_template
@@ -43,6 +44,12 @@ EDGE_MARGIN = 20  # infobulle à moins de 20 px d'un bord de la carte : repouss�
 # 52,5 refusé) ; 6 px de marge.
 BOTTOM_TO_CELL, CELL_TO_TOP = 63.8, 19.7
 TOP_ROOM = 54 + 6
+# Haut d'infobulle plus près du haut de la carte que cela : le jeu ne l'a pas mise au-dessus de son groupe (refusé à
+# 52,5), elle est dessous et le groupe AU-DESSUS, quelle que soit sa case. 25/10 (journal 171736, Taïnéla 1,-32) :
+# infobulles de 7 puis 5 monstres à 43,8 px du haut, combat lancé les 2 fois par le clic au-dessus d'elles ; à 7
+# lignes, la case ne départage pas (under_its_group), le 1er clic était parti dessous : menu de Flash. Vue au-dessus
+# de son groupe : 55,4 px (groupes_z_haut_mixte).
+TOP_REFUSED = 53
 ROW_FIT = 4  # case du groupe à moins de 4 px d'une rangée : placement plausible (vu : 1 px ; l'autre : 7 px ou plus)
 # Titre lu 2 px à gauche de la colonne de cases du groupe (écart de 1 px au plus, 03/10) ; à plus de 5 px d'une
 # colonne, l'infobulle a été repoussée par un bord (vu : 11 à 20 px).
@@ -66,6 +73,9 @@ class GroupTooltip:
     # Lignes de monstres coupées par l'infobulle suivante en dessous (chevauchement) : nombre peut-être faux (25/10, 3
     # lus pour 6), sa hauteur ne dit pas de quel côté est le groupe (under_its_group).
     truncated: bool = False
+    # Lue avec le seuil de nuit (blanc teinté par la nuit, 26/10) : il fait nuit dans le jeu (brain/engage.py s'en sert
+    # pour ne pas lancer de combat tant que la perception de nuit n'est pas sûre).
+    night: bool = False
 
     @property
     def box(self) -> Box:
@@ -77,23 +87,34 @@ class GroupTooltip:
                 and self.top - margin < other.bottom and other.top - margin < self.bottom)
 
 
-def _white(image: np.ndarray) -> np.ndarray:
-    return (image.min(axis=2) >= 200).astype(np.float32)
+WHITE = 200  # blanc du titre « Niveau N », de jour, sur chaque canal
+# 26/10 (journal 011501) : de nuit, la carte ET ses infobulles sont teintées (perception/daylight.py) : le blanc du titre
+# lu (235, 212, 235), le vert sous 200 ; aucune infobulle trouvée, la carte quittée avec 3 groupes dessus, 8 fois de
+# suite. Le même seuil passé par la teinte de nuit pleine (pas de sol tactique hors combat pour en lire la force).
+WHITE_NIGHT = tuple(WHITE * g + o for g, o in zip(NIGHT_GAIN, NIGHT_OFFSET))
 
 
-def _bright_text(image: np.ndarray) -> np.ndarray:
-    """Texte blanc ou jaune clair (titre, noms des monstres)."""
-    return (image[:, :, 2] >= 200) & (image[:, :, 1] >= 200)
+def _white(image: np.ndarray, night: bool = False) -> np.ndarray:
+    if not night:
+        return (image.min(axis=2) >= WHITE).astype(np.float32)
+    b, g, r = WHITE_NIGHT
+    return ((image[:, :, 0] >= b) & (image[:, :, 1] >= g) & (image[:, :, 2] >= r)).astype(np.float32)
+
+
+def _bright_text(image: np.ndarray, night: bool = False) -> np.ndarray:
+    """Texte blanc ou jaune clair (titre, noms des monstres) ; `night` : teinté par la nuit (WHITE_NIGHT)."""
+    _, g, r = WHITE_NIGHT if night else (WHITE, WHITE, WHITE)
+    return (image[:, :, 2] >= r) & (image[:, :, 1] >= g)
 
 
 def _dark(image: np.ndarray) -> np.ndarray:
     return image.max(axis=2) <= 90
 
 
-def _title_words(frame: Frame) -> list[tuple[int, int, int, int]]:
+def _title_words(frame: Frame, night: bool = False) -> list[tuple[int, int, int, int]]:
     """Mots « Niveau » trouvés (x, y, largeur, hauteur), du plus net au moins net."""
     layout = frame.layout
-    template = _white(load_template(NIVEAU))
+    template = _white(load_template(NIVEAU))  # le modèle, de jour
     if abs(layout.scale - 1) > 0.02:
         template = cv2.resize(template, None, fx=layout.scale, fy=layout.scale, interpolation=cv2.INTER_AREA)
     box = layout.map_box
@@ -101,7 +122,7 @@ def _title_words(frame: Frame) -> list[tuple[int, int, int, int]]:
     tx0, ty0, tx1, ty1 = layout.box(*MAP_TITLE_ZONE)
     region[ty0 - box[1] : ty1 - box[1], tx0 - box[0] : tx1 - box[0]] = 0  # pas une infobulle
     th, tw = template.shape
-    scores = cv2.matchTemplate(_white(region), template, cv2.TM_CCOEFF_NORMED)
+    scores = cv2.matchTemplate(_white(region, night), template, cv2.TM_CCOEFF_NORMED)
     words = []
     while True:
         _, score, _, (x, y) = cv2.minMaxLoc(scores)
@@ -111,14 +132,15 @@ def _title_words(frame: Frame) -> list[tuple[int, int, int, int]]:
         scores[max(0, y - th) : y + th, max(0, x - tw) : x + tw] = -1
 
 
-def _tooltip_from_word(frame: Frame, word: tuple[int, int, int, int], stop_y: float) -> GroupTooltip:
+def _tooltip_from_word(frame: Frame, word: tuple[int, int, int, int], stop_y: float,
+                       night: bool = False) -> GroupTooltip:
     """`stop_y` : titre de l'infobulle suivante en dessous (chevauchement) ; ses lignes ne sont pas les nôtres."""
     layout = frame.layout
     s = layout.scale
     wx, wy, ww, wh = word
     title_y = wy + wh / 2
     # Fin du titre « Niveau N » : texte blanc à droite du mot, jusqu'à un blanc de plus de 12 px.
-    row = _white(frame.crop((wx, wy, min(layout.width, wx + ww + round(80 * s)), wy + wh))).sum(axis=0) > 0
+    row = _white(frame.crop((wx, wy, min(layout.width, wx + ww + round(80 * s)), wy + wh)), night).sum(axis=0) > 0
     right_end, gap = ww, 0
     for i in range(ww, len(row)):
         gap = 0 if row[i] else gap + 1
@@ -134,7 +156,7 @@ def _tooltip_from_word(frame: Frame, word: tuple[int, int, int, int], stop_y: fl
         if y + 5 * s >= stop_y:
             truncated = True
             break
-        if not _monster_line(frame, x, y):
+        if not _monster_line(frame, x, y, night):
             break
         monsters += 1
     top = title_y - TEXT_ABOVE * s
@@ -153,17 +175,17 @@ def _tooltip_from_word(frame: Frame, word: tuple[int, int, int, int], stop_y: fl
     clipped = left <= map_left + EDGE_MARGIN * s or right >= map_right - EDGE_MARGIN * s
     if not clipped and abs(_column_offset(x, frame)) > OFF_COLUMN * s:  # décentrée : repoussée, bout caché ?
         clipped = left <= map_left + HIDDEN_EDGE * s or right >= map_right - HIDDEN_EDGE * s
-    return GroupTooltip(x, title_y, top, bottom, left, right, monsters, clipped, truncated)
+    return GroupTooltip(x, title_y, top, bottom, left, right, monsters, clipped, truncated, night)
 
 
-def _monster_line(frame: Frame, x: float, y: int) -> bool:
+def _monster_line(frame: Frame, x: float, y: int, night: bool = False) -> bool:
     """Ligne de texte centrée en (x, y) dans le fond sombre d'une infobulle (pas du sable clair sous elle)."""
     s = frame.layout.scale
     half_h, half_w = round(5 * s), round(LINE_HALF_WIDTH * s)
     band = frame.crop((max(0, round(x) - half_w), max(0, y - half_h), round(x) + half_w, y + half_h))
     if band.size == 0:
         return False
-    text = _bright_text(band)
+    text = _bright_text(band, night)
     rows = (text.sum(axis=1) >= 2).mean()
     return text.sum() >= LINE_TEXT * s * s and rows >= LINE_ROWS and _dark(band).mean() >= LINE_DARK
 
@@ -191,7 +213,14 @@ def can_be_under_its_group(tooltip: GroupTooltip, layout: Layout) -> bool:
 def under_its_group(tooltip: GroupTooltip, frame: Frame) -> bool | None:
     """Infobulle sous son groupe (True) ou au-dessus de lui (False), d'après la case où tomberait le groupe dans
     chaque cas : une seule tombe sur une rangée du réseau. None si aucune ou les deux (relief de la carte, groupe
-    en marche, lignes de monstres mal comptées sous une autre infobulle) : à vérifier en survolant."""
+    en marche, lignes de monstres mal comptées sous une autre infobulle) : à vérifier en survolant.
+
+    Les deux cas sont à une hauteur d'infobulle + 83,5 px de référence l'un de l'autre ; de 6 à 8 monstres, cet écart
+    tombe à 3 px au plus d'un multiple de la demi-hauteur de case (24,5 px) : les deux cases tombent sur une rangée,
+    None (25/10, captures Z des tests et des journaux : 20 infobulles de 6 à 8 monstres sur 20). Seul le haut de la
+    carte départage alors (TOP_REFUSED)."""
+    if tooltip.top - frame.layout.map_box[1] < TOP_REFUSED * frame.layout.scale:
+        return True  # pas de place au-dessus du groupe : l'infobulle est dessous (le haut ne dépend pas des lignes)
     if tooltip.truncated:
         return None  # 25/10, Taïnéla 1,-33 : 3 lignes lues pour 6 monstres, « au-dessus » sûr à tort, clic dans le vide
     grid = frame.grid
@@ -230,12 +259,20 @@ def read_group_level(frame: Frame, tooltip: GroupTooltip) -> int | None:
 
 
 def find_group_tooltips(frame: Frame) -> list[GroupTooltip]:
-    words = _title_words(frame)
+    tooltips = _find_tooltips(frame)
+    # 26/10 (journal 011501) : de nuit, les infobulles sont teintées comme la carte ; leur blanc, (235, 212, 235), ne
+    # passe plus le seuil du jour : aucune trouvée, la carte quittée avec 3 groupes dessus, 8 fois de suite. Le seuil
+    # de nuit seulement si celui du jour ne trouve rien (de jour, les mêmes lectures qu'avant, au pixel près).
+    return tooltips or _find_tooltips(frame, night=True)
+
+
+def _find_tooltips(frame: Frame, night: bool = False) -> list[GroupTooltip]:
+    words = _title_words(frame, night)
     tooltips = []
     for word in words:
         x, y, w, h = word
         # Titre d'une autre infobulle plus bas, dans notre bande de texte : nos lignes s'arrêtent avant.
         below = [oy + oh / 2 - frame.layout.length(12) for ox, oy, ow, oh in words
                  if oy > y and abs((ox + ow / 2) - (x + w / 2)) < frame.layout.length(2 * LINE_HALF_WIDTH)]
-        tooltips.append(_tooltip_from_word(frame, word, min(below, default=float("inf"))))
+        tooltips.append(_tooltip_from_word(frame, word, min(below, default=float("inf")), night))
     return tooltips

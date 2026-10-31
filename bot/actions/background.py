@@ -174,6 +174,26 @@ class BackgroundInput:
         self._last_move = target
         return True
 
+    def double_click(self, point: tuple[float, float], spread: Spread = NO_SPREAD) -> bool:
+        """Vrai double-clic gauche (WM_LBUTTONDBLCLK) : deux clics séparés ne font que sélectionner un objet du sac
+        (27/10, la Faux d'Enu-six : le double-clic l'équipe). False s'il est annulé (hors de la fenêtre)."""
+        if not self._inside(point):
+            log.warning("Double-clic en (%d, %d) annulé : hors de la fenêtre du jeu", round(point[0]), round(point[1]))
+            return False
+        target = self.move(point, spread)
+        if not self.enabled:
+            return True
+        self._react()
+        where = self._client(target)
+        log.debug("Double-clic en %s (arrière-plan)", target)
+        self._post(win32con.WM_MOUSEMOVE, 0, where)
+        self._post(win32con.WM_LBUTTONDOWN, win32con.MK_LBUTTON, where)
+        self._post(win32con.WM_LBUTTONUP, 0, where)
+        self._post(win32con.WM_LBUTTONDBLCLK, win32con.MK_LBUTTON, where)
+        self._post(win32con.WM_LBUTTONUP, 0, where)
+        self._last_move = target
+        return True
+
     def wheel(self, point: tuple[float, float], notches: int, spread: Spread = NO_SPREAD) -> bool:
         """Molette sur `point` : `notches` crans vers le bas (négatif : vers le haut). Coordonnées d'écran, comme le
         veut ce message. Pas encore essayé en arrière-plan : la liste des sorts a la flèche du bas en secours."""

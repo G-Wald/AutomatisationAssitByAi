@@ -3,6 +3,7 @@
 import logging
 import random
 import time
+from dataclasses import replace
 
 import numpy as np
 
@@ -782,7 +783,7 @@ def test_spell_refused_after_a_move_this_turn_is_tried_again(monkeypatch):
                        ("_confirm_cast", lambda *a: None), ("_read_life", lambda *a: None)):
         monkeypatch.setattr(ai, name, stub)
     me, enemy = Fighter(RED, *frame.grid.center((8, 22)), (8, 22)), Fighter("blue", *frame.grid.center((12, 18)), (12, 18))
-    ai._turn_stats().moves = 1  # un pas vient d'être fait, aucun lancer récent
+    ai._moved_at = time.monotonic()  # un pas vient de finir, aucun lancer récent (25/10 : plus « un pas ce tour »)
     assert ai._cast(frame, me, enemy, [me, enemy], RED, MAGIQUE) is Cast.DONE and not answers
 
 
@@ -798,3 +799,95 @@ def test_team_boost_counts_for_every_ally():
     alone = CombatSpell(2, "cupidite", "Cupidité", 4, (0, 0), cooldown=6, boost_pct=50.0, boost_turns=5,
                         role="boost_degats")
     assert plan((0, 0), 0, [(6, 2)], [pieces, alone], pa=6).casts[0].spell is pieces  # pour moi seul : 3 Pièces valent mieux
+
+
+# Tir Éloigné tel qu'en combat (niveau 4) : +PO dans un cercle de rayon 2 autour de moi, alliés compris.
+TIR_ZONE = replace(TIR, boost_zone=("cercle", 2))
+BEHIND_ME = {(-1, 1): "Eldieso", (-1, -1): "Fourboun", (-2, 0): "Pesopepe"}  # dans le cercle de ma case (0, 0)
+
+
+def test_zone_of_a_boost_known_from_the_reference():
+    # 27/10 : « Tir Eloigné : ... ; zone : cercle de rayon 2 autour de la cible (13 cases) ». La zone des dégâts
+    # (`zone`) reste un point : un allié dans celle du bonus n'empêche pas de le lancer.
+    tir = reference_spell("172", 6, 4)
+    assert tir.role == "boost_portee" and tir.boost_zone == ("cercle", 2) and tir.zone == ("point", 0)
+    assert reference_spell("172", 6, 6).boost_zone == ("cercle", 3)
+    assert reference_spell("180", 11, 5).boost_zone == ("point", 0)  # Maîtrise de l'Arc : moi seul
+    assert reference_spell("161", 3, 6).boost_zone == ("point", 0)  # une attaque
+
+
+def test_zone_boost_cast_before_moving_when_it_reaches_more_allies():
+    # 27/10, l'utilisateur : « des alliés auraient pu profiter » de Tir Éloigné. Trois alliés autour de moi, l'ennemi
+    # à 14 cases : même déplacement, mêmes dégâts, mais le bonus part de ma case, avant de m'éloigner d'eux.
+    enemies, allies = [(14, 0)], list(BEHIND_ME)
+    before = plan_turn((0, 0), 3, enemies, allies, [TIR, MAGIQUE], new_use(6), OPEN, Weights(), names=BEHIND_ME)
+    assert kinds(before) == [MOVE, CAST, CAST] and before.steps[1].spell is TIR  # sans zone connue : après le pas
+    turn = plan_turn((0, 0), 3, enemies, allies, [TIR_ZONE, MAGIQUE], new_use(6), OPEN, Weights(), names=BEHIND_ME)
+    assert kinds(turn) == [CAST, MOVE, CAST]
+    boost, move, attack = turn.steps
+    assert boost.spell is TIR_ZONE and boost.cell == (0, 0) and set(boost.allies) == set(BEHIND_ME)
+    assert move.cell == before.steps[0].cell and move.pm == before.steps[0].pm  # pas un pas de plus pour eux
+    assert attack.spell is MAGIQUE and turn.damage == before.damage
+    assert boost.reason == ("bonus de portée en début de tour, 3 alliés dans la zone (Pesopepe, Fourboun, Eldieso), "
+                            f"lancé avant d'aller en {move.cell} (de là-bas : 0)")
+    assert turn.describe().startswith("Plan : Tir Éloigné sur moi (3 alliés dans la zone), aller en ")
+
+
+def test_zone_boost_never_worth_a_step_by_itself():
+    # Sans en faire une priorité : jamais un pas, un PA ou un point de dégâts pour mettre des alliés dans la zone.
+    for enemies, allies, pm in (([(11, 1)], [(3, 1), (4, 2), (3, 3)], 3),  # alliés à 1 pas de la zone
+                                ([(6, 2)], [(-2, 0), (-1, 1)], 0)):  # tout à portée : pas de bonus de portée pour eux
+        alone = plan(((0, 0)), pm, enemies, [TIR, MAGIQUE], allies=allies, pa=6)
+        shared = plan(((0, 0)), pm, enemies, [TIR_ZONE, MAGIQUE], allies=allies, pa=6)
+        assert [(s.kind, s.cell, s.spell and s.spell.spell_id) for s in shared.steps] ==             [(s.kind, s.cell, s.spell and s.spell.spell_id) for s in alone.steps]
+        assert shared.damage == alone.damage
+    assert TIR not in [s.spell for s in alone.casts]
+
+
+def test_zone_boost_breaks_a_tie_between_two_cells():
+    # Deux cases à 1 PM, symétriques, d'où Flèche Magique (avec le bonus) touche l'ennemi à 11 cases : la première
+    # venue ((1, -1)), sauf si de l'autre le cercle du bonus prend un allié.
+    ally = {(2, 3): "Eldieso"}
+    alone = plan_turn((0, 0), 1, [(12, 0)], list(ally), [TIR, MAGIQUE], new_use(6), OPEN, Weights(), names=ally)
+    assert alone.steps[0].kind == MOVE and alone.steps[0].cell == (1, -1)
+    turn = plan_turn((0, 0), 1, [(12, 0)], list(ally), [TIR_ZONE, MAGIQUE], new_use(6), OPEN, Weights(), names=ally)
+    move, boost, attack = turn.steps
+    assert move.cell == (1, 1) and boost.allies == ((2, 3),) and attack.spell is MAGIQUE
+    assert boost.reason == "bonus de portée en début de tour, 1 allié dans la zone (Eldieso)"
+    assert abs(turn.score - alone.score - Weights().boost_ally) < 1e-6  # un petit plus, rien de plus
+
+
+def test_team_boost_says_nothing_of_a_zone():
+    # Cupidité (toute la carte) : déjà comptée pour chaque allié (TEAM_BOOST), pas de petit plus en double.
+    pieces = CombatSpell(1, "pieces", "Lancer de Pièces", 2, (1, 10), damage=20.0)
+    cupidite = CombatSpell(2, "cupidite", "Cupidité", 4, (0, 0), cooldown=6, boost_pct=50.0, boost_turns=5,
+                           role="boost_degats", team_boost=True, boost_zone=("cercle", 63))
+    turn = plan((0, 0), 0, [(6, 2)], [pieces, cupidite], allies=[(2, 2), (3, 3), (4, 4), (5, 5)], pa=6)
+    assert turn.casts[0].spell is cupidite and turn.casts[0].allies == () and "dans la zone" not in turn.describe()
+
+
+def test_after_a_boost_cast_before_the_move_the_next_plan_may_move(monkeypatch):
+    # combat.py : après un sort, le plan suivant part de ma case (« committed ») ; pas après un bonus lancé avant le
+    # déplacement prévu (le plan suivant irait sinon taper d'ici, moins bien).
+    from bot.brain.combat import Cast
+    from bot.brain.engine import Step, TurnPlan
+
+    frame, end = load_frame("combat_sadida_derriere_allies_tour1"), load_frame("combat_tour_adversaire")
+    game = FakeGame(*[frame] * 30, end)
+    ai = CombatAI(game, CombatSettings())
+    ai._spells = [TIR_ZONE, MAGIQUE]
+    boost = Step(CAST, (8, 26), TIR_ZONE, reason="bonus de portée en début de tour")
+    move, attack = Step(MOVE, (9, 27), pm=1, reason="pour lancer d'ici"), Step(CAST, (13, 21), MAGIQUE, damage=13)
+    plans = [TurnPlan((boost, move, attack)), TurnPlan((move, attack)), TurnPlan((attack,)), TurnPlan()]
+    asked = []
+
+    def scripted(frame, me, enemies, allies, pm, avoid=frozenset(), missed=frozenset(), can_move=True,
+                 move_first=True):
+        asked.append(move_first)
+        return plans.pop(0) if plans else TurnPlan()
+
+    monkeypatch.setattr(ai, "_plan", scripted)
+    monkeypatch.setattr(ai, "_cast", lambda *args, **kwargs: Cast.DONE)
+    monkeypatch.setattr(ai, "_walk", lambda frame, me, best, fighters, zone, label, steps=None, retry=True: steps)
+    ai.play_turn(RED, is_mine=lambda f: f is not end, me_cell=(8, 26), team_cells=lambda: dict(TOUR_1))
+    assert asked[:3] == [True, True, False]  # après le bonus : libre d'aller ; après le pas : on lance d'ici

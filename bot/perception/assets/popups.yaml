@@ -8,6 +8,7 @@
 #   threshold: 0.85              ressemblance minimale (0 à 1), facultatif
 #   detect_also: [autre.png]     autres modèles du titre (autre qualité graphique), facultatif
 #   pair_threshold: 0.8          titre OU bouton au seuil suffit si l'autre atteint ce score, facultatif
+#   close_x: 1674                abscisse du bouton (repère de référence), exigée sous la carte, facultatif
 
 popups:
   - name: informations (niveau supérieur)
@@ -21,6 +22,9 @@ popups:
     pair_threshold: 0.8                 # titre ou bouton à 0,85 suffit si l'autre dépasse 0,80 (autres fenêtres des
                                         # tests : titre à 0,55 au plus)
     close: fin_de_combat_fermer.png     # bouton « Fermer » sous la fenêtre
+    close_x: 1674                       # son abscisse (repère de référence), la même quelle que soit la taille de la
+                                        # fenêtre : 1672,9 à 1676,0 sur 13 captures ; exigée sous la carte, où un faux
+                                        # « Fermer » sur la barre de raccourcis a fait boire une potion (25/10)
   - name: échange
     detect: echange_fleches.png         # double flèche entre les deux moitiés de la fenêtre d'échange (25/10, Pombro :
                                         # échange proposé par un autre joueur, ouvert à la connexion ; la carte et

@@ -36,8 +36,9 @@ def test_failure_captures_kept_once_the_routine_ones_are_used_up(tmp_path):
     # 17/10 : 300 captures courantes avant 13:03, puis plus aucune capture des attaques ratées.
     recorder = Recorder(tmp_path, max_images=6)
     image = np.zeros((4, 4, 3), np.uint8)
-    assert all(recorder.save(image, "tour") is not None for _ in range(6))
-    assert recorder.save(image, "tour") is None
+    # Libellés différents : le quota par libellé (25/10, tests/test_fiabilite_equipe.py) ne joue pas ici.
+    assert all(recorder.save(image, f"tour{i}") is not None for i in range(6))
+    assert recorder.save(image, "tour6") is None
     assert recorder.save(image, "menu_attaquer_absent", lossless=True).name == "0007_menu_attaquer_absent.png"
     assert recorder.save(image, "echec", lossless=True) is not None
-    assert recorder.save(image, "echec", lossless=True) is None  # 6 // 3 captures d'échec au plus
+    assert recorder.save(image, "echec2", lossless=True) is None  # 6 // 3 captures d'échec au plus

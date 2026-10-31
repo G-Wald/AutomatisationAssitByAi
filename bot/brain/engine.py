@@ -13,7 +13,9 @@ Pour chaque case atteignable avec les PM (rester sur place compris) :
    portée (+ bonus de portée pour les sorts à portée modifiable, valable dès le tour où il est lancé), lancer en
    ligne, ligne de vue prédite ; les sorts de bonus (portée, dégâts) avant toute attaque du tour, et suivis d'une
    attaque : un bonus de dégâts augmente les dégâts des sorts lancés après lui (« si on a la portée pour taper,
-   autant booster les dégâts », 04/10), et vaut un peu pour les tours suivants qu'il dure ;
+   autant booster les dégâts », 04/10), et vaut un peu pour les tours suivants qu'il dure ; un bonus de zone autour
+   de moi (Tir Éloigné) vaut un tout petit peu par allié qu'il prend, de quoi départager seulement, et part de ma case
+   de départ, avant le déplacement, s'il y en prend plus (27/10) ;
    zones (point, cercle, croix, ligne, ligne perpendiculaire, anneau, damier) : une zone peut viser une case vide
    (juste devant deux ennemis alignés, entre trois ennemis) ; un sort qui toucherait un allié ou moi n'est pas
    lancé ; recul simulé : l'ennemi poussé change de case pour les sorts suivants, poussée contre un obstacle ou un
@@ -132,6 +134,13 @@ BOOST_CARRY = 0.5
 # Bonus d'équipe (Cupidité) : ce qu'il ajoute à ma meilleure attaque, compté pour chaque allié, à cette part, sur ses
 # tours (3 au plus) : le plus souvent le meilleur sort du tour (25/10, l'utilisateur).
 TEAM_BOOST = 0.5
+# Bonus de zone autour de ma case (Tir Éloigné ; 27/10, demande de l'utilisateur : que les alliés autour en profitent,
+# « sans en faire une priorité ») : par allié dans la zone, BOOST_ALLIES alliés comptés au plus. 0,15 en tout : moins
+# qu'une case d'écart avec l'ennemi (SAFE_DISTANCE) ou qu'un PM (SPARE_PM_COST), les plus petits poids du score : il
+# ne fait jamais faire un pas, lancer un sort ni perdre un point de dégâts, il départage des plans à peu près égaux.
+# S'il prend plus d'alliés de ma case de départ, il y est lancé avant le déplacement (plan) : même effet pour moi.
+BOOST_ALLY = 0.05
+BOOST_ALLIES = 3
 MAX_CASTS = 6  # sorts au plus dans un plan (12 PA en sorts à 2 PA)
 ZONE_SEARCH = 4  # cases vides visées par une zone : à 4 cases au plus d'un ennemi (au-delà, viser l'ennemi suffit)
 EPSILON = 1e-6
@@ -151,6 +160,7 @@ class Weights:
     range_bonus: float = RANGE_BONUS_VALUE
     boost_carry: float = BOOST_CARRY
     team_boost: float = TEAM_BOOST
+    boost_ally: float = BOOST_ALLY
     zone_falloff: float = ZONE_FALLOFF  # part des dégâts perdue par case entre la case visée et l'ennemi touché
     hit: float = HIT_BONUS
     kill: float = KILL_BONUS
@@ -188,6 +198,7 @@ class Step:
     damage: float = 0.0
     value: float = 0.0  # dégâts + dégâts de poussée (le danger écarté compte pour la suite entière)
     reason: str = ""
+    allies: tuple[Cell, ...] = ()  # alliés dans la zone d'un bonus lancé sur moi (Tir Éloigné), qui en profitent
 
     def describe(self) -> str:
         if self.kind == MOVE:
@@ -197,7 +208,8 @@ class Step:
         if self.kind == POSITION:
             return f"me placer en {self.cell} pour le prochain tour ({self.pm} PM)"
         if self.spell.on_self:
-            return f"{self.spell.name} sur moi"
+            return f"{self.spell.name} sur moi" + (f" ({_allies_text(len(self.allies))} dans la zone)"
+                                                   if self.allies else "")
         on = f"sur {self.cell}" if self.cell in self.hits else f"sur la case {self.cell}"
         return f"{self.spell.name} {on}" + (f" ({len(self.hits)} ennemis touchés)" if len(self.hits) > 1 else "")
 
@@ -475,27 +487,34 @@ class _Planner:
     def _targets(self, spell: CombatSpell, origin: Cell, positions: tuple[Cell, ...]) -> list[Cell]:
         """Cases à viser : les ennemis, puis pour une zone les cases vides d'où elle prend un ennemi, les plus
         proches de lui d'abord (à effet égal, c'est celle-là qui est gardée : elle touche encore si la zone est
-        un peu plus petite que prévu)."""
+        un peu plus petite que prévu).
+
+        Une case vide visée est toujours du sol : le jeu refuse un sort sur un bloc ou un trou. 25/10 (journaux 155334,
+        171736, 181212, cartes officielles reconnues) : zones visées sur une case vide, 8 sur 8 refusées sur un bloc ou
+        un trou (Ronces Multiples de Fourboun 4 fois, Oeil de Taupe 4 fois), 5 sur 30 sur du sol ; Fourboun, seul en
+        combat à 17:26, avançait de 3 PM pour viser un bloc, deux tours de suite, avant de mourir à 17:27. Ni une case
+        jamais vue (peut-être un trou)."""
         if spell.on_self:
             return [origin]
         shape, size = spell.zone
         targets = list(dict.fromkeys(positions))
         if size <= 0 or shape == "point":
             return targets
+        ground = self.board.cells - self.board.unwalkable - self.board.unseen
         if shape == "ligne":  # cases alignées entre moi et un ennemi aligné, à `size` cases au plus devant lui
             for p in positions:
                 if aligned(origin, p):
                     ui, uj = unit(origin, p)
                     far = distance(origin, p)
                     targets += [cell for k in range(far - 1, max(0, far - size - 1), -1)
-                                if (cell := (origin[0] + k * ui, origin[1] + k * uj)) in self.board.cells]
+                                if (cell := (origin[0] + k * ui, origin[1] + k * uj)) in ground]
             return list(dict.fromkeys(targets))
         if shape in ("cercle", "croix", "anneau", "damier"):  # zones symétriques : t prend p <=> p dans la zone de t
             radius = min(size, ZONE_SEARCH)
             around = sorted(((di, dj) for di in range(-radius, radius + 1) for dj in range(-radius, radius + 1)
                              if (di + dj) % 2 == 0), key=lambda d: max(abs(d[0]), abs(d[1])))
             for p in positions:
-                targets += [cell for di, dj in around if (cell := (p[0] + di, p[1] + dj)) in self.board.cells
+                targets += [cell for di, dj in around if (cell := (p[0] + di, p[1] + dj)) in ground
                             and in_zone(shape, size, origin, cell, p)]
             return list(dict.fromkeys(targets))
         return targets
@@ -513,6 +532,7 @@ class _Planner:
         at_start = origin == self.me
         loose = at_start and not self.board.reliable
         margin = self.board.margin if loose else 0
+        blind = self.use.blind_targets  # montrés sans ligne de vue par le jeu depuis 2 de mes cases ce tour
         for spell in self.spells:
             low, high = spell_range(spell, self.use)
             if spell.range_modifiable:
@@ -532,6 +552,8 @@ class _Planner:
                         continue
                     if spell.needs_sight and not loose and not self._sight(origin, target, positions):
                         continue
+                    if spell.needs_sight and target in blind:
+                        continue
                 if at_start and (spell.spell_id, target) in self.use.refused:
                     continue  # refusé d'ici (combat.py les oublie après un déplacement) : d'une autre case, on verra
                 if target not in self.enemies and ((at_start and spell.spell_id in self.use.empty_refused)
@@ -546,10 +568,12 @@ class _Planner:
                 hits = tuple(zone_hits(shape, size, origin, target, positions))
                 if spell.damage <= 0:
                     if spell.on_self and spell.range_bonus:
-                        options.append(_Option(spell, target, (), None, 0.0, self.w.range_bonus, (), None,
+                        options.append(_Option(spell, target, (), None, 0.0,
+                                               self.w.range_bonus + self._sharing(spell, origin), (), None,
                                                "bonus de portée en début de tour"))
                     elif spell.on_self and spell.damage_boost:
-                        options.append(_Option(spell, target, (), None, 0.0, self._carry(spell), (), None,
+                        options.append(_Option(spell, target, (), None, 0.0,
+                                               self._carry(spell) + self._sharing(spell, origin), (), None,
                                                f"bonus de dégâts ({_boost_text(spell)}) avant de taper"))
                     break
                 if not hits:
@@ -598,6 +622,31 @@ class _Planner:
                     if s.damage > 0 and not s.on_self), default=0.0)
         team = self.w.team_boost * gain * len(self.allies) * min(max(boost.boost_turns, 1), 3) if boost.team_boost else 0.0
         return self.w.boost_carry * turns * gain + team
+
+    def _covered(self, spell: CombatSpell, cell: Cell) -> tuple[Cell, ...]:
+        """Alliés dans la zone d'un bonus lancé sur moi depuis `cell` (Tir Éloigné : cercle autour de ma case) ; aucun
+        pour un bonus d'équipe (toute la carte : déjà compté pour chaque allié, _carry)."""
+        shape, size = spell.boost_zone
+        if size <= 0 or spell.team_boost or not self.ally_cells:
+            return ()
+        return tuple(self.ally_cells[i] for i in zone_hits(shape, size, cell, cell, self.ally_cells))
+
+    def _sharing(self, spell: CombatSpell, origin: Cell) -> float:
+        """Petit plus d'un bonus de zone pour les alliés qu'il prend (BOOST_ALLY, départage seulement) : lancé de
+        `origin`, ou de ma case de départ s'il y en prend plus (avant le déplacement, plan)."""
+        count = max(len(self._covered(spell, origin)), len(self._covered(spell, self.me)))
+        return self.w.boost_ally * min(count, BOOST_ALLIES)
+
+    def _shared_note(self, spell: CombatSpell, cell: Cell, there: Cell | None = None) -> str:
+        """Pour le journal : alliés dans la zone du bonus lancé de `cell` ; `there` : case où je vais ensuite, d'où il
+        en aurait pris moins (lancé avant le déplacement)."""
+        covered = self._covered(spell, cell)
+        if not covered:
+            return ""
+        note = f"{_allies_text(len(covered))} dans la zone ({', '.join(self._name(a) for a in covered)})"
+        if there is not None:
+            note += f", lancé avant d'aller en {there} (de là-bas : {len(self._covered(spell, there))})"
+        return note
 
     def _push(self, spell: CombatSpell, origin: Cell, center: Cell, positions: tuple[Cell, ...],
               hits: tuple[int, ...]) -> tuple[tuple[Cell, ...] | None, int]:
@@ -873,12 +922,28 @@ class _Planner:
         if not chosen.casts:
             return self._position()  # rien ne touche ce tour, ou pas à ce prix : se placer pour le suivant
         steps = []
+        # Bonus de zone sur moi (Tir Éloigné) qui prend plus d'alliés de ma case de départ que de celle où je vais :
+        # lancé ici, avant le déplacement (27/10, demande de l'utilisateur) ; les bonus passent avant toute attaque, et
+        # valent pour moi d'où qu'ils partent. combat.py ne se tient pas à cette case après lui (pas de « committed »).
+        early = [] if chosen_cell == self.me else \
+            [n for n, o in enumerate(chosen.casts) if o.damage <= 0 and o.spell.on_self
+             and len(self._covered(o.spell, self.me)) > len(self._covered(o.spell, chosen_cell))]
+        for n in early:
+            option = chosen.casts[n]
+            note = self._shared_note(option.spell, self.me, chosen_cell)
+            steps.append(Step(CAST, self.me, option.spell, value=option.value, reason=f"{option.reason}, {note}",
+                              allies=self._covered(option.spell, self.me)))
         if chosen_cell != self.me:
             steps.append(Step(MOVE, chosen_cell, pm=chosen_pm, reason=self._why_move(chosen_cell, chosen.casts[0])))
         positions = self.enemies
-        for option in chosen.casts:
+        for n, option in enumerate(chosen.casts):
+            if n in early:
+                continue
+            covered = self._covered(option.spell, chosen_cell) if option.damage <= 0 and option.spell.on_self else ()
+            note = self._shared_note(option.spell, chosen_cell) if covered else ""
             steps.append(Step(CAST, option.target, option.spell, hits=tuple(positions[i] for i in option.hits),
-                              damage=option.damage, value=option.value, reason=option.reason))
+                              damage=option.damage, value=option.value,
+                              reason=f"{option.reason}, {note}" if note else option.reason, allies=covered))
             positions = option.positions or positions
         if chosen.finish.cell is not None:
             reason = self._why_end(chosen_cell, chosen.finish.cell, chosen.alive)
@@ -986,6 +1051,11 @@ def _lasting(spell: CombatSpell) -> bool:
     return spell.damage <= 0 and max(spell.boost_turns, spell.bonus_turns) >= 2
 
 
+def _allies_text(count: int) -> str:
+    """« 1 allié », « 3 alliés »."""
+    return f"{count} allié{'s' if count > 1 else ''}"
+
+
 def _boost_text(spell: CombatSpell) -> str:
     """« +40 par coup », « +140 % », « +7 par coup et +20 % »."""
     parts = ([f"+{spell.boost_flat:g} par coup"] if spell.boost_flat else []) + \
@@ -1063,6 +1133,10 @@ def cast_blocker(spell: CombatSpell, me: Cell, target: Cell, enemies: list[Cell]
         return "relance ou lancers du tour épuisés"
     if (spell.spell_id, target) in use.refused:
         return "refusé d'ici par le jeu"
+    if spell.needs_sight and target in use.blind_targets:
+        return f"montré sans ligne de vue par le jeu depuis {len(use.no_sight[target])} de mes cases ce tour"
+    if target not in enemies and target in board.unwalkable | board.unseen:
+        return "case visée hors du sol (bloc ou trou)"
     low, high = spell_range(spell, use)
     gap = distance(me, target)
     if gap >= use.beyond.get(spell.spell_id, gap + 1):

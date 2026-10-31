@@ -70,6 +70,9 @@ class Game:
             if frame is None:
                 self._park()
                 frame = self._grab()
+        net = getattr(self, "net", None)
+        if net is not None:
+            object.__setattr__(frame, "net", net)  # phase du jeu d'après le serveur (state/scene.py)
         return frame
 
     def _step_aside(self) -> Frame | None:
@@ -157,6 +160,13 @@ class Game:
     def click(self, point: tuple[float, float] | None = None, spread: Spread = NO_SPREAD, button: str = "left") -> bool:
         """False si le clic a été annulé (une autre fenêtre sous la souris)."""
         return self.input.click(point, spread, button) is not False
+
+    def double_click(self, point: tuple[float, float], spread: Spread = NO_SPREAD) -> bool:
+        """Double-clic (équiper un objet du sac) ; au premier plan, deux clics rapides. False s'il est annulé."""
+        double = getattr(self.input, "double_click", None)
+        if double is not None:
+            return double(point, spread) is not False
+        return self.click(point, spread) and self.click(point)
 
     def wheel(self, point: tuple[float, float], notches: int, spread: Spread = NO_SPREAD) -> bool:
         """Molette sur `point` : `notches` crans vers le bas (négatif : vers le haut). False si c'est annulé."""

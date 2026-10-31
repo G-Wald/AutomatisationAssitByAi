@@ -42,7 +42,7 @@ def entry_banner(frame: Frame) -> bool:
 def read_placement(frame: Frame) -> Placement:
     grid = frame.grid
     height, width = frame.image.shape[:2]
-    masks = {team: team_mask(frame.image, team) for team in TEAMS}
+    masks = {team: team_mask(frame.day_image, team) for team in TEAMS}  # couleurs du jour (nuit : daylight.py)
     free: dict[str, set[Cell]] = {team: set() for team in TEAMS}
     occupied: dict[str, set[Cell]] = {team: set() for team in TEAMS}
     # Losange intérieur d'une case, en décalages de pixels autour de son centre.

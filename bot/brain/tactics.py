@@ -21,6 +21,11 @@ from bot.perception.grid import Cell
 DANGER_DISTANCE = 3
 PUSH_BLOCKED_BONUS = 6.0  # dégâts de poussée estimés quand la cible repoussée heurte un obstacle
 HITS_KEPT = 20  # dégâts mesurés gardés par sort (les plus récents)
+# 25/10 (journaux 153121 à 181212, 62 « pas de ligne de vue d'après la portée affichée ») : 9 sur un ennemi que le jeu
+# avait déjà montré sans ligne de vue depuis une autre de mes cases ce tour, 3 depuis deux autres (Eldieso, 18:49 et
+# 18:50 : (21, 11) visé de 3 cases, un pas de 1 PM entre chaque, aucun sort parti). Vu ainsi de 2 cases : plus visé ce
+# tour avec un sort à ligne de vue (SpellUse.blind_targets).
+SIGHT_DOUBT_CELLS = 2
 
 
 @dataclass(frozen=True)
@@ -55,6 +60,10 @@ class CombatSpell:
     # dommages fixes), poisons comptés à chaque tour. None : inconnus (sort configuré) -> damage et 1 ligne.
     damage_base: float | None = None
     damage_lines: float | None = None
+    # Zone du bonus autour de ma case (Tir Éloigné : cercle de rayon 2, 3 au niveau 6) : les alliés dedans en profitent
+    # aussi (27/10, demande de l'utilisateur). ("point", 0) : moi seul. Pas celle des dégâts (`zone`) : un allié dans
+    # cette zone-là est une raison de ne pas lancer, dans celle-ci un petit plus (engine, BOOST_ALLY).
+    boost_zone: tuple[str, int] = ("point", 0)
 
     @property
     def damage_boost(self) -> bool:
@@ -96,6 +105,10 @@ class SpellUse:
     # plus que des ennemis jusqu'à la fin du combat. 18/10, Chafers 3,6 : la même case vide (18, 10) refusée à
     # Vertdepomme depuis 3 cases de suite, un pas entre chaque (le pas efface `empty_refused`).
     empty_refusals: Counter = field(default_factory=Counter)
+    # Ennemis que la portée affichée par le jeu a montrés sans ligne de vue ce tour : case de l'ennemi -> cases d'où je
+    # l'ai vu ainsi. Pas oubliés après un déplacement (refused, lui, l'est) : à SIGHT_DOUBT_CELLS cases, la prévision
+    # de ligne de vue sur lui ne vaut plus rien ce tour (blind_targets).
+    no_sight: dict = field(default_factory=dict)
     unavailable: set = field(default_factory=set)  # sorts non sélectionnables ce tour
     greyed: set = field(default_factory=set)  # sorts grisés dans la barre sur la dernière capture
     measured: dict[str, tuple[int, int]] = field(default_factory=dict)  # portée affichée ce tour
@@ -115,9 +128,16 @@ class SpellUse:
         self.refused.clear()
         self.beyond.clear()
         self.empty_refused.clear()
+        self.no_sight.clear()
         self.unavailable.clear()
         self.greyed.clear()
         self.measured.clear()
+
+    @property
+    def blind_targets(self) -> set:
+        """Ennemis à ne plus viser ce tour avec un sort qui demande la ligne de vue, d'où que ce soit : le jeu les a
+        montrés sans ligne de vue depuis SIGHT_DOUBT_CELLS de mes cases (voir no_sight)."""
+        return {target for target, cells in self.no_sight.items() if len(cells) >= SIGHT_DOUBT_CELLS}
 
     @property
     def range_bonus(self) -> int:
@@ -219,6 +239,16 @@ def refusals(refused: CombatSpell, target: Cell, spells: list[CombatSpell], use:
             same.add((spell.spell_id, target))
     return same
 
+
+
+def sight_refusals(target: Cell, spells: list[CombatSpell]) -> set[tuple[str, Cell]]:
+    """La portée affichée par le jeu montre `target` sans ligne de vue d'ici : aucun sort qui la demande ne partira sur
+    lui d'ici, quelle que soit sa portée (la ligne de vue ne dépend pas du sort). refusals, faite pour le curseur
+    « interdit » (hors de portée OU sans ligne de vue), ne retient que les sorts de portée incluse : 25/10 (journal
+    181212, Eldieso 18:47) Flèche d'Expiation (8 à 14) montrée sans ligne de vue sur (9, 13), puis Flèche Magique (1 à
+    14) essayée sur lui de la même case, même réponse ; 18 fois sur 62 dans les journaux du 25/10. Entrées pour
+    SpellUse.refused (oubliées après un déplacement)."""
+    return {(spell.spell_id, target) for spell in spells if not spell.on_self and spell.needs_sight}
 
 
 def refusals_on_hit_target(target: Cell, spells: list[CombatSpell], use: SpellUse) -> set[tuple[str, Cell]]:

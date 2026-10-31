@@ -792,6 +792,18 @@ def test_fighters_found_on_cells_one_ground_level_lower():
     assert len({(f.team, f.cell) for f in fighters}) == len(fighters)
 
 
+def test_flash_close_point_when_the_menu_covers_the_spell_bar():
+    # 25/10 (journal 171736, Elseiso) : menu de Flash ouvert par le clic droit sur la case 8 (Tir Puissant), par-dessus
+    # le point sous la 2e rangée de sorts ; le fond beige du bas, à droite du bouton de fin de tour, reste libre.
+    frame = load_frame("combat_menu_flash_sur_la_barre")
+    assert find_flash_menu(frame, anywhere=True) is not None
+    x, y = flash_close_point(frame)
+    assert not frame.layout.on_map((x, y)) and y > frame.layout.height * 0.95
+    r = round(frame.layout.length(6))
+    patch = frame.image[y - r : y + r + 1, x - r : x + r + 1].astype(int)
+    assert (np.abs(patch - np.array(UI_BEIGE)).max(axis=2) <= 10).all()
+
+
 def test_flash_close_point_stays_off_the_fights_eye():
     # 25/10 : l'œil « combats en cours » (un autre combat sur la carte) juste au-dessus de l'ancien point de fermeture
     # du menu de Flash : le clic l'a ouvert. Le point est descendu dans la bande beige, beige uni au-dessus de lui.
@@ -802,3 +814,22 @@ def test_flash_close_point_stays_off_the_fights_eye():
     assert (np.abs(patch - np.array(UI_BEIGE)).max(axis=2) <= 10).all()
     eye_y = frame.layout.point(1465, 991)[1] - round(frame.layout.length(20))  # l'œil, ~20 px au-dessus de l'ancien point
     assert y - eye_y >= frame.layout.length(25)
+
+
+@pytest.mark.parametrize("alpha, found", [(1.0, True), (0.75, False)])
+def test_result_close_button_below_the_map_must_be_sure_on_its_own(alpha, found):
+    # 25/10 (journal 181212, combat 17) : « Résultat du combat » en train de s'ouvrir, titre sûr, bouton pas encore
+    # dessiné ; « Fermer » cru à 0,80 sur un objet de la barre de raccourcis, cliqué à l'aveugle dans les 8 fenêtres :
+    # Elseiso a bu une potion de rappel (Brâkmar). Sous la carte, le bouton doit être sûr à lui seul (avec 8
+    # personnages, le vrai y est). Bouton effacé de sous la fenêtre, recollé sous la carte, net ou à demi mêlé au fond.
+    frame = load_frame("fin_de_combat")
+    image = frame.image.copy()
+    (x, y) = find_known_popup(frame, load_popup_specs()).close_point
+    h, w = 21, 150
+    button = image[y - h // 2 : y - h // 2 + h, x - w // 2 : x - w // 2 + w].astype(float)
+    image[y - h // 2 : y - h // 2 + h, x - w // 2 : x - w // 2 + w] = image[y - 40, x]  # fond de la fenêtre
+    bar_y = frame.layout.map_box[3] + 5
+    background = image[bar_y : bar_y + h, x - w // 2 : x - w // 2 + w].astype(float)
+    image[bar_y : bar_y + h, x - w // 2 : x - w // 2 + w] = (alpha * button + (1 - alpha) * background).astype(np.uint8)
+    match = find_known_popup(Frame.of(image), load_popup_specs())
+    assert (match is not None) == found

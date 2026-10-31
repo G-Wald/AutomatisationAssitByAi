@@ -468,14 +468,14 @@ def test_group_on_sand_attacked_at_the_first_hover():
 
 
 def test_engage_finds_group_below_its_tooltip_and_attacks():
-    # Déplacé de test_brain.py (03/10), avec le survol simulé : 1er survol (50 px sous l'infobulle) : rien ; 2e (62 px)
+    # Déplacé de test_brain.py (03/10), avec le survol simulé : 1er survol (57 px sous l'infobulle) : rien ; 2e (47 px)
     # sur le groupe ; clic -> menu ; clic Attaquer -> placement.
     groups = load_frame("hors_combat_detection_enemi")  # une infobulle (x 1196, bas 400)
-    game = HoverGame(groups, load_frame("hors_combat"), {(1186, 456, 1206, 470): groups})
+    game = HoverGame(groups, load_frame("hors_combat"), {(1186, 441, 1206, 452): groups})
     assert Engager(game, EngageSettings()).engage()
     assert ("hold", "z") in game.actions
     group_click, attack_click = clicks(game)
-    assert abs(group_click[0] - 1196) <= 2 and abs(group_click[1] - 462) <= 2
+    assert abs(group_click[0] - 1196) <= 2 and abs(group_click[1] - 447) <= 2
     assert inside(attack_click, game.menu_box)  # entrée « Attaquer »
 
 
@@ -535,9 +535,9 @@ def sand_background_game(**kwargs) -> BackgroundGame:
 
 
 def beside_background_game(**kwargs) -> BackgroundGame:
-    """Une infobulle (x 1196, bas 400) : le 1er point (50 px sous elle) tombe à côté du groupe, le 2e (62 px) sur lui."""
+    """Une infobulle (x 1196, bas 400) : le 1er point (57 px sous elle) tombe à côté du groupe, le 2e (47 px) sur lui."""
     return BackgroundGame(load_frame("hors_combat_detection_enemi"), load_frame("hors_combat"),
-                          [(1186, 456, 1206, 470)], **kwargs)
+                          [(1186, 441, 1206, 452)], **kwargs)
 
 
 def test_background_group_clicked_at_once_without_hovering(caplog):
@@ -557,13 +557,13 @@ def test_background_group_clicked_at_once_without_hovering(caplog):
 
 def test_background_click_beside_the_group_then_the_next_point(caplog):
     # 1er clic à côté : pas de menu, le personnage y marche. Combat guetté le temps de sa marche, Z de nouveau (les
-    # groupes ont pu bouger), puis le point suivant pas encore cliqué (62 px) : menu, « Attaquer ».
+    # groupes ont pu bouger), puis le point suivant pas encore cliqué (47 px) : menu, « Attaquer ».
     caplog.set_level("INFO")
     game = beside_background_game()
     assert Engager(game, EngageSettings(probe_click="gauche")).engage()
     beside, group_click, attack_click = clicks(game)
-    assert game.walks == [beside] and abs(beside[0] - 1196) <= 2 and abs(beside[1] - 450) <= 2
-    assert abs(group_click[0] - 1196) <= 2 and abs(group_click[1] - 462) <= 2
+    assert game.walks == [beside] and abs(beside[0] - 1196) <= 2 and abs(beside[1] - 457) <= 2
+    assert abs(group_click[0] - 1196) <= 2 and abs(group_click[1] - 447) <= 2
     assert inside(attack_click, game.menu_box)
     assert game.actions.count(("hold", "z")) == 2  # Z refait après le clic à côté
     assert game.click_times[1] - game.click_times[0] >= DIRECT_ATTACK_WAIT  # sa marche attendue avant le 2e clic
@@ -777,7 +777,7 @@ def test_background_right_click_beside_closes_the_flash_menu_under_the_spell_bar
     # Le 1er clic droit tombe à côté du groupe : menu de Flash. Fermé aussitôt d'un clic gauche sous la barre de sorts (pas sur
     # la carte, pas d'Échap, pas d'attente du combat), puis Z et le point suivant, sur le groupe : combat.
     caplog.set_level("INFO")
-    game = FlashMenuGame(load_frame("hors_combat_detection_enemi"), load_frame("hors_combat"), [(1186, 456, 1206, 470)],
+    game = FlashMenuGame(load_frame("hors_combat_detection_enemi"), load_frame("hors_combat"), [(1186, 441, 1206, 452)],
                          opens=(), direct=("right",))
     assert Engager(game, EngageSettings()).engage()
     assert game.buttons == ["right", "left", "right"]
@@ -790,7 +790,7 @@ def test_background_right_click_beside_closes_the_flash_menu_under_the_spell_bar
 
 def test_background_flash_menu_that_stays_open_is_never_escaped(caplog):
     caplog.set_level("INFO")
-    game = FlashMenuGame(load_frame("hors_combat_detection_enemi"), load_frame("hors_combat"), [(1186, 456, 1206, 470)],
+    game = FlashMenuGame(load_frame("hors_combat_detection_enemi"), load_frame("hors_combat"), [(1186, 441, 1206, 452)],
                          opens=(), direct=("right",), closes=False)
     assert not Engager(game, EngageSettings()).engage()
     assert ("press", "escape") not in game.actions and game.walks == []

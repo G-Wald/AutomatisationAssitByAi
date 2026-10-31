@@ -203,8 +203,17 @@ class Login:
             self._in_game = now + IN_GAME
         if find_friends_icon(self.game.look(park=False)) is not None:
             log.info("%s est en jeu", name)
+            self._check_chosen(name)
             return name
         if now >= self._in_game:
             log.warning("%s : en jeu d'après le titre de la fenêtre, mais je ne vois pas encore la barre d'icônes", name)
+            self._check_chosen(name)
             return name
         return self._wait(POLL)
+
+    def _check_chosen(self, name: str) -> None:
+        """Le personnage en jeu est-il celui qui a été cliqué ? 25/10 : Fourboquatre connecté pour Fourboun (même début
+        de nom) ; l'erreur n'était vue qu'en jeu, à la main. Signalé aussitôt, avec le remède de l'utilisateur."""
+        if self.chosen and name.lower() != self.chosen.lower():
+            log.error("Mauvais personnage en jeu : %s, alors que %s avait été choisi. Ferme cette fenêtre et relance le "
+                      "bot avec --connexion --personnages <les noms de l'équipe>", name, self.chosen)

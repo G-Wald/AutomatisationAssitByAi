@@ -43,6 +43,10 @@ Ancien cas couvert : poignée cachée par un monstre debout devant (11/10, un Ch
 Refus voulus : l'épée de l'équipe des monstres (en bois, avec un cadenas) n'a pas ce dessin, on ne la rejoint pas ;
 l'épée d'un combat qu'on ne peut pas rejoindre (« équipe fermée ou limitée au groupe du joueur principal », le 04/10)
 est beige, sans orange : son icône seule (1,0) ne fait qu'un vote.
+Seule exception aux 2 votes (25/10) : l'épée coupée par le haut de l'écran, pommeau et garde au-dessus du bord ; il
+n'en reste que le bas de la lame et l'icône, dessous. L'icône seule (0,70) suffit alors, dans cette bande étroite en
+haut de la carte, et le clic va sur le bout de lame visible (_cut_swords).
+
 Survolée par la souris, l'épée s'éclaircit (0,55) : on écarte la souris si elle ne se voit pas.
 
 Les points de clic sont SEULEMENT sur les parties qui ont voté (21/10 : on ne clique pas sur une partie qu'on ne voit
@@ -86,6 +90,12 @@ PART_AT = {"pommel": ((0, POMMEL_ROWS[0]),), "guard": ((0, GUARD_ROWS[0]),), "bl
 THRESHOLDS = {"pommel": 0.70, "guard": 0.70, "blade": 0.70, "icon": 0.74}
 PART_NAMES = {"pommel": "pommeau", "handle": "poignée", "blade": "lame", "guard": "garde", "icon": "icône"}
 VOTES = 2  # parties vues au même endroit (la poignée orange en est une) : jamais une seule
+# Sauf l'épée coupée par le haut de l'écran (pommeau et garde au-dessus) : son icône seule, sous la lame, à ce seuil
+# (0,72 le 25/10) ; et au moins CUT_BLADE_SEEN px de référence de lame visibles, où l'on clique.
+ICON_CUT, CUT_BLADE_SEEN, CUT_BLADE_SPREAD = 0.70, 10, (2, 3)
+# Le bout de lame est blanc : autour du clic (demi-étendue en px de référence), une part au moins de pixels presque
+# blancs (0,26 sur l'épée du 25/10 ; aucun sur les cases grises du mode tactique, icône à 0,70 par hasard au-dessus).
+CUT_WHITE_REACH, CUT_WHITE_MIN, CUT_WHITE_V, CUT_WHITE_S = (8, 12), 0.12, 235, 40
 AGREE = 3  # px de référence : écart toléré entre la place d'une partie et son pic
 PEAKS = 30  # pics de chaque partie essayés comme origine
 ZONE_REACH = (40, 150)  # autour de la zone cherchée (centres des épées) : où sont leurs parties (icône, lame)
@@ -249,9 +259,10 @@ class _Maps:
                 best = max(best, float(scores[y0:y1, x0:x1].max()))
         return best
 
-    def peaks(self, part: str) -> list[tuple[float, int, int]]:
-        """(score, x, y) : coins du modèle de l'épée proposés par les pics de la partie au-dessus de son seuil, du
-        meilleur au moins bon ; un pic par endroit (à la taille du modèle de la partie près)."""
+    def peaks(self, part: str, threshold: float | None = None) -> list[tuple[float, int, int]]:
+        """(score, x, y) : coins du modèle de l'épée proposés par les pics de la partie au-dessus de son seuil (ou de
+        `threshold`), du meilleur au moins bon ; un pic par endroit (à la taille du modèle de la partie près)."""
+        threshold = THRESHOLDS[part] if threshold is None else threshold
         scores = self.maps[part]
         if scores is None:
             return []
@@ -260,7 +271,7 @@ class _Maps:
         found = []
         for _ in range(PEAKS):
             _, score, _, (px, py) = cv2.minMaxLoc(scores)
-            if score < THRESHOLDS[part]:
+            if score < threshold:
                 break
             x, y = px + self.zone[0], py + self.zone[1]
             found += [(float(score), x - dx, y - dy) for index, (dx, dy) in enumerate(self.offsets[part])
@@ -291,6 +302,17 @@ def _visible(frame: Frame, point: Point, spread: tuple[float, float], text: _Lab
            math.ceil(point[1] + spread[1]) + 1)
     inside = left <= box[0] and top <= box[1] and box[2] <= right and box[3] <= bottom
     return inside and (text is None or not text.covers(box))
+
+
+def _white_blade(frame: Frame, point: Point) -> bool:
+    """Du blanc de lame autour de `point` (épée coupée par le haut de l'écran)."""
+    rx, ry = (round(frame.layout.length(v)) for v in CUT_WHITE_REACH)
+    x, y = point
+    patch = frame.image[max(0, y - ry) : y + ry + 1, max(0, x - rx) : x + rx + 1]
+    if not patch.size:
+        return False
+    hsv = cv2.cvtColor(patch, cv2.COLOR_BGR2HSV)
+    return float(((hsv[..., 2] > CUT_WHITE_V) & (hsv[..., 1] < CUT_WHITE_S)).mean()) >= CUT_WHITE_MIN
 
 
 def find_fight_swords(frame: Frame, box: Box | None = None) -> list[Sword]:
@@ -332,6 +354,34 @@ def find_fight_swords(frame: Frame, box: Box | None = None) -> list[Sword]:
                             tuple(part for part, _, _ in visible)))
         if len(swords) == MAX_SWORDS:
             break
+    return swords + _cut_swords(frame, maps, box, top, width, height, swords)[: MAX_SWORDS - len(swords)]
+
+
+def _cut_swords(frame: Frame, maps: "_Maps", box: Box, top: float, width: int, height: int,
+                found: list[Sword]) -> list[Sword]:
+    """Épées coupées par le haut de l'écran : pommeau et garde au-dessus, seuls le bas de la lame et l'icône (dessous)
+    se voient (25/10, journal 171736, Taïnéla 1,-32 : deux combats sur un groupe tout en haut, icône à 0,72, aucune
+    autre partie ; les 7 suiveurs restés dehors, Fourboun mort seul). L'icône seule y suffit, dans cette bande étroite
+    seulement, et le clic va sur le bout de lame visible."""
+    layout = frame.layout
+    map_top = layout.map_box[1]
+    swords = []
+    for score, x, y in maps.peaks("icon", ICON_CUT):  # coins du modèle de l'épée ; icône au-dessus : garde visible
+        cx, cy = x + width / 2, y + height / 2
+        blade_top = max(map_top, y + layout.length(BLADE_AT[1]))
+        blade_bottom = y + layout.length(BLADE_AT[1] + _asset(BLADE).shape[0])
+        if y + layout.length(GUARD_ROWS[1]) > map_top or blade_bottom - blade_top < layout.length(CUT_BLADE_SEEN):
+            continue  # garde visible (règle des votes) ou presque rien de la lame
+        if not (box[0] <= cx < box[2] and top - height <= cy < box[3]):
+            continue
+        if any(abs(cx - s.center[0]) + abs(cy - s.center[1]) < height for s in found + swords):
+            continue
+        point = round(x + layout.length(HANDLE_X)), round((blade_top + blade_bottom) / 2)
+        spread = layout.spread(*CUT_BLADE_SPREAD)
+        if not _visible(frame, point, spread, None) or not _white_blade(frame, point):
+            continue
+        swords.append(Sword((round(cx), round(cy)), point, score, ((point, spread),), ("icon",), {"icon": score},
+                            ("blade",)))
     return swords
 
 

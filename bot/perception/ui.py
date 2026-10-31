@@ -28,6 +28,11 @@ RING_CENTER, RING_RADII, RING_SPLIT_Y = (1328, 903), (60, 118), 935  # anneau au
 SPELL_SLOTS_X, SPELL_SLOTS_STEP, SPELL_ROWS_Y = 1533, 51, (904.5, 956.5)
 SPELL_EXTRA_SLOT = (1476.5, 904.5)  # bouton à gauche de la barre de sorts, visible en combat
 SPELL_SLOT_SPREAD = (9, 9)
+# Onglets « Sorts » et « Obj. » à droite de la barre (libellés verticaux) : celui de l'onglet affiché est clair, l'autre
+# foncé (25/10 : barre sur « Obj. » : Sorts 105, Obj. 142 ; sur « Sorts » : 137 et 101). Lu seulement, jamais cliqué :
+# une touche de sort pressée sur l'onglet « Obj. » utilise l'objet de la case (potion de Brâkmar bue, 25/10).
+SPELLS_TAB, OBJECTS_TAB = (1871, 874, 1889, 909), (1871, 931, 1889, 966)
+TAB_CONTRAST = 20  # écart de luminosité moyenne entre les deux libellés pour trancher
 PA_BUBBLE = (1231, 801, 1276, 846)  # bulle des PA (chiffre bleu), à gauche du cœur
 PM_BUBBLE = (1380, 806, 1422, 846)  # bulle des PM (chiffre vert), à droite du cœur
 HEART_ZONE = (1290, 776, 1368, 848)  # cœur de la vie, au-dessus de la minimap
@@ -150,8 +155,10 @@ def pods_fill(frame: Frame) -> float:
 
 
 def spell_range_visible(frame: Frame) -> bool:
-    """Cases bleues de portée affichées : un sort est sélectionné et lançable (assez de PA)."""
-    return int(near(frame.crop(frame.layout.map_box), RANGE_BLUE, 25).sum()) >= frame.layout.area(3000)
+    """Cases bleues de portée affichées : un sort est sélectionné et lançable (assez de PA). Couleurs du jour
+    (Frame.day_image) : 26/10 (journal 001614), de nuit le bleu passait de (171, 109, 47) à (153, 80, 44), hors de la
+    tolérance ; un sort sélectionné par le pavé numérique était cru ignoré, et le pas de repérage qui suivait le visait."""
+    return int(near(frame.day_crop(frame.layout.map_box), RANGE_BLUE, 25).sum()) >= frame.layout.area(3000)
 
 
 def forbidden_cursor_near(frame: Frame, point: Point) -> bool:
@@ -174,12 +181,12 @@ def forbidden_cursor_near(frame: Frame, point: Point) -> bool:
 
 
 def movement_zone(frame: Frame) -> set[Cell]:
-    """Cases vertes : zone de déplacement du combattant survolé par la souris."""
+    """Cases vertes : zone de déplacement du combattant survolé par la souris (couleurs du jour : Frame.day_image)."""
     grid = frame.grid
     cells = grid.cells()
     if not cells:
         return set()
-    mask = green_overlay_mask(frame.image)
+    mask = green_overlay_mask(frame.day_image)
     centers = np.array([grid.center(c) for c in cells])
     # Quatre points par case, vers ses coins : le centre est souvent caché par un cercle ou un sprite.
     offsets = np.array([(-0.6, 0), (0.6, 0), (0, -0.6), (0, 0.6)]) * (grid.half_w, grid.half_h)
@@ -188,6 +195,23 @@ def movement_zone(frame: Frame) -> set[Cell]:
     ys = points[..., 1].clip(0, frame.layout.height - 1)
     green = mask[ys, xs].sum(axis=1)
     return {cell for cell, count in zip(cells, green) if count >= 3}
+
+
+def spell_bar_tab(frame: Frame) -> str | None:
+    """Onglet affiché par la barre de raccourcis : « sorts », « objets », ou None si les deux libellés ne tranchent pas
+    (fenêtre par-dessus, écran de connexion...)."""
+    def brightness(box: tuple[float, float, float, float]) -> float:
+        x0, y0 = frame.layout.point(box[0], box[1])
+        x1, y1 = frame.layout.point(box[2], box[3])
+        patch = frame.image[round(y0) : round(y1), round(x0) : round(x1)]
+        return float(patch.mean()) if patch.size else 0.0
+
+    contrast = brightness(SPELLS_TAB) - brightness(OBJECTS_TAB)
+    if contrast >= TAB_CONTRAST:
+        return "sorts"
+    if contrast <= -TAB_CONTRAST:
+        return "objets"
+    return None
 
 
 def spell_slot_point(layout: Layout, slot: int) -> Point:
@@ -224,8 +248,10 @@ def scene_park_point(layout: Layout) -> Point:
 def tactical_mode(frame: Frame) -> bool:
     """Carte en mode tactique (cases grises unies) : couleurs de portée et de déplacement fiables. Part du gris parmi
     les pixels qui ne sont pas noirs : 16/10, Incarnam 6,1, petite carte dans le vide noir, 28 % de gris sur toute la
-    zone (seuil 30 %) mais 71 % hors du vide ; mode normal : 3 % au plus sur les captures, tactique : 60 % au moins."""
-    region = frame.crop(frame.layout.map_box)[::4, ::4].astype(np.int16)  # une proportion : un pixel sur 16 suffit
+    zone (seuil 30 %) mais 71 % hors du vide ; mode normal : 3 % au plus sur les captures, tactique : 60 % au moins.
+    Couleurs du jour (Frame.day_image) : 26/10 (journal 001614), la nuit teinte le sol en (116, 97, 114), plus du tout gris ;
+    mode tactique cru inactif dans les 8 fenêtres (bouton cherché pour rien, repérage par la portée jamais tenté)."""
+    region = frame.day_crop(frame.layout.map_box)[::4, ::4].astype(np.int16)  # une proportion : un pixel sur 16 suffit
     value = region.max(axis=2)
     grey = (value - region.min(axis=2) <= 14) & (value >= 90) & (value <= 215)
     lit = int((value > 40).sum())
