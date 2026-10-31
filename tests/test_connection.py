@@ -170,6 +170,10 @@ class FakeWindow:
     def __init__(self, title="Dofus Retro v1.49.6"):
         self.hwnd = id(self)
         self.title = title
+        self.front = True
+
+    def is_foreground(self):
+        return self.front
 
 
 class FakeRecorder:
@@ -428,6 +432,11 @@ def test_launch_all_presses_ctrl_8_on_the_retro_page(monkeypatch):
     assert launcher_module.launch_all(game, game)
     assert game.actions == [("press", "ctrl+8")]  # au clavier, sans clic
     assert saved == ["launcher_apres_ctrl_8"]  # rien ne s'est ouvert : capture
+    # 31/10 : une fenêtre du jeu qui s'ouvre a pris le premier plan ; pas de capture (elle attendait le launcher devant,
+    # sans fin : connexion figée 10 min).
+    game.window.front = False
+    saved.clear()
+    assert launcher_module.launch_all(game, game) is not None and not saved
 
 
 def test_login_takes_leftmost_character_when_none_wanted_is_there(titles):

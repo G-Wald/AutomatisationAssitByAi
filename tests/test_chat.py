@@ -13,6 +13,16 @@ def test_position_line_parsed_from_the_group_channel():
     assert parse_position(["[19:48] (Commerce) Sholyx : [Dofus Emeraude]"]) is None
 
 
+def test_an_old_answer_left_in_the_chat_is_not_taken():
+    # 31/10 (test rapide) : réponse de 19:16 pas encore affichée, Pesopepe pris en 0,-32 d'après sa ligne de 18:42.
+    lines = ["[18:42] (Groupe) Pesopepe : [0,-32]", "[19:15] (Groupe) Fourboun : [2,-34]"]
+    assert parse_position(lines, "Pesopepe") == (0, -32)  # sans heure de demande : comme avant
+    assert parse_position(lines, "Pesopepe", since=(19, 16)) is None
+    assert parse_position(lines + ["[19:16] (Groupe) Pesopepe : [1,-32]"], "Pesopepe", since=(19, 16)) == (1, -32)
+    assert parse_position(["[00:00] (Groupe) Pesopepe : [1,-32]"], "Pesopepe", since=(23, 59)) == (1, -32)  # minuit
+    assert parse_position(["(Groupe) Pesopepe : [1,-32]"], "Pesopepe", since=(19, 16)) is None  # heure illisible
+
+
 def test_chat_input_is_under_the_chat_not_on_the_map():
     frame = load_frame("chat_position_6_2")
     x, y = chat_input_point(frame)

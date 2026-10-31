@@ -101,8 +101,13 @@ def launch_all(game: Game, control: StopControl, known: set[int] = frozenset()) 
     game.press(LAUNCH_ALL)
     control.sleep(AFTER_LAUNCH)
     if not new_windows(known):
-        path = game.recorder.save(game.look(park=False).image, "launcher_apres_ctrl_8", lossless=True)
-        log.info("Launcher après Ctrl+8 (capture : %s) : rien ne s'est encore ouvert", path)
+        if game.window.is_foreground():
+            path = game.recorder.save(game.look(park=False).image, "launcher_apres_ctrl_8", lossless=True)
+            log.info("Launcher après Ctrl+8 (capture : %s) : rien ne s'est encore ouvert", path)
+        else:
+            # 31/10 : une fenêtre du jeu en train de s'ouvrir avait pris le premier plan ; la capture du launcher
+            # attendait qu'il revienne devant, sans fin (connexion figée 10 min, deux fois).
+            log.info("Launcher après Ctrl+8 : rien ne s'est encore ouvert, launcher plus devant (le jeu s'ouvre ?)")
     return True
 
 

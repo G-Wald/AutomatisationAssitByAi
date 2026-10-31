@@ -24,6 +24,7 @@ log = logging.getLogger(__name__)
 POSITION_COMMAND = "/p %pos%"
 # « (Groupe) Nom : [x,y] » ; l'OCR lit parfois « ; » pour « : » ou ajoute des espaces dans les crochets.
 POSITION_LINE = re.compile(r"\(Groupe\)\s*(?P<name>[^:;]+?)\s*[:;]\s*\[\s*(?P<x>-?\d+)\s*[,.]\s*(?P<y>-?\d+)\s*(?P<close>\])?")
+LINE_TIME = re.compile(r"\[\s*(?P<h>\d{1,2})\s*[:.;]?\s*(?P<m>\d{2})\s*\]")  # heure de la ligne : « [19:16] »
 # 23/10 : « [11,-27] » lu « [11,-271 » aux deux agrandissements, crochet fermant pris pour un 1 ; Pombro cru introuvable,
 # le bot arrêté. Sans crochet, un dernier 1 n'est retiré que si le nombre entier est impossible (au-delà de MAX_COORD) :
 # « [6,21 » reste refusé (6,21 existe).
@@ -136,8 +137,24 @@ def find_text(frame: Frame, box: tuple[int, int, int, int], wanted: str, zoom: f
     return None
 
 
-def parse_position(lines: list[str], name: str | None = None) -> tuple[int, int] | None:
-    """Coordonnées de la dernière ligne « (Groupe) Nom : [x,y] » (de `name` s'il est donné)."""
+def _older(line: str, since: tuple[int, int]) -> bool:
+    """La ligne est d'avant la minute `since` (heure, minute), d'après son heure « [19:16] » ; vrai aussi si l'heure est
+    illisible (rien ne prouve qu'elle est récente). Passage de minuit compris."""
+    match = LINE_TIME.search(line)
+    if match is None:
+        return True
+    hour, minute = int(match["h"]), int(match["m"])
+    if hour > 23 or minute > 59:
+        return True
+    late = (since[0] * 60 + since[1] - hour * 60 - minute) % (24 * 60)
+    return 0 < late < 12 * 60
+
+
+def parse_position(lines: list[str], name: str | None = None,
+                   since: tuple[int, int] | None = None) -> tuple[int, int] | None:
+    """Coordonnées de la dernière ligne « (Groupe) Nom : [x,y] » (de `name` s'il est donné) ; `since` (heure, minute) :
+    seulement une ligne de cette minute ou après (31/10 : réponse pas encore affichée, Pesopepe pris en 0,-32 d'après
+    sa ligne de 18:42 restée plus haut dans le chat ; il était en 1,-32, trajet impossible et bot arrêté)."""
     # 23/10 : l'OCR coupe parfois la ligne après le nom (« ...Koalaloupour : » puis « [10,-28] ») : chaque ligne, puis
     # recollée à la suivante, de la dernière à la première.
     candidates = []
@@ -149,6 +166,8 @@ def parse_position(lines: list[str], name: str | None = None) -> tuple[int, int]
         match = POSITION_LINE.search(line)
         if not match or (name is not None and match["name"].strip().lower() != name.lower()):
             continue
+        if since is not None and _older(line[: match.start()], since):
+            continue
         x, y = match["x"], match["y"]
         if match["close"] is None:
             if not (y.endswith("1") and abs(int(y)) > MAX_COORD and y.strip("-")[:-1]):
@@ -158,7 +177,8 @@ def parse_position(lines: list[str], name: str | None = None) -> tuple[int, int]
     return None
 
 
-def read_position(frame: Frame, name: str | None = None) -> tuple[int, int] | None:
+def read_position(frame: Frame, name: str | None = None,
+                  since: tuple[int, int] | None = None) -> tuple[int, int] | None:
     """Position lue deux fois (agrandie 3 et 4 fois), gardée seulement si les deux lectures concordent : agrandie 2 fois,
     « [6,2] » était parfois lu « [6,21 » (crochet pris pour un 1, 16/10), une autre carte qui existe. Rien dans les
     dernières lignes : tout le chat du dessous (21/10, juste après la connexion : « (Groupe) Koalaloupour : [11,-28] »
@@ -169,7 +189,7 @@ def read_position(frame: Frame, name: str | None = None) -> tuple[int, int] | No
         found = set()
         for zoom in READ_ZOOMS:
             lines = ocr_lines(last_lines_image(frame, zoom, whole))
-            found.add(parse_position(lines, name) if lines else None)
+            found.add(parse_position(lines, name, since) if lines else None)
         found.discard(None)
         if len(found) == 1:
             return found.pop()

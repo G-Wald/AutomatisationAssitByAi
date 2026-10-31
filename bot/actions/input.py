@@ -36,6 +36,7 @@ MOUSE_BUTTONS = {
     "left": (win32con.MOUSEEVENTF_LEFTDOWN, win32con.MOUSEEVENTF_LEFTUP),
     "right": (win32con.MOUSEEVENTF_RIGHTDOWN, win32con.MOUSEEVENTF_RIGHTUP),
 }
+FOREGROUND_TELL = 30.0  # s d'attente du premier plan avant de prévenir l'utilisateur (une fois par attente)
 UNDER_CURSOR_WAIT = 0.5  # fenêtre du jeu pas encore sous la souris (autre fenêtre devant) : attente avant d'annuler
 WHEEL_NOTCH = 120  # un cran de molette (WHEEL_DELTA de Windows)
 WHEEL_GAP = (0.03, 0.08)  # pause entre deux crans
@@ -89,7 +90,15 @@ class GameInput:
         if self.window.is_foreground():
             return
         log.info("Le jeu n'est plus au premier plan : j'attends qu'il revienne devant.")
+        told_at = time.monotonic() + FOREGROUND_TELL
         while not self.window.is_foreground():
+            if told_at is not None and time.monotonic() >= told_at:
+                # 31/10 : connexion arrêtée 10 min sans rien dire (focus pris ailleurs pendant le Ctrl+8 du launcher).
+                from bot.alerts import tell_user
+
+                tell_user(f"le jeu attend d'être au premier plan ({getattr(self.window, 'title', '?')}) : clique une "
+                          f"fois sur sa fenêtre pour que je reprenne")
+                told_at = None
             self.control.sleep(0.3)
         log.info("Jeu au premier plan : je reprends.")
         self.control.sleep(0.3)  # laisse le jeu se redessiner
