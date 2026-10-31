@@ -46,6 +46,7 @@ import winerror
 
 from bot.actions.input import Human
 from bot.actions.stop import BotStopped, StopControl
+from bot.brain import possessions
 from bot.brain.arena import changed_maps
 from bot.brain.game import Game
 from bot.brain.loop import Bot
@@ -66,6 +67,7 @@ from bot.debug.bilans import archive, archive_missing
 from bot.debug.recorder import Recorder, prune_sessions
 from bot.team.dungeon import DungeonFarm, load_dungeons
 from bot.team.loop import TeamBot
+from bot.team.loop import bank_visit
 from bot.team.member import Focus, make_member, tag_logs
 from bot.team.roster import TeamSettings, pick_team
 from bot.team.signals import NOTIFICATIONS, RECORD_NAME, TurnSignals, turn_signal, turn_words
@@ -321,6 +323,12 @@ def main() -> int:
     if connection.enabled and args.observe:
         log.warning("Connexion automatique ignorée en observation (aucun clic)")
         connection = replace(connection, enabled=False)
+    if (settings.get("reseau") or {}).get("ecoute", True):
+        from bot.connection.network import shared_listener
+
+        listener = shared_listener()
+        for window in client_windows() if listener is not None else []:
+            listener.follow(window.hwnd, "")  # écoutée dès la connexion : caractéristiques annoncées (« As »)
     if connection.enabled:
         if (code := connect(args, settings, connection, recorder)) is not None:
             return code
@@ -488,6 +496,15 @@ def run_team(args: argparse.Namespace, settings: dict, team: TeamSettings, title
                 bot.learn_levels()  # niveaux jamais lus : liste des amis du principal
             log.info("Reconnexion automatique : serveur %s", connection.server)
             bot.connection = Watcher(connection, players)
+        if not args.observe and not args.donjon and len(members) > 1:
+            alone = [m for m in members if bank_inside(m)]
+            if alone and (len(alone) < len(members) or not args.banque):
+                # 27/10 : Fourboun resté dans la banque (coffre raté, bot arrêté) ; dedans seul, il ne pouvait plus
+                # mener l'équipe (soleil de la carte pas atteignable). Tous dedans hors --banque : bot arrêté en pleine
+                # visite, ressortis aussi.
+                log.info("Banque : %s encore dedans sans le reste de l'équipe : je les fais sortir",
+                         ", ".join(m.name for m in alone))
+                BankVisit(members, bot.travel_settings.hide_players_key).leave(alone)
         if args.donjon:
             name, _, rest = args.donjon.partition(":")
             step, _, who = rest.partition(":")
@@ -497,10 +514,15 @@ def run_team(args: argparse.Namespace, settings: dict, team: TeamSettings, title
             if spec is None:
                 log.error("Donjon inconnu : %s (config/donjons_entree.yaml)", args.donjon)
                 return 1
-            return 0 if DungeonFarm(bot, spec, args.passages).run(step or None, only, room) == args.passages else 1
+            farm = DungeonFarm(bot, spec, args.passages)
+            done = farm.run(step or None, only, room)
+            # 30/10 : passages ramenés à ceux que les clés permettent (donjon.cles, team/keys.py) : réussi s'ils sont faits.
+            return 0 if done and done == farm.runs else 1
         if args.banque and bank_inside(members[0]):
             log.info("Banque : le principal est déjà dans la banque, pas de trajet")
-            return 0 if len(BankVisit(members).run()) == len(members) else 1
+            return 0 if len(bank_visit(members, bot.travel_settings.hide_players_key, bot.bank_mode,
+                                    bot.keep_key).run()) == \
+                len(members) else 1
         bot.run()  # erreurs d'un tour de boucle rattrapées là (TeamBot.safe_step) : jamais d'arrêt en plein combat
         if args.banque:
             arrived = bot.roamer is not None and bot.roamer.traveler.coords == BANK_MAP and not bot._lost
@@ -508,7 +530,9 @@ def run_team(args: argparse.Namespace, settings: dict, team: TeamSettings, title
                 log.warning("Banque : l'équipe n'est pas toute sur la carte de la banque (%s,%s) : pas de passage au coffre",
                             *BANK_MAP)
                 return 1
-            return 0 if len(BankVisit(members).run()) == len(members) else 1
+            return 0 if len(bank_visit(members, bot.travel_settings.hide_players_key, bot.bank_mode,
+                                    bot.keep_key).run()) == \
+                len(members) else 1
     except BotStopped as stop:
         log.info("Bot arrêté (%s)", stop)
     except KeyboardInterrupt:
@@ -524,6 +548,9 @@ def run_team(args: argparse.Namespace, settings: dict, team: TeamSettings, title
                 m.game.release_keys(_held_keys(settings))
             except Exception:  # fenêtre fermée : rien à relâcher
                 pass
+            # Possessions écrites une dernière fois (30/10 : familier reçu à la sortie du donjon, après le dernier tour
+            # des fenêtres, perdu pour la session suivante).
+            possessions.save(m.name, getattr(m.game, "net", None))
         if signals is not None:
             signals.stop()
         control.close()

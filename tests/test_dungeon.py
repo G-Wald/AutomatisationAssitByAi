@@ -75,7 +75,7 @@ def test_npc_menu_parler_found_then_the_bubble_reply():
     hero = member("A", screen, room, menu, menu, bubble, bubble, beyond)
     assert DungeonEntry([hero], incarnam())._give_key(hero)
     npc, talk, reply = (e[2] for e in events(screen, "click"))
-    assert abs(talk[0] - 1555) <= 12 and abs(talk[1] - 381) <= 8  # « Parler »
+    assert 1521 <= talk[0] <= 1680 and 363 <= talk[1] <= 399  # dans l'entrée « Parler » du petit menu (30/10)
 
 
 def test_team_leaves_through_the_exit_reply_with_a_right_click():
@@ -166,7 +166,14 @@ def test_exit_right_click_opening_a_menu_clicks_nothing_in_it():
     room, menu = load_frame("donjon_incarnam_salle_fin"), load_frame("donjon_incarnam_menu_parler")
     hero = member("A", screen, room, menu)
     assert not DungeonEntry([hero], incarnam()).leave()
-    assert len(events(screen, "click_right")) == 1 and not events(screen, "click")
+    # Deux clics droits : le second essai de la sortie (30/10) ; jamais de clic dans le menu : refermé d'un clic sur le
+    # fond beige sous la barre de sorts (31/10, close_any_menu), hors de la carte.
+    from bot.perception.popups import find_small_menu
+
+    x0, y0, x1, y1 = find_small_menu(menu)
+    assert len(events(screen, "click_right")) == 2
+    assert all(not (x0 <= e[2][0] <= x1 and y0 <= e[2][1] <= y1) and not menu.layout.on_map(e[2])
+               for e in events(screen, "click"))
 
 
 def test_options_window_closed_before_the_run():
@@ -218,7 +225,7 @@ def test_late_member_takes_the_entrance_then_the_whole_team_goes_on(monkeypatch)
     taken, plates, keys = [], [], []
     monkeypatch.setattr(entry, "_all_take", lambda members, cell, what: taken.append((list(members), cell)) or True)
     monkeypatch.setattr(entry, "_step_on_plate", plates.append)
-    monkeypatch.setattr(entry, "_give_key", lambda m: keys.append(m) or True)
+    monkeypatch.setattr(entry, "_through_npc", lambda members: keys.extend(members) or True)
     assert entry.enter("entree", {"pesopepe"})
     assert taken == [(["Pesopepe"], (16, 14)), (entry.members, (23, 5))]
     assert plates == ["Koalaloupour"] and keys == entry.members
@@ -263,7 +270,7 @@ def test_team_split_is_brought_together(monkeypatch):
     monkeypatch.setattr(entry, "_all_take", lambda members, cell, what: taken.append(([m.name for m in members], cell))
                         or True)
     monkeypatch.setattr(entry, "_step_on_plate", lambda m: plates.append(m.name))
-    monkeypatch.setattr(entry, "_give_key", lambda m: keys.append(m.name) or True)
+    monkeypatch.setattr(entry, "_through_npc", lambda members: keys.extend(m.name for m in members) or True)
     assert entry.enter()
     assert taken == [(["Pesopepe"], (16, 14)), (["Koalaloupour", "Pesopepe"], (23, 5))]
     assert plates == ["Koalaloupour"] and keys == ["Koalaloupour", "Pesopepe"]
@@ -285,3 +292,87 @@ def test_every_member_left_outside_is_retried_and_named(caplog):
         assert not DungeonEntry(team, incarnam())._all_take(team, (16, 14), "l'entrée")
     assert len(events(screen, "click")) == 4  # deux clics chacun
     assert "Pesopepe, Pombro pas passé(s) par l'entrée" in caplog.text
+
+
+def test_bouftou_npc_is_outside_and_members_are_located_by_the_server():
+    # 30/10 : Altaïr dehors en 2,-34 (carte 1856), sans grotte ni dalle ; chacun situé par la carte du serveur.
+    from bot.connection.network import ClientFeed
+
+    spec = load_dungeons()["bouftou"]
+    assert spec.outside == (2, -34) and spec.entrance is None and spec.plate is None and spec.sun is None
+    assert spec.npc == (18, 14) and spec.reply == "Donner la clé des bouftous" and spec.npc_map == 1856
+    screen = Screen()
+    entry = DungeonEntry([], spec)
+    there, inside = member("A", screen, load_frame(OUTSIDE)), member("B", screen, load_frame(OUTSIDE))
+    there.game.net, inside.game.net = ClientFeed("A"), ClientFeed("B")
+    there.game.net.feed("GDM|1856|0901081440|00")
+    inside.game.net.feed("GDM|2073|0706131721|00")
+    assert entry.locate(there) == "pnj"
+    assert entry.locate(inside) is None  # déjà dans les salles
+
+
+def _bouftou_entry(monkeypatch, answers):
+    """Entrée Bouftou de 3 personnages, bulles « ouvertes » sans écran : réponses proposées par le serveur à chacun."""
+    from types import SimpleNamespace
+
+    from bot.connection.network import ClientFeed
+
+    team = []
+    for name in answers:
+        net = ClientFeed(name)
+        team.append(SimpleNamespace(name=name, game=SimpleNamespace(net=net)))
+    entry = DungeonEntry(team, load_dungeons()["bouftou"])
+    opened, replied, closed = [], [], []
+
+    def open_(member, npc, button):
+        entry._opened_at[member.name] = 0.0
+        member.game.net.feed("DQ660|" + ";".join(str(a) for a in answers[member.name]))
+        opened.append(member.name)
+        return ("salle", "bulle")
+
+    monkeypatch.setattr(entry, "_open", open_)
+    monkeypatch.setattr(entry, "_reply", lambda m, before, shown, answer, gone: replied.append((m.name, answer)) or True)
+    monkeypatch.setattr(entry, "_close_bubble", lambda m: closed.append(m.name))
+    return entry, team, opened, replied, closed
+
+
+def test_nobody_enters_when_one_member_cannot(monkeypatch):
+    # 31/10, utilisateur : « si tout le groupe n'a pas de clé il ne faut pas continuer et faire rentrer solo » (ce matin,
+    # Fourboun entré seul). Le 3e n'a ni clé ni trousseau : bulles refermées, personne ne répond.
+    entry, team, opened, replied, closed = _bouftou_entry(
+        monkeypatch, {"Fourboun": (564, 6602), "Eldieso": (564, 6602), "Walitcoin": ()})
+    assert not entry._through_npc(team)
+    assert opened == ["Fourboun", "Eldieso", "Walitcoin"] and replied == []
+    assert closed == ["Fourboun", "Eldieso", "Walitcoin"]  # toutes les bulles refermées
+
+
+def test_entry_answer_chosen_from_the_server_key_then_keyring_only_if_allowed(monkeypatch, caplog):
+    # « Donner la clé » (564) proposée seulement à qui a la clé. Le trousseau (6602) ne sert qu'une fois par semaine
+    # (31/10, utilisateur) : jamais choisi tout seul ; sans lui, Eldieso sans clé bloque l'entrée, et un message le dit.
+    answers = {"Fourboun": (564, 6602), "Eldieso": (6602,)}
+    entry, team, opened, replied, closed = _bouftou_entry(monkeypatch, answers)
+    assert not entry._through_npc(team) and replied == []
+    assert "À l'utilisateur : Donjon Bouftou : Eldieso sans clé" in caplog.text
+    entry, team, opened, replied, closed = _bouftou_entry(monkeypatch, answers)
+    entry.keyring = True  # donjon.trousseau : oui
+    assert entry._through_npc(team)
+    assert replied == [("Fourboun", "Donner la clé des bouftous"), ("Eldieso", "Utiliser le trousseau de clefs")]
+
+
+def test_a_member_left_in_another_room_is_found_by_the_server():
+    # 31/10 : Walitcoin resté dans la salle 8 (combat pas rejoint) ; les 7 autres téléportés dans la suivante.
+    from types import SimpleNamespace
+
+    from bot.connection.network import ClientFeed
+    from bot.team.dungeon import DungeonFarm
+
+    team = []
+    for name, room in (("Fourboun", 2082), ("Eldieso", 2082), ("Walitcoin", 2081)):
+        net = ClientFeed(name)
+        net.feed(f"GDM|{room}|0706131721|aa")
+        team.append(SimpleNamespace(name=name, game=SimpleNamespace(net=net)))
+    bot = SimpleNamespace(members=team, leader=team[0], _settings={})
+    farm = DungeonFarm(bot, load_dungeons()["bouftou"], 1)
+    assert farm._left_behind(wait=0) == ["Walitcoin"]
+    team[2].game.net.feed("GDM|2082|0706131721|aa")
+    assert farm._left_behind(wait=0) == []

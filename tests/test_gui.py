@@ -247,7 +247,8 @@ def test_dungeon_farm_errors():
     team = {"team": True, "leader": "Koalaloupour", "mode": "donjon"}
     assert validate(choices(**team, donjon="incarnam"), SETTINGS) == []
     assert validate(choices(**team), SETTINGS) == ["Farm de donjon : choisis le donjon"]
-    assert "n'est pas dans config/donjons_entree.yaml" in validate(choices(**team, donjon="bouftou"), SETTINGS)[0]
+    assert "n'est pas dans config/donjons_entree.yaml" in validate(choices(**team, donjon="ensable"), SETTINGS)[0]
+    assert validate(choices(**team, donjon="bouftou", monde="douze"), SETTINGS) == []  # 30/10 : entrée décrite
     assert validate(choices(**team, donjon="incarnam", monde="douze"), SETTINGS)[0].endswith("choisis-le dans Monde")
     assert validate(choices(mode="donjon", donjon="incarnam"), SETTINGS) == [
         "Farm de donjon : en équipe seulement (coche au moins 2 personnages, ou ouvre leurs fenêtres)"]
@@ -473,3 +474,28 @@ def test_second_stop_request_ends_at_once():
     codes = []
     wait_for(lambda: codes.append(runner.check()) or codes[-1] is not None)
     assert any("deuxième demande" in line for line in runner.lines())
+
+
+def test_zaap_mode_unchecked_is_passed_to_the_bot():
+    # 25/10, l'utilisateur : l'utilisation des zaaps doit être un mode avec ou sans, dans l'interface.
+    assert choices().zaap  # par défaut : avec zaap (travel.zaap absent de la config)
+    changed = choices(zaap=False)
+    assert ("travel.zaap", False) in overrides(changed, SETTINGS)
+    args = build_args(changed, SETTINGS)
+    assert "travel.zaap=false" in args and args[args.index("travel.zaap=false") - 1] == "--set"
+    assert "travel.zaap=true" not in build_args(choices(), SETTINGS)
+
+
+def test_bank_mode_unchecked_is_passed_to_the_bot():
+    # 26/10, l'utilisateur : une case pour autoriser ou non l'aller-retour à la banque quand les pods sont pleins.
+    assert choices().bank
+    assert ("team.banque_auto", False) in overrides(choices(bank=False), SETTINGS)
+
+
+def test_user_alert_lines_are_recognised():
+    # 31/10 : messages du bot pour l'utilisateur (clés qui manquent), montrés aussi dans une fenêtre par l'interface.
+    from bot.alerts import alert_text
+
+    assert alert_text("12:00:00.000 WARNING [Fourboun] À l'utilisateur : Donjon Bouftou : pas assez de clés.") == \
+        "Donjon Bouftou : pas assez de clés."
+    assert alert_text("12:00:00.000 INFO    [Fourboun] Donjon : passage 1/1") is None

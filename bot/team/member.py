@@ -194,6 +194,16 @@ def make_member(name: str, window: GameWindow, settings: dict, focus: Focus, con
     raccourcis...)."""
     focus.names[window.hwnd] = name
     game = MemberGame(window, control, TaggedRecorder(recorder, name), human, act, focus, background)
+    if (settings.get("reseau") or {}).get("ecoute", True) and isinstance(window, GameWindow):
+        # Carte et case annoncées par le serveur (connection/network.py, 26/10) ; sans Npcap, l'écran seul.
+        from bot.connection.network import shared_listener
+
+        listener = shared_listener()
+        if listener is not None:
+            game.net = listener.follow(window.hwnd, name)
+            from bot.brain.possessions import restore
+
+            restore(name, game.net)  # sac de la session précédente, si la connexion n'a pas été entendue (30/10)
     spellbook = SpellBook(game, session=SessionSettings.from_settings(settings))  # sorts et caractéristiques
     popups = settings.get("popups") or {}
     return Member(

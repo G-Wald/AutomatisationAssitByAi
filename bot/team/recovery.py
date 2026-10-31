@@ -5,7 +5,9 @@ derrière « Informations » (S11, S15), fenêtre sourde aux touches (S3 à S8 :
 après l'autre), touche A sans sortie (S14). Chacun a son remède à l'endroit où il se voit ; ceci est le filet qui
 reste quand aucun n'a suffi.
 
-- Progrès (TeamBot._progress_at) : combat lancé ou fini, changement de carte, arrivée d'un suiveur, tour joué.
+- Progrès (TeamBot._progress_at) : combat lancé ou fini, changement de carte, arrivée d'un suiveur, tour joué ; compté
+  à partir du début de la boucle (TeamBot.run). Progrès faible : nouvel essai d'un suiveur en route (sortie essayée,
+  itinéraire recalculé), jusqu'à SOFT_PROGRESS_LIMIT s après le dernier vrai progrès (TeamBot._real_progress_at).
 - STALL_DIAGNOSE s sans progrès : diagnostic sur le principal puis les suiveurs (diagnose_member, dans cet ordre :
   fenêtres connues ; menu de Flash sur tout l'écran ; surface beige inconnue avec ses boutons génériques ; bulle de
   PNJ ; sonde du clavier par la touche A et clic de déblocage). Un nouveau toutes les STALL_DIAGNOSE s.
@@ -31,6 +33,10 @@ log = logging.getLogger(__name__)
 
 STALL_DIAGNOSE = 120.0  # s sans progrès avant un diagnostic (puis un toutes les STALL_DIAGNOSE s)
 STALL_LAST_RESORT = 300.0  # s sans progrès : dernier recours
+# Progrès faibles (TeamBot._progress(soft=True) : un suiveur en route essaie une sortie, sans changer de carte encore,
+# 25/10, journaux 175311 et 180222) : ils repoussent la surveillance, mais pas au-delà de ce délai depuis le dernier
+# vrai progrès (combat, carte, suiveur arrivé, tour joué) ; ensuite, dernier recours comme sans progrès.
+SOFT_PROGRESS_LIMIT = 900.0
 FRUITLESS_LIMIT = 2  # diagnostics de suite sans cause : dernier recours
 PAUSED_DIAGNOSE = 120.0  # pendant la pause du dernier recours : un diagnostic toutes les 2 min
 PAUSE_POLL = 10.0  # pendant cette pause : combat cherché dans chaque fenêtre (arrière-plan seulement)
@@ -118,9 +124,14 @@ class Watchdog:
         if paused > self._paused_seen:
             # Pause de l'utilisateur (F9) : ce temps-là n'est pas du temps perdu par le bot.
             self.bot._progress_at += paused - self._paused_seen
+            if getattr(self.bot, "_real_progress_at", None) is not None:
+                self.bot._real_progress_at += paused - self._paused_seen
             self._paused_seen = paused
         now = time.monotonic()
         stalled = now - self.bot._progress_at
+        real = getattr(self.bot, "_real_progress_at", None)
+        if real is not None and now - real >= SOFT_PROGRESS_LIMIT:
+            stalled = max(stalled, now - real)  # des essais, mais plus aucun résultat depuis trop longtemps
         if stalled < STALL_DIAGNOSE:
             return False
         if self._diagnosed_at is not None and now - self._diagnosed_at < STALL_DIAGNOSE \

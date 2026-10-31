@@ -111,6 +111,10 @@ recovery:                  # mode équipe, hors combat seulement : surveillance 
                            # avertissement, puis pause (F9 pour reprendre ; nouveau diagnostic toutes les 2 min) ou stop
 
 team:                      # mode équipe : une fenêtre du jeu par personnage, tous sur la même carte (--equipe)
+  banque_auto: true        # pods pleins (90 %) en combat de zone : aller-retour à la banque d'Astrub (26/10)
+  banque_mode: chacun      # chacun : chacun vide ses ressources dans son coffre ; principal : les suiveurs donnent au
+                           # principal par lots qui tiennent dans ses pods, il dépose tout dans son coffre (30/10)
+  pods_banque: 0.9         # pods (0 à 1) à partir desquels on va à la banque ; plus bas le temps d'un test (27/10)
   enabled: auto            # auto : mode équipe dès que plusieurs fenêtres de personnages sont ouvertes ; true : toujours ;
                            # false : jamais sans --equipe
   leader: ""               # personnage principal (nom avant « - Dofus Retro » dans le titre de sa fenêtre) ; il attaque
@@ -139,6 +143,20 @@ team:                      # mode équipe : une fenêtre du jeu par personnage, 
                            # majuscules, mots entiers) ; les autres (succès, invitation, échange, message...) sont
                            # ignorées. Texte du jeu vu le 03/10 : « C'est à Walitcoin de jouer »
 
+donjon:                    # farm de donjon (--donjon ; bot/team/dungeon.py, bot/team/keys.py)
+  cles: non                # clés réparties au début du farm seulement (30/10) : non : rien, chacun entre avec la sienne ;
+                           # sac : clés des sacs comptées d'après le serveur, passages = total // taille de l'équipe,
+                           # échanges pour que chacun en ait autant ; sac_banque : de même, et s'il en manque, ceux qui
+                           # en ont moins les reprennent dans LEUR coffre avant (trajet donjon <-> banque d'Astrub
+                           # automatique depuis le 31/10, zaaps compris). Passages ramenés à ceux que les clés
+                           # permettent. Interface : liste « clés » du farm de donjon ; --set donjon.cles=sac
+  trousseau: non           # « Utiliser le trousseau de clefs » chez le PNJ, pour qui n'a pas la clé : une fois par
+                           # semaine seulement (31/10) ; non : jamais (sans clé pour tous, pas de farm et un message)
+  garder_cle: ""           # clé reprise du coffre juste après « Transférer tous les objets » à la banque (qui l'y met
+                           # aussi) : donjon de config/donjons_entree.yaml (« incarnam »), ou numéro de l'objet ; "" :
+                           # rien de repris. Laissé vide tant que le côté coffre de la fenêtre n'est pas calibré
+                           # (CHEST_* de bot/team/bank.py)
+
 connexion:                 # connexion automatique (08/10) ; connexion seule : python -m bot.connection
   auto: false              # true : au lancement du bot, les fenêtres du jeu restées à l'écran de connexion sont menées
                            # en jeu (serveur, personnage), le groupe est reformé ; pendant le jeu, un personnage
@@ -166,6 +184,9 @@ human:                    # rythme des gestes, en secondes [min, max] tirées au
   hesitation_chance: 0.04  # probabilité d'une hésitation en plus avant une action
   hesitation: [0.3, 0.8]
   slowdown: [0.85, 1.1]    # facteur appliqué à toutes les attentes du bot
+
+reseau:                    # écoute passive du trafic du jeu (bot/connection/network.py, 26/10) : carte et case du
+  ecoute: true             # personnage annoncées par le serveur. Il faut Npcap (npcap.com) ; sans lui, l'écran seul
 
 logs:                      # journaux et captures dans logs/<date_heure>/
   keep_sessions: 20        # au démarrage, ne garder que les 20 dernières sessions (celle qui commence comprise) ;

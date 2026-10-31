@@ -15,9 +15,9 @@ from bot.brain.game import Game
 from bot.brain.recovery import capture_once
 from bot.perception.frame import Frame
 from bot.perception.layout import Point
-from bot.perception.popups import (FLASH_CLOSE_CLEARANCE, PopupMatch, PopupSpec, find_context_menu, find_flash_menu,
-                                   find_generic_close, flash_close_point, find_known_popup, find_npc_dialog,
-                                   find_quit_dialog_no, find_unknown_window)
+from bot.perception.popups import (FLASH_CLOSE_CLEARANCE, PopupMatch, PopupSpec, below_map, find_context_menu,
+                                   find_flash_menu, find_generic_close, flash_close_point, find_known_popup,
+                                   find_npc_dialog, find_quit_dialog_no, find_unknown_window)
 from bot.state.scene import Phase, read_scene
 
 log = logging.getLogger(__name__)
@@ -35,6 +35,10 @@ FLASH_CLOSE_WAIT = 1.0  # clic -> menu de Flash disparu
 REPEAT_WINDOW = 15.0
 REPEAT_DIAGNOSE = 3
 REPEAT_GIVE_UP = 6
+# Bouton de fermeture sous la carte (au-dessus de la barre de raccourcis) : revu immobile sur une 2e capture, STILL_LAG s
+# après, à STILL_TOLERANCE px de référence près, avant le clic (still_open).
+STILL_LAG = 0.2
+STILL_TOLERANCE = 3
 
 
 # Menu d'un personnage (« Baffer, Organiser mon magasin... ») : barre de titre sombre de MENU_TITLE px de référence
@@ -44,6 +48,30 @@ MENU_TITLE = 38
 MENU_STEP = 1.5
 EDGE_KEEP = 2
 MENU_CLOSE_WAIT = 0.6  # clic -> menu disparu
+
+
+def still_open(game: Game, known: PopupMatch, specs: list[PopupSpec], frame: Frame | None = None,
+               lag: float = STILL_LAG) -> PopupMatch | None:
+    """La fenêtre `known` revue sur une capture fraîche, `lag` s plus tard : même fenêtre, bouton au même endroit (à
+    STILL_TOLERANCE px de référence près) ; cette nouvelle vue, ou None (fenêtre partie, ou encore en train de
+    s'ouvrir : son bouton bouge). `frame` : la capture où `known` a été vue (pour le repère de référence).
+
+    25/10 (journal 181212, combat 17) : « Résultat du combat » en train de s'ouvrir chez Elseiso (capture 0374 : cadre
+    beige encore vide, bouton dessiné plus haut que sa place finale) ; le clic de fermeture est tombé sur la barre de
+    raccourcis et une potion a été bue. Règle : jamais de clic dans une fenêtre pas encore vue chargée, et sous la carte
+    (où le bouton recouvre la barre), une fenêtre chargée, c'est un bouton immobile sur deux captures."""
+    if known.close_point is None:
+        return known
+    game.sleep(lag)
+    fresh = game.look(park=False)
+    again = find_known_popup(fresh, specs)
+    if again is None or again.spec.name != known.spec.name or again.close_point is None:
+        return None
+    layout = frame.layout if frame is not None else fresh.layout
+    before, after = layout.to_reference(known.close_point), fresh.layout.to_reference(again.close_point)
+    if max(abs(a - b) for a, b in zip(before, after)) > STILL_TOLERANCE:
+        return None
+    return again
 
 
 def close_context_menu(game: Game, frame: Frame) -> bool:
@@ -83,8 +111,12 @@ def close_flash_menu(game: Game, frame: Frame, around: Point | None = None) -> b
     """Menu de Flash ouvert (perception.popups.find_flash_menu ; `around` : où chercher, le clic qui l'a ouvert) :
     fermé d'un clic gauche sur le fond beige en bas à gauche de la barre de sorts (15/10 : un clic dans le chat ne le
     ferme pas), jamais sur la carte (le personnage y marcherait) ni par Échap (14/10 : il reste ouvert et le Menu
-    principal s'ouvre derrière). True s'il a disparu."""
+    principal s'ouvre derrière). True s'il a disparu. Le fond beige est vérifié sur une capture fraîche à chaque essai,
+    pas sur `frame`."""
     for attempt in range(1, FLASH_CLICKS + 1):
+        # Le point se vérifie sur une capture fraîche, jamais sur celle de l'appelant (elle peut avoir quelques
+        # secondes : une fenêtre ou l'œil « combats en cours » a pu apparaître depuis sur ce fond beige).
+        frame = game.look(park=False)
         point = flash_close_point(frame)
         if point is None or frame.layout.on_map(point):
             log.warning("Menu de Flash ouvert, mais le fond sous la barre de sorts n'est pas libre : ferme-le toi-même "
@@ -98,7 +130,6 @@ def close_flash_menu(game: Game, frame: Frame, around: Point | None = None) -> b
         if after is not None:
             log.info("Menu de Flash fermé")
             return True
-        frame = game.look(park=False)
     log.warning("Le menu de Flash reste ouvert : ferme-le toi-même (clic à côté du menu)")
     return False
 
@@ -118,7 +149,9 @@ def close_npc_dialog(game: Game, frame: Frame) -> bool:
 def close_small_menu(game: Game, frame: Frame, still_open: Callable[[Frame], bool]) -> None:
     """Petit menu du jeu ouvert par un clic droit (ressource « Lin / Cueillir / Faucher », personnage, PNJ) : fermé
     d'un clic sur le même fond beige que le menu de Flash. 17/10 (journaux 112944, 125352, 161256) : Échap ne le
-    fermait pas et ouvrait le Menu principal derrière, à chaque fois. Échap seulement si ce fond n'est pas libre."""
+    fermait pas et ouvrait le Menu principal derrière, à chaque fois. Échap seulement si ce fond n'est pas libre. Le
+    fond est vérifié sur une capture fraîche, pas sur `frame` (celle de l'appelant, peut-être vieille de secondes)."""
+    frame = game.look(park=False)
     point = flash_close_point(frame)
     if point is None or frame.layout.on_map(point):
         game.press("escape")
@@ -127,6 +160,50 @@ def close_small_menu(game: Game, frame: Frame, still_open: Callable[[Frame], boo
     game.click(point, (reach, reach))
     if game.wait_until(lambda f: not still_open(f), FLASH_CLOSE_WAIT, park=False) is None:
         log.info("Le menu est encore là après le clic sous la barre de sorts")
+
+
+def menu_open(frame: Frame) -> str | None:
+    """Ce qui est ouvert sur la carte à la place de ce qu'on attendait : « Flash », « menu » (personnage, joueur, PNJ :
+    find_context_menu), « petit menu » (objet, épée, PNJ à une entrée), « bulle » (dialogue d'un PNJ) ; None."""
+    from bot.perception.popups import find_small_menu
+
+    if find_flash_menu(frame) is not None:
+        return "Flash"
+    if find_npc_dialog(frame) is not None:
+        return "bulle"
+    if find_context_menu(frame) is not None:
+        return "menu"
+    if find_small_menu(frame) is not None:
+        return "petit menu"
+    return None
+
+
+def close_any_menu(game: Game, why: str = "") -> bool:
+    """Ferme sans risque ce qui s'est ouvert à la place de ce qu'on attendait (31/10, revue : un seul geste pour tous
+    les « sinon Échap ») : la bulle d'un PNJ par sa croix ; tout menu (Flash, joueur, PNJ, objet) d'un clic sur le
+    fond beige sous la barre de sorts (flash_close_point), jamais dedans ni à côté sur la carte (le personnage
+    marcherait), jamais Échap (il ouvre le Menu principal derrière un menu). True si plus rien n'est ouvert ; sinon
+    le dit au journal (l'appelant abandonne proprement)."""
+    for _ in range(2):
+        frame = game.look(park=False)
+        kind = menu_open(frame)
+        if kind is None:
+            return True
+        log.info("%s%s ouvert à la place : je le ferme sans Échap", f"{why} : " if why else "", kind)
+        if kind == "bulle":
+            close_npc_dialog(game, frame)
+            continue
+        point = flash_close_point(frame)
+        if point is None or frame.layout.on_map(point):
+            break  # fond beige pas libre (une fenêtre l'assombrit) : rien de sûr à cliquer
+        reach = frame.layout.length(FLASH_CLOSE_CLEARANCE / 2)
+        game.click(point, (reach, reach))
+        game.wait_until(lambda f: menu_open(f) is None, FLASH_CLOSE_WAIT, park=False)
+    kind = menu_open(game.look(park=False))
+    if kind is not None:
+        log.warning("%s%s toujours ouvert : je n'y touche pas (ni clic dedans, ni Échap)", f"{why} : " if why else "",
+                    kind)
+    return kind is None
 
 
 LEVEL_UP = "informations (niveau supérieur)"
@@ -147,6 +224,8 @@ def read_level_up(frame: Frame, box) -> int | None:
     if crop.size == 0:
         return None
     for line in ocr_lines(cv2.resize(crop, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)):
+        if re.search(r"m[ée]tier", line, re.IGNORECASE):
+            return None  # 30/10 : « Ton métier Paysan passe niveau 2 », même fenêtre : pas le niveau du personnage
         match = re.search(r"niveau\s*(\d+)", line, re.IGNORECASE)
         if match:
             return int(match.group(1))
@@ -266,6 +345,14 @@ class PopupCloser:
                 return True
             log.info("Fenêtre « %s » revenue %d fois après sa fermeture, et aucun autre bouton sûr : je la referme "
                      "comme d'habitude", name, self._repeats)
+        if known.close_point and below_map(frame, known.close_point):
+            # Bouton sous la carte, par-dessus la barre de raccourcis : revu immobile avant le clic (still_open).
+            seen = still_open(self.game, known, self.specs, frame)
+            if seen is None:
+                log.info("Fenêtre « %s » : bouton sous la carte pas encore immobile (fenêtre en train de s'ouvrir ?), "
+                         "pas de clic sur cette capture", name)
+                return True
+            known = seen
         log.info("Fenêtre « %s » : je la ferme", name)
         if known.close_point:
             self.game.click(known.close_point, known.close_spread)

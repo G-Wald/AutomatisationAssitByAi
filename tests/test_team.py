@@ -900,6 +900,7 @@ def test_lost_follower_rejoins_the_leader_before_it_moves_on(tmp_path, monkeypat
     leader_steps = []
     monkeypatch.setattr(bot.roamer, "step", lambda: leader_steps.append(1))
     bot.roamer.traveler.coords = (4, -16)
+    bot.roamer.traveler._last_label = unreadable_label()  # carte du principal déjà regardée
     bot._lost, bot._seen_at = {"B"}, {"B": (5, -17)}
     bot._roam()
     assert leader_steps == [] and trips == [("B", (5, -17), (4, -16))]  # le principal attend, B fait son trajet
@@ -1148,6 +1149,17 @@ def test_sword_at_the_top_found_by_its_blade_its_icon_below_and_its_handle():
     assert abs(bx - 860) <= 2 and abs(by - 58) <= 3  # le milieu de la lame, entre les deux lignes du nom de la carte
 
 
+def test_sword_cut_above_its_guard_found_by_its_icon_alone():
+    # 25/10 (journal 171736, Taïnéla 1,-32) : groupe tout en haut, pommeau et garde au-dessus de l'écran ; seuls le bas
+    # de la lame (dans son cercle) et l'icône (0,72) se voient. Deux combats, les 7 suiveurs dehors, Fourboun mort seul.
+    frame = load_frame("epee_coupee_lame_et_icone_seules")
+    (sword,) = find_fight_swords(frame)
+    assert sword.parts == ("icon",) and sword.point_parts == ("blade",)
+    ((x, y), (sx, sy)), = sword.points
+    assert abs(x - 1566) <= 3 and sy <= y <= 25  # le bout de lame visible, sous le bord de l'écran
+    assert Joiner()._find(frame, to_reference(frame.layout, (1668, 24)))[0].center == sword.center
+
+
 def test_sword_under_the_result_window_clicked_on_its_blade_first():
     # 20/10 (journal 205623, 0248) : fenêtre « Résultat du combat » sur le haut de l'épée ; garde (0,72) et lame (0,97)
     # seules visibles. Pas de clic sur le pommeau ni sur la poignée, cachés ; la lame d'abord.
@@ -1216,12 +1228,19 @@ def test_next_follower_clicks_the_sword_where_it_worked_for_the_first(monkeypatc
     joiner = Joiner(timeout=5)
     assert joiner.join(first, hint=None) and joiner.known is not None
     worked = events(screen, "click_right")[0][2]
-    monkeypatch.setattr("bot.team.join.find_fight_swords", lambda *a, **k: pytest.fail("épée recherchée de nouveau"))
+    boxes = []  # 25/10 : l'épée revue à sa place dans la fenêtre du suiveur (petite zone), pas cherchée partout
+
+    def seen_again(frame, box=None):
+        boxes.append(box)
+        return find_fight_swords(frame, box)
+
+    monkeypatch.setattr("bot.team.join.find_fight_swords", seen_again)
     screen.events.clear()
     third = member("Third", screen, sword, with_join_menu(sword, at=(950, 330)), load_frame("preparation"))
     assert joiner.join(third, hint=None)
     again = events(screen, "click_right")[0][2]
     assert abs(again[0] - worked[0]) <= 4 and abs(again[1] - worked[1]) <= 4
+    assert len(boxes) == 1 and boxes[0] is not None and boxes[0][2] - boxes[0][0] <= 200
     joiner.new_fight()
     assert joiner.known is None
 
@@ -1243,7 +1262,7 @@ def test_fight_end_seen_at_once_on_the_result_window(monkeypatch):
     bot._turns([a])  # rend la main aussitôt
 
 
-def test_result_window_closed_in_every_fight_window_with_one_look():
+def test_result_window_closed_in_every_fight_window_where_it_is_seen():
     screen = Screen()
     result = load_frame("coeur_43pv")  # « Résultat du combat », même fenêtre au même endroit pour tous
     leader, follower = member("A", screen, result), member("B", screen, result)
@@ -1252,10 +1271,24 @@ def test_result_window_closed_in_every_fight_window_with_one_look():
     clicks = events(screen, "click")
     assert [e[0] for e in clicks] == ["B", "A"]  # le principal en dernier : il reste devant
     assert clicks[0][2] == clicks[1][2]  # même bouton « Fermer »
-    assert events(screen, "look") == []  # aucune capture dans la fenêtre du suiveur
+    # 25/10 (journal 181212) : plus de clic à l'aveugle ; chaque fenêtre regardée avant son clic (et une seconde
+    # capture chez le principal : bouton immobile, fenêtre ouverte).
+    assert sorted(e[0] for e in events(screen, "look")) == ["A", "B"]
     screen.events.clear()
     assert follower.popups.handle(result, 0) and events(screen, "click") == []  # vérification : pas de second clic
 
+
+
+def test_result_window_not_clicked_blind_while_it_still_opens():
+    # 25/10 (journal 181212, combat 17) : fenêtre encore en train de s'ouvrir, « Fermer » cru sur un objet de la barre
+    # de raccourcis, cliqué à l'aveugle dans les 8 fenêtres : Elseiso a bu une potion de rappel. La seconde capture ne
+    # montre plus le bouton au même endroit : aucun clic à l'aveugle, la fermeture se fait fenêtre par fenêtre.
+    screen = Screen()
+    result = load_frame("coeur_43pv")
+    leader, follower = member("A", screen, load_frame("hors_combat")), member("B", screen, result)  # seconde capture
+    bot = team_bot(leader, follower)
+    bot._close_results(leader, result, [leader, follower])
+    assert events(screen, "click") == []
 
 def test_click_cancelled_when_another_window_is_under_the_mouse(monkeypatch):
     from bot.actions import input as game_input
@@ -1804,3 +1837,156 @@ def test_friend_levels_read_in_the_friends_list():
         [30, 19, 23, 47]
     assert read_friend_level(frame, title, "Koalaloupour") is None
 
+
+
+def test_result_not_clicked_in_a_window_where_it_is_not_seen():
+    # 25/10 (journal 181212) : « Fermer », vu chez un autre, cliqué au même endroit chez Elseiso, où rien ne couvrait la
+    # barre de raccourcis : une potion de Brâkmar bue. Pas de fenêtre de résultat chez lui : pas de clic.
+    screen = Screen()
+    result = load_frame("coeur_43pv")
+    leader, follower = member("A", screen, result), member("B", screen, load_frame("hors_combat"))
+    bot = team_bot(leader, follower)
+    bot._close_results(leader, result, [leader, follower])
+    assert [e[0] for e in events(screen, "click")] == ["A"]
+
+
+def test_a_knocked_out_member_is_not_the_fight_end(monkeypatch, caplog):
+    # 31/10 (boss du donjon Bouftou) : Eldieso K.O. à son tour, sa fenêtre hors combat prise pour la fin du combat,
+    # salle comptée deux fois. Un autre personnage encore en combat : c'est sa fenêtre qui est regardée.
+    import logging
+
+    caplog.set_level(logging.INFO)
+    monkeypatch.setattr("bot.team.loop.FIGHT_END_CONFIRM", 0)
+    screen = Screen()
+    out, enemy, result = load_frame("hors_combat"), load_frame("combat_tour_adversaire"), load_frame("coeur_43pv")
+    knocked = member("A", screen, out)
+    other = member("B", screen, enemy, enemy, enemy, result)
+    bot = team_bot(knocked, other)
+    bot.my_team = RED
+    end = bot._turns([knocked, other])
+    assert end is not None and end[0] is other  # fin vue chez B, sur sa fenêtre de résultat
+    assert any("A hors combat (K.O. ?), B encore en combat" in r.getMessage() for r in caplog.records)
+
+
+def test_fight_end_is_told_by_the_server():
+    # 31/10, utilisateur : la fin du combat d'après le réseau seulement (GE), l'écran ne sert qu'à défaut.
+    import time as clock
+
+    from bot.connection.network import ClientFeed
+
+    screen = Screen()
+    a = member("A", screen, load_frame("hors_combat"))
+    a.game.net = ClientFeed("A")
+    began = clock.monotonic()
+    assert TeamBot._fight_told([a], began) is None  # aucun combat entendu : l'écran décide
+    a.game.net.feed("GJK2|0|1|0|30000|4")
+    assert TeamBot._fight_told([a], began) is False  # en cours, même si l'écran dit hors combat (K.O.)
+    a.game.net.feed("GE1|0|1|...")
+    assert TeamBot._fight_told([a], began) is True
+    assert TeamBot._fight_told([a], began + 1000) is None  # combat d'avant : pas celui-ci
+
+
+def test_out_of_combat_screen_does_not_end_a_fight_the_server_says_is_on(monkeypatch):
+    monkeypatch.setattr("bot.team.loop.FIGHT_END_CONFIRM", 0)
+    screen = Screen()
+    out = load_frame("hors_combat")
+    a = member("A", screen, out)
+    bot = team_bot(a)
+    bot.my_team = RED
+    told = iter([False, False, False, True, True])
+    monkeypatch.setattr(TeamBot, "_fight_told", staticmethod(lambda fighters, began: next(told)))
+    assert bot._turns([a]) is None
+    assert next(told, "fini") == "fini"  # rendu seulement une fois la fin dite par le serveur
+
+
+def test_join_refusal_from_the_server_is_written_in_the_log():
+    # 31/10 : Walitcoin, « Rejoindre » sans effet en salle 8 du donjon Bouftou, cause inconnue faute de trace.
+    import time as clock
+
+    from bot.connection.network import ClientFeed
+    from bot.team.join import _refusal
+
+    since = clock.monotonic() - 1
+    net = ClientFeed("Walitcoin")
+    net.feed("GA;903;1610317;f")
+    assert "combat complet" in _refusal(net, since) and "GA;903;1610317;f" in _refusal(net, since)
+    other = ClientFeed("Walitcoin")
+    other.feed("Im116")
+    assert _refusal(other, since) == " (serveur : Im116)"
+    assert _refusal(None, since) == ""
+
+
+def answering(follower: Member, *replies: str):
+    """Écoute factice de la fenêtre du suiveur : le serveur répond `replies` à chaque clic droit (sur l'épée)."""
+    from bot.connection.network import ClientFeed
+
+    net = follower.game.net = ClientFeed(follower.name)
+    click = follower.game.click
+
+    def click_and_answer(point=None, spread=(0, 0), button="left"):
+        done = click(point, spread, button)
+        if button == "right":
+            for reply in replies:
+                net.feed(reply)
+        return done
+
+    follower.game.click = click_and_answer
+    return net
+
+
+def test_join_refused_by_the_server_stops_at_once(caplog):
+    # 31/10 (Walitcoin, salle 8 du donjon Bouftou) : « Rejoindre » cliqué deux fois sans effet, 20 s perdues, combat
+    # fait à 7. Refus « GA;903 » du serveur : abandon aussitôt, raison au journal, pas de second clic.
+    caplog.set_level(logging.INFO)
+    screen = Screen()
+    sword = with_sword("hors_combat", at=(900, 300))
+    follower = member("Walitcoin", screen, sword)  # l'écran ne montre jamais le placement
+    answering(follower, "GA;903;1568583;f")
+    started = time.monotonic()
+    joiner = Joiner(timeout=20)
+    assert not joiner.join(follower, hint=None)
+    assert time.monotonic() - started < 3 and len(events(screen, "click_right")) == 1
+    assert any("combat complet" in r.getMessage() and "GA;903;1568583;f" in r.getMessage() for r in caplog.records)
+    assert not joiner.join(follower, hint=None)  # loop.py : join après la tentative rapide refusée, sans clic
+    assert len(events(screen, "click_right")) == 1
+    joiner.new_fight()
+    assert "Walitcoin" not in joiner.refused
+
+
+def test_join_proven_by_the_server_before_the_screen_shows_it():
+    # GJK de sa fenêtre juste après le clic : entré, même si l'écran montre encore la carte.
+    screen = Screen()
+    sword = with_sword("hors_combat", at=(900, 300))
+    follower = member("Second", screen, sword)
+    answering(follower, "GJK2|0|1|0|30000|4")
+    assert Joiner(timeout=5).join(follower, hint=None)
+    assert len(events(screen, "click_right")) == 1
+
+
+def test_quick_join_checked_by_the_server(monkeypatch):
+    monkeypatch.setattr("bot.team.join.QUICK_SAME_SPOT", 1.0)
+    screen = Screen()
+    sword = with_sword("hors_combat", at=(900, 300))
+    first, second = member("Second", screen, sword, load_frame("preparation")), member("Troisieme", screen, sword)
+    answering(second, "GJK2|0|1|0|30000|4")
+    joiner = Joiner(timeout=5)
+    assert joiner.ask(first, None) and joiner.ask(second, None)  # le second : clic aussitôt (épée connue)
+    looks = len(events(screen, "look"))
+    assert joiner.wait_placement(second, time.monotonic() + 5)
+    assert len(events(screen, "look")) == looks  # dit par le serveur : pas de regard
+
+
+def test_server_silence_after_the_click_is_not_a_join():
+    # Écoute vivante mais aucun GJK depuis le clic : pas entré, même si la capture montre un placement (celui d'un
+    # autre combat, ou une capture mal lue) ; sans écoute, l'écran décide comme avant.
+    screen = Screen()
+    follower = member("Second", screen, load_frame("preparation"))
+    joiner = Joiner(timeout=5)
+    answering(follower)
+    follower.game.net.feed("BN")  # flux vivant
+    joiner.asked["Second"] = time.monotonic()
+    started = time.monotonic()
+    assert not joiner.wait_placement(follower, time.monotonic() + 0.2)
+    assert time.monotonic() - started < 1 and events(screen, "look") == []
+    follower.game.net = None
+    assert joiner.wait_placement(follower, time.monotonic() + 0.2)

@@ -73,3 +73,10 @@ def _without_local_reference(monkeypatch, tmp_path):
     monkeypatch.setattr("bot.brain.arena.ARENA_DIR", tmp_path / "references")
     monkeypatch.setattr("bot.brain.arena.Arenas._loaded", None)
     monkeypatch.setattr("bot.brain.travel.ANOMALIES", tmp_path / "anomalies_passages.jsonl")
+
+
+@pytest.fixture(autouse=True)
+def _possessions_kept_aside(monkeypatch, tmp_path):
+    """31/10 : le sac de la connexion (ASK) est écrit dès qu'il est entendu ; les tests qui en envoient un écrivaient
+    dans data/possessions (Fourboun et Enu-six écrasés). Leurs fichiers vont dans un dossier temporaire."""
+    monkeypatch.setattr("bot.brain.possessions.FOLDER", tmp_path / "possessions")

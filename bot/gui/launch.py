@@ -46,6 +46,9 @@ COMBAT_MODES = ("carte", "zone")  # les seuls où le bot attaque des groupes (--
 WORLDS = {"incarnam": "Incarnam", "douze": "Monde des Douze"}  # clés de --monde (WORLDS de bot/brain/travel.py)
 WAIT_MODES = ("fixe", "condition")  # timing.wait_mode : pas dans la fenêtre, seulement par data/gui.json et --set
 # Début de session (--lecture, session.mode ; READING_MODES de bot/brain/memory.py) : lire à l'écran, ou reprendre.
+BANK_MODES = {"chacun": "chacun dans son coffre", "principal": "tout au principal"}  # team.banque_mode
+# Clés réparties au début d'un farm de donjon (donjon.cles, bot/team/keys.py, 30/10).
+KEY_MODES = {"non": "non", "sac": "sacs", "sac_banque": "sacs + banque"}
 READINGS = {"controle": "Contrôler (lire les sorts et les caractéristiques)", "memoire": "Reprendre la dernière session"}
 # Captures gardées dans logs/ (logs.images, par --set) : le bot regarde toujours l'écran.
 IMAGES = {"toutes": "toutes", "problemes": "problèmes seulement", "aucune": "aucune"}
@@ -76,6 +79,7 @@ class Choices:
     passages: str = "1"  # farm de donjon : passages complets (--passages)
     resume: str = ""  # farm de donjon : reprise (RESUMES), « --donjon incarnam:dalle » ; vide : au début
     resume_room: str = "1"  # farm de donjon, reprise aux salles : numéro de la salle (« --donjon incarnam:salles:2 »)
+    keys: str = "non"  # farm de donjon : clés réparties au début (donjon.cles, --set ; KEY_MODES)
     combat_only: bool = False  # --combat-only : le bot n'attaque pas les groupes, il joue les combats lancés à la main
     observe: bool = False  # --observe : aucun clic, aucune touche
     monde: str = "incarnam"  # --monde
@@ -83,6 +87,9 @@ class Choices:
     leader: str = ""  # --principal ; en solo : la fenêtre de ce personnage (--title), vide : la première trouvée
     notifications: bool = False  # --notifications (mode équipe)
     burst: bool = False  # combat.burst (--set)
+    zaap: bool = True  # travel.zaap (--set) : trajets par zaap quand aucun chemin à pied n'existe (coûte des kamas)
+    bank: bool = True  # team.banque_auto (--set) : pods pleins en mode zone, aller-retour à la banque d'Astrub
+    bank_mode: str = "chacun"  # team.banque_mode (--set) : coffre de chacun, ou tout au principal (BANK_MODES)
     wait_mode: str = "fixe"  # timing.wait_mode (--set) ; pas de case dans la fenêtre
     reading: str = "controle"  # --lecture : début de session, sorts et caractéristiques lus (controle) ou repris (memoire)
     combats: str = ""  # --combats : s'arrêter après N combats ; vide : sans limite
@@ -108,6 +115,7 @@ def default_choices(settings: dict) -> Choices:
     wait_mode = str((settings.get("timing") or {}).get("wait_mode") or "").strip().lower()
     reading = _plain(str((settings.get("session") or {}).get("mode") or ""))
     images = _plain(str((settings.get("logs") or {}).get("images") or ""))
+    keys = _key_mode((settings.get("donjon") or {}).get("cles"))
     return Choices(
         mode=mode if mode in ("zone", "aller", "explore", "test") else "carte",
         aller_to=destination.strip() if isinstance(destination, str) else "",
@@ -117,6 +125,11 @@ def default_choices(settings: dict) -> Choices:
         leader=str(team.get("leader") or "").strip(),
         notifications=str(team.get("turn_signal") or "").strip().lower() == "notifications",
         burst=bool(combat.get("burst", False)),
+        zaap=bool(travel.get("zaap", True)),
+        bank=bool(team.get("banque_auto", True)),
+        bank_mode=_plain(str(team.get("banque_mode") or "")) if _plain(str(team.get("banque_mode") or "")) in BANK_MODES
+        else "chacun",
+        keys=keys,
         wait_mode=wait_mode if wait_mode in WAIT_MODES else "fixe",
         reading=reading if reading in READINGS else "controle",
         images=images if images in IMAGES else "toutes",
@@ -132,6 +145,15 @@ def default_choices(settings: dict) -> Choices:
 def _plain(text: str) -> str:
     """« Mémoire » -> « memoire » (session.mode peut être écrit avec ses accents)."""
     return "".join(c for c in unicodedata.normalize("NFKD", text) if not unicodedata.combining(c)).strip().lower()
+
+
+def _key_mode(value) -> str:
+    """donjon.cles tel que la fenêtre le coche (comme key_mode de bot/team/keys.py) : « sac + banque » -> sac_banque ;
+    absent, false ou inconnu : non."""
+    if value is None or value is False:
+        return "non"
+    text = re.sub(r"[\s+_-]+", "_", _plain(str(value)))
+    return text if text in KEY_MODES else "non"
 
 
 def parse_coords(text: str) -> tuple[int, int] | None:
@@ -207,6 +229,14 @@ def overrides(choices: Choices, settings: dict) -> list[tuple[str, object]]:
         changed.append(("team.turn_signal", "timeline"))
     if choices.burst != base.burst:
         changed.append(("combat.burst", choices.burst))
+    if choices.zaap != base.zaap:
+        changed.append(("travel.zaap", choices.zaap))
+    if choices.bank != base.bank:
+        changed.append(("team.banque_auto", choices.bank))
+    if choices.bank_mode != base.bank_mode:
+        changed.append(("team.banque_mode", choices.bank_mode))
+    if choices.mode == "donjon" and choices.keys != base.keys:
+        changed.append(("donjon.cles", choices.keys))
     if choices.wait_mode != base.wait_mode:
         changed.append(("timing.wait_mode", choices.wait_mode))
     if choices.images != base.images:
@@ -387,6 +417,8 @@ def validate(choices: Choices, settings: dict, titles: list[str] | None = None,
         errors.append(f"Début de session inconnu : {choices.reading!r} ({' ou '.join(READINGS)})")
     if choices.images not in IMAGES:
         errors.append(f"Captures inconnues : {choices.images!r} ({', '.join(IMAGES)})")
+    if choices.keys not in KEY_MODES:
+        errors.append(f"Clés du donjon : choix inconnu : {choices.keys!r} ({', '.join(KEY_MODES)})")
     _check_limits(errors, choices)
     title, leader = choices.title.strip(), choices.leader.strip()
     if not title:
@@ -509,6 +541,7 @@ def display_command(args: list[str], root: Path = ROOT) -> str:
 def _allowed(name: str, value) -> bool:
     return {"mode": lambda: value in MODES, "monde": lambda: value in WORLDS, "wait_mode": lambda: value in WAIT_MODES,
             "reading": lambda: value in READINGS, "images": lambda: value in IMAGES,
+            "bank_mode": lambda: value in BANK_MODES, "keys": lambda: value in KEY_MODES,
             "resume": lambda: value in RESUMES}.get(name, lambda: True)()
 
 

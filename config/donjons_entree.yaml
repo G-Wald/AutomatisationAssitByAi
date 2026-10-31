@@ -20,3 +20,27 @@ incarnam:
   pnj_fin: [21, 11]
   reponse_fin: A la sortie
   clic_fin: droit
+
+# Bouftou (30/10, trajet et dialogue écoutés au réseau) : Altaïr se tient dehors, en 2,-34 (Taïnéla, Le Berceau ; carte
+# 1856), devant la porte, sans grotte ni dalle. Trajet depuis Astrub : zaap 4,-19 -> Le Berceau 1,-32, puis 2,-32, 2,-33,
+# 2,-34 à pied. Dialogue : « DCK-1 », une seule question (DQ660) et deux réponses, « Donner la clé des bouftous. »
+# (564) et « Utiliser le trousseau de clefs. » (6602). Salles (référence du client, data/donjons.json) : cartes 2073 à
+# 2084, 11 salles, 8 places par équipe, la 11e marquée « sortie ».
+bouftou:
+  nom: Donjon Bouftou
+  monde: douze
+  carte: [2, -34]
+  pnj: [18, 14]           # Altaïr, case 212 annoncée par le serveur (GM|+212;...;-1;174;-4)
+  pnj_carte: 1856         # chacun situé devant Altaïr par la carte annoncée par le serveur
+  reponse: Donner la clé des bouftous   # ligne entière de sa bulle
+  reponse_id: 564         # réponse « clé » du serveur (DQ660|564;6602) : proposée seulement à qui a la clé
+  trousseau: Utiliser le trousseau de clefs   # 31/10 : entrée sans clé (trousseau), proposée à tous
+  trousseau_id: 6602
+  # Salles (30/10, au réseau) : un groupe par salle, la victoire téléporte dans la suivante (GDM 2074 puis 2075), sans
+  # marcher. Donjon partagé : d'autres joueurs y passent et prennent le groupe (« GM|--1 »), qui réapparaît ensuite.
+  salles: 10              # 30/10 : 10 combats, le Bouftou Royal dans la 10e (carte 2083) ; la 11e (2084) est la salle de fin
+  # Salle de fin (carte 2084) : Altaïr (modèle 177, case 255), clic gauche, « Parler » ; une question (DQ677), une
+  # réponse, « Accepter la récompense » (605) : un familier offert.
+  pnj_fin: [17, 17]
+  reponse_fin: Accepter la récompense
+  clic_fin: gauche

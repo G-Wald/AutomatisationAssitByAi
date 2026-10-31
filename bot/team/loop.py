@@ -29,23 +29,28 @@ from dataclasses import dataclass, replace
 import numpy as np
 
 from bot.actions import keys
+from bot.alerts import tell_user
 from bot.actions.stop import BotStopped
 from bot.brain.arena import Arenas, walk_area
 from bot.brain.combat import MapMemory
 from bot.brain.engage import Engager, EngageSettings
 from bot.brain.loop import PLACEMENT_FIRST_TRY, PLACEMENT_GIVE_UP, SETTLE_AFTER_READY, SETTLE_SECONDS
-from bot.brain.popups import close_context_menu, close_flash_menu
+from bot.brain.popups import close_any_menu, close_context_menu, close_flash_menu
 from bot.brain.position import PositionAsker
 from bot.brain.recovery import capture_once
 from bot.brain.rest import CHECK_EVERY, STOOL, STOOL_SPREAD, STOOL_ZONE, RestSettings
 from bot.brain.travel import (RECLICK_EVERY, SCENE_CHANGED, SCENE_STABLE, Journey, TravelSettings, Traveler,
-                              ZoneRoamer, escape_menu, make_roamer, merge_reading, same_map)
+                              ZoneRoamer, make_roamer, merge_reading, same_map)
 from bot.brain.travel import _click_spot, _gap, _motion, _motion_view, _scene  # mêmes repères que le principal
+from bot.brain import possessions
+from bot.team.bank import BANK_MAP, BankVisit
+from bot.team.keys import kept_key
+from bot.team.trade import CentralBank
 from bot.debug.draw import annotate
 from bot.debug.report import write_fight_report
 from bot.perception.colors import BLUE, RED
-from bot.perception.exits import DELTA
-from bot.perception.fighters import Fighter, clear_point
+from bot.perception.exits import DELTA, OPPOSITE
+from bot.perception.fighters import Fighter, clear_point, find_fighters
 from bot.perception.frame import Frame
 from bot.perception.grid import Cell, distance
 from bot.perception.maplabel import MapLabel, read_map_label
@@ -68,6 +73,7 @@ from bot.team.turns import TurnRouter
 log = logging.getLogger(__name__)
 
 FIGHT_END_CONFIRM = 1.0  # hors combat vu aussi longtemps pendant le combat : il est fini (pas un instant de transition)
+FIGHT_HEARD_BEFORE = 120.0  # s : début du combat (GJK) entendu au plus ce délai avant les tours (placement compris)
 # (aussitôt si une fenêtre est ouverte sur la carte : le résultat du combat ; le 01/10, 8 s entre le dernier coup et
 # la recherche du groupe suivant, dont 2 s de confirmation et 2 s d'attente fixe)
 # Début du tour d'un allié au portrait pas encore reconnu : son timer se remplit peu à peu (visible ~1 s après le
@@ -116,7 +122,15 @@ RESULT_RECHECK = 2.0
 # que son tour est fini (11/10, idée validée par l'utilisateur).
 TURN_MARKS_RECHECK = 0.2
 POD_FULL = 0.9  # pods : à partir de là, direction la banque (demande de l'utilisateur, 11/10)
+# Agression d'un personnage sur une autre carte (26/10, idée de l'utilisateur, écoute du serveur) : ceux qui en sont à
+# HELP_MAX_MAPS cartes au plus y vont pendant le placement (~30 s : « GJK...|30000 »), puis rejoignent son combat.
+HELP_MAX_MAPS = 2
+HELP_PLACEMENT = 24.0  # s après le début du placement : les aides doivent être arrivés (rejoindre prend ~5 s)
+HELP_WALK = 12.0  # s au plus pour un changement de carte des aides
 POD_LOG_STEP = 0.05  # pods notés au journal quand ils ont changé d'au moins 5 %
+# Pods en sortant de la banque : l'équipement et les objets hors ressources restent (27/10 : Pesopepe 42 -> 30 %,
+# Waldarch 38 -> 25 %). Pas de nouveau passage avant BANK_FLOOR_MARGIN de plus : sinon, aller-retour sans fin.
+BANK_FLOOR_MARGIN = 0.05
 # Le principal ne passe pas un soleil que ses suiveurs passent : personnage bloqué par le jeu (11/10, 1,-13 : rare,
 # débloqué par l'utilisateur avec un défi lancé à un autre personnage puis quitté). Au bout de LEADER_STUCK fois de
 # suite, le bot s'arrête et le dit.
@@ -131,6 +145,7 @@ FOLLOWER_RECLICKS = 2
 MAX_POPUPS = 6  # regards d'affilée dans une même fenêtre du jeu : fermer résultat, niveau supérieur, et retenter
 RESULT = "résultat du combat"  # même fenêtre, même bouton « Fermer » dans chaque fenêtre du combat
 RESULT_LAG = 0.2  # elle s'ouvre partout en même temps, à un instant près
+UNKNOWN_TINT_STOP = 3  # personnages au sol tactique pas reconnu dans un combat : arrêt (pas une fiche passagère)
 # Placement de toute l'équipe (team.place, team/placement.py). Une passe : un clic dans la fenêtre de chacun de ceux
 # qui bougent, puis une lecture des cases (PLACE_SETTLE après le premier clic, encore PLACE_RECHECK plus tard si un
 # déplacement ne se voit pas). Au plus PLACE_PASSES passes et PLACE_BUDGET s : avec 8 personnages sur les 8 à 12 cases
@@ -212,6 +227,65 @@ def _same_turn(a: Portrait | None, b: Portrait | None) -> bool:
     return (a is None and b is None) or same_portrait(a, b)
 
 
+def _same_button(seen, known, tolerance: float) -> bool:
+    """Le bouton « Fermer » du résultat au même endroit sur deux captures : fenêtre ouverte, immobile."""
+    return (seen is not None and seen.spec.name == RESULT and seen.close_point is not None
+            and max(abs(a - b) for a, b in zip(seen.close_point, known.close_point)) <= tolerance)
+
+
+def _name_asker(roamer, name: str) -> None:
+    """« /p %pos% » répond dans le canal du groupe : la ligne lue doit être celle de `name`. 26/10 (journal 173905) : le
+    nom venait du titre de la fenêtre, qui ne le porte plus (« Dofus Retro v1.49.8 ») ; la position d'un autre membre
+    lue (-4,-20 pour -1,-19), le principal cru téléporté, plus aucun changement de carte."""
+    asker = getattr(getattr(roamer, "traveler", None), "asker", None)
+    if asker is not None:
+        asker.name = name
+
+
+def _short_route(passages, start: tuple[int, int], goal: tuple[int, int],
+                 most: int) -> list[tuple[str, tuple[int, int]]] | None:
+    """Plus court chemin de `start` à `goal` en `most` cartes au plus, par les sorties de la référence complétée :
+    [(côté, carte d'arrivée), ...] ; None au-delà ou sans chemin connu."""
+    frontier = [(start, [])]
+    seen = {start}
+    for _ in range(most):
+        nxt = []
+        for here, route in frontier:
+            for side, dest in passages.referenced(here).items():
+                if dest in seen:
+                    continue
+                if dest == goal:
+                    return route + [(side, dest)]
+                seen.add(dest)
+                nxt.append((dest, route + [(side, dest)]))
+        frontier = nxt
+    return None
+
+
+def bank_visit(members, hide_key: str, mode: str, keep: int | None = None):
+    """Passage à la banque selon team.banque_mode : « principal » (team/trade.py) ou « chacun » (team/bank.py).
+    `keep` : clé de donjon reprise du coffre après le dépôt (donjon.garder_cle, team/keys.py ; 30/10)."""
+    return CentralBank(members, hide_key, keep) if mode == "principal" else BankVisit(members, hide_key, keep)
+
+
+def _told(member: Member, what: str) -> float | None:
+    """Vie ou pods de ce personnage d'après le serveur (écoute : connection/network.py, « As », « Ow ») ; None sans
+    écoute ou pas encore annoncés : l'écran (cœur, jauge des pods)."""
+    net = getattr(member.game, "net", None)
+    return getattr(net, what)() if net is not None and net.alive() else None
+
+
+def _circle_colour(member: Member) -> str | None:
+    """Couleur du cercle sur la case de ce personnage annoncée par le jeu (écoute réseau) ; None sans elle, ou si
+    aucun cercle ne s'y voit."""
+    net = getattr(member.game, "net", None)
+    cell = net.my_grid_cell() if net is not None else None
+    if cell is None:
+        return None
+    circle = next((f for f in find_fighters(member.game.look(park=False)) if f.cell == cell), None)
+    return circle.team if circle is not None and circle.team else None
+
+
 def _died(member: Member) -> bool:
     """Fin de combat : ce personnage est mort (perte d'énergie annoncée dans SON chat de combat)."""
     lines = combat_lines(member.game.look(park=False))
@@ -247,6 +321,14 @@ class TeamBot:
         self.act = act
         engage_settings = EngageSettings.from_settings(settings)
         self.travel_settings = TravelSettings.from_settings(settings, travel, start, region)
+        # Pods pleins (POD_FULL) en mode zone : aller-retour à la banque d'Astrub (team.banque_auto, case de l'interface).
+        self.bank_auto = bool((settings.get("team") or {}).get("banque_auto", True))
+        # Seuil réglable (team.pods_banque) : un test de la banque sans attendre des pods pleins (27/10).
+        self.pods_full = float((settings.get("team") or {}).get("pods_banque", POD_FULL))
+        # chacun : chacun dans son coffre ; principal : tout au coffre du principal, par lots (team/trade.py, 30/10).
+        self.bank_mode = str((settings.get("team") or {}).get("banque_mode", "chacun")).strip().lower()
+        # Clé de donjon reprise du coffre après le dépôt (donjon.garder_cle, team/keys.py, 30/10) ; None : rien.
+        self.keep_key = kept_key(settings)
         if self.travel_settings.mode in ("test", "explore", "aller"):
             engage = False  # déplacements (test, exploration, trajet) : pas de combat lancé par le bot
         enabled = engage_settings.enabled if engage is None else engage
@@ -261,10 +343,13 @@ class TeamBot:
                      f"{engage_settings.max_level} (niveau pas encore connu : {', '.join(missing)} ; retenu au prochain "
                      "« Tu passes niveau N »)")
         self.roamer = make_roamer(self.leader.game, self.travel_settings)
+        _name_asker(self.roamer, self.leader.name)
         self._crossings: list[Crossing] = []
         # Suiveurs partis vers le soleil en même temps que le principal (_dispatch) : capture de départ, heure du clic.
         self._dispatched: dict[str, tuple[Frame, float]] = {}
         self._pods: dict[str, float] = {}  # remplissage de la jauge des pods de chacun (0 à 1), au dernier tour des fenêtres
+        self._bank_floor: dict[str, float] = {}  # pods de chacun en sortant de la banque (BANK_FLOOR_MARGIN)
+        self._banked = False  # passé à la banque pendant cette session : premiers pods lus ensuite = _bank_floor
         self._lost: set[str] = set()  # suiveurs qui n'ont pas suivi : pas de clic à l'aveugle tant qu'ils n'ont pas rejoint
         self._seen_at: dict[str, tuple[int, int]] = {}  # dernière carte connue d'un suiveur perdu
         self._rejoin: dict[str, Journey] = {}  # trajet d'un suiveur perdu jusqu'à la carte du principal (_regroup)
@@ -296,13 +381,21 @@ class TeamBot:
             raise ValueError(f"combat.my_team doit valoir auto, red ou blue (pas {my_team!r})")
         self.learn_team = my_team == "auto"
         self.my_team = None if self.learn_team else my_team  # couleur de l'équipe : la même pour tous les personnages
+        # Équipe 0 du serveur (GP) = cases rouges : supposition contrôlée à l'écran à chaque combat (31/10). True :
+        # accord vu à ce lancement, le serveur tranche quand l'écran ne peut pas ; False : un désaccord, plus jamais.
+        self._told_colour_ok: bool | None = None
         self.auto_ready = bool(combat.get("auto_ready", True))
         self.poll = float(timing.get("poll", 0.15))
         self.router = TurnRouter([m.name for m in members])
         self.joiner = Joiner(self.team.join_timeout)
+        self.joiner.hide_key = self.travel_settings.hide_players_key  # joueurs cachés pendant le clic sur l'épée
+        if self.roamer is not None:  # carte du combat quand son nom ne se lit pas : suiveur ailleurs (team/join.py)
+            self.joiner.fight_coords = lambda: self.roamer.traveler.coords
         self.finished = False
         self.fights = 0  # combats finis depuis le lancement
         self._stop_reason = ""  # limite de la session atteinte : arrêt après le prochain tour des fenêtres
+        self._at_meeting: set[str] = set()  # suiveurs arrivés au rendez-vous de la zone, qui attendent le principal
+        self._behind_zaap: set[str] = set()  # suiveurs restés au zaap de départ du principal : il les attend à l'arrivée
         self._last_team = RED  # couleur du dernier combat : sert au placement, avant de savoir celle de celui-ci
         self._combat_ended_at: float | None = None
         self._next_engage_at = 0.0
@@ -322,8 +415,15 @@ class TeamBot:
         self._just_played: tuple[str, float] | None = None  # dernier personnage à avoir joué, heure de fin de son tour
         self._stuck: dict[str, float] = {}  # personnage -> fin de sa mise à l'écart (_unless_stuck)
         # Reprise après erreur (21/10, team/recovery.py). Progrès : combat lancé ou fini, carte changée, suiveur arrivé,
-        # tour joué ; la surveillance (hors combat) cherche ce qui bloque quand il n'y en a plus.
+        # tour joué ; la surveillance (hors combat) cherche ce qui bloque quand il n'y en a plus. Progrès « faible »
+        # (_progress(soft=True) : nouvel essai d'un suiveur en route, sans résultat encore) : _progress_at seulement,
+        # pas _real_progress_at (team/recovery.py, SOFT_PROGRESS_LIMIT).
         self._progress_at = time.monotonic()
+        self._real_progress_at = self._progress_at
+        self._rejoin_seen: tuple = ()  # essais des trajets des suiveurs perdus au tour de boucle précédent
+        self._hp: dict[str, float] = {}  # vie de chacun (0 à 1) au dernier tour des fenêtres
+        self._hp_report_due = False  # vie de l'équipe au journal au premier tour des fenêtres après un combat
+        self._seated_after: dict[str, float | None] = {}  # assis pendant le repos d'un autre : après quelle fin de combat
         self._lost_seen = 0  # suiveurs perdus au dernier tour de boucle (un de moins : il est arrivé)
         self._in_fight = False  # dans _fight : une erreur y est rattrapée sans arrêter le bot
         self._fight_errors = 0  # erreurs rattrapées pendant le combat en cours
@@ -337,6 +437,9 @@ class TeamBot:
                                  enabled=act and (self.engager is not None or self.roamer is not None))
 
     def run(self) -> None:
+        # 25/10 (journal 175311) : progrès compté depuis la création du TeamBot, avant le groupe et la reconnexion
+        # (bot/__main__.py : 29 s) ; « aucun progrès depuis 247 s » quand la boucle tournait depuis 3 min 38.
+        self._progress("début de la boucle")
         while not self.finished:
             self.safe_step()
 
@@ -388,11 +491,36 @@ class TeamBot:
     def _front_member(self) -> Member:
         return next((m for m in self.members if m.in_front()), self.leader)
 
-    def _progress(self, what: str) -> None:
-        """Progrès de l'équipe (surveillance : team/recovery.py)."""
+    def _progress(self, what: str, soft: bool = False) -> None:
+        """Progrès de l'équipe (surveillance : team/recovery.py). `soft` : le bot agit, sans résultat encore (essai
+        d'un suiveur en route) ; il ne repousse la surveillance que jusqu'à SOFT_PROGRESS_LIMIT s après le dernier
+        vrai progrès."""
         self._progress_at = time.monotonic()
+        if not soft:
+            self._real_progress_at = self._progress_at
         self.watchdog.progress()
         log.debug("Progrès : %s", what)
+
+    def _rejoin_attempts(self) -> tuple:
+        """Où en sont les trajets des suiveurs perdus (_regroup) : par suiveur, cartes passées, échecs d'affilée,
+        itinéraires recalculés (brain/travel.Journey)."""
+        return tuple(sorted((name, getattr(j, "crossed", 0), getattr(j, "failures", 0), getattr(j, "reroutes", 0))
+                            for name, j in self._rejoin.items()))
+
+    def _note_rejoin_attempts(self) -> None:
+        """Un nouvel essai d'un suiveur en route (sortie essayée sans succès, nouvel itinéraire) : progrès faible.
+
+        25/10 (journal 180222) : 7 suiveurs perdus en 0,-33, chacun essayant 2 à 4 soleils de la sortie de droite l'un
+        après l'autre (~20 s chacun), aucune carte changée : « aucun progrès » à 147 s, pause du bot à 280 s alors
+        qu'il travaillait ; journal 175311, même chose depuis 1,-33, premier changement de carte d'un suiveur 3 min 58
+        après le début du regroupement (« aucun progrès » à 247 s, pause à 332 s). Les trajets sont bornés
+        (brain/travel.py : JOURNEY_FAILURES échecs d'affilée, JOURNEY_REROUTES itinéraires, puis arrêt du bot « ne peut
+        pas rejoindre ») ; la surveillance reprend de toute façon SOFT_PROGRESS_LIMIT s après le dernier vrai progrès."""
+        attempts = self._rejoin_attempts()
+        if attempts != self._rejoin_seen:
+            if attempts:
+                self._progress("suiveur en route : nouvel essai", soft=True)
+            self._rejoin_seen = attempts
 
     def step(self) -> None:
         if not self.act:
@@ -407,6 +535,7 @@ class TeamBot:
         if len(self._lost) < self._lost_seen:
             self._progress("suiveur arrivé")
         self._lost_seen = len(self._lost)
+        self._note_rejoin_attempts()
         if not self._round_due and self.watchdog.check():
             return  # diagnostic (hors combat), ou dernier recours
         if self._result_check_at is not None and time.monotonic() >= self._result_check_at and not self._round_due:
@@ -455,6 +584,9 @@ class TeamBot:
         self._round_due = False
         self._last_round = time.monotonic()
         self._tired = []
+        for member in self.members:  # possessions gardées pour la session suivante (brain/possessions.py, 30/10)
+            possessions.save(member.name, getattr(member.game, "net", None))
+        self._hp = {}
         since = None if self._combat_ended_at is None else time.monotonic() - self._combat_ended_at
         self._leader_closed = False
         for member in self.followers + [self.leader]:
@@ -475,10 +607,27 @@ class TeamBot:
             if not member.spellbook.read_done:
                 member.spellbook.read()  # une fois par personnage : ses sorts et caractéristiques, pour son IA de combat
                 frame = member.game.look(park=False)
-            ratio = hp_ratio(frame)
+            ratio = _told(member, "life_ratio")
+            ratio = hp_ratio(frame) if ratio is None else ratio
+            if ratio is not None:
+                self._hp[member.name] = ratio
             if ratio is not None and ratio < self.rest_settings.below:
                 self._tired.append(member)
             self._note_pods(member, frame)
+        if len(self._hp) >= 2 and not any(self._hp.values()):
+            # 26/10 (journal 181017, combat 6) : résultat du combat pas reconnu, resté ouvert par-dessus le cœur ; vie
+            # lue à 0 % chez les 8 (personne n'est mort), repos de 180 s recommencé sans fin. Vivant hors combat,
+            # personne n'est à 0 : le cœur est caché, pas de repos sur cette lecture ; le tour suivant relit.
+            log.warning("Vie lue à 0 %% chez %d personnages : leur cœur est caché (fenêtre par-dessus ?), pas de repos "
+                        "sur cette lecture", len(self._hp))
+            self._tired = []
+            self._hp = {}
+        if self._hp_report_due and self._hp:
+            # Vie de chacun après le combat : mesure des repos (25/10, journal 181212 : 3 repos, 8,1 min sur 53, la vie
+            # des autres n'était écrite nulle part).
+            self._hp_report_due = False
+            log.info("Vie après le combat : %s", ", ".join(f"{name} {100 * ratio:.0f} %" for name, ratio in
+                                                         sorted(self._hp.items(), key=lambda item: item[1])))
         return None
 
     def _recheck_results(self) -> None:
@@ -500,13 +649,22 @@ class TeamBot:
     def _note_pods(self, member: Member, frame: Frame) -> None:
         """Pods de chacun (jauge autour de la minimap, hors combat) : au journal quand ils changent ; vers 90 %, à la
         banque (allers-retours à venir : docs/rapports/plan_banque.md)."""
-        fill = pods_fill(frame)
+        fill = _told(member, "pods_ratio")
+        fill = pods_fill(frame) if fill is None else fill
         before = self._pods.get(member.name)
         self._pods[member.name] = fill
         if before is not None and abs(fill - before) < POD_LOG_STEP:
             return
-        if fill >= POD_FULL:
+        # Premiers pods lus après la banque, du serveur ou de la jauge (27/10 : « Ow » pas encore reçu dans la session,
+        # Pesopepe relu à l'écran, plancher manqué, second passage aussitôt).
+        floor = self._bank_floor.setdefault(member.name, fill) if self._banked else None
+        if fill >= self.pods_full and floor is not None and fill < floor + BANK_FLOOR_MARGIN:
+            log.info("Pods de %s : %.0f %%, comme en sortant de la banque (équipement, objets hors ressources) : pas de "
+                     "nouveau passage", member.name, 100 * fill)
+        elif fill >= self.pods_full:
             log.warning("Pods de %s : %.0f %% : il faut passer à la banque", member.name, 100 * fill)
+            if self.bank_auto and isinstance(self.roamer, ZoneRoamer) and self.roamer.errand is None:
+                self.roamer.start_errand(BANK_MAP, f"Pods de {member.name} pleins")
         else:
             log.info("Pods de %s : %.0f %%", member.name, 100 * fill)
 
@@ -543,9 +701,16 @@ class TeamBot:
                 self.engager.new_map()
                 self._follow()
                 self._progress("trajet vers la zone")
+                if self.roamer.errand_reached:
+                    self._bank_visit()
             return
         if time.monotonic() < self._next_engage_at or self.engager.engage():
             return  # combat lancé : le placement est vu au tour de boucle suivant
+        if getattr(self.engager, "night", False) and not self.engager.settings.fight_at_night:
+            # 26/10 (journal 012810) : combat de nuit perdu, les 8 morts (teinte pas reconnue). Pas de combat la nuit.
+            self._stop_reason = "il fait nuit dans le jeu : pas de combat la nuit (engage.combats_de_nuit)"
+            self._round_due = True
+            return
         # Comme en solo : groupe parti avant l'arrivée, on en cherche un autre aussitôt ; aucun groupe, on attend
         # ou (mode zone) toute l'équipe passe sur une carte voisine.
         if self.engager.keyboard_ok is False:
@@ -571,6 +736,22 @@ class TeamBot:
         delay = 1.0 if self.engager.missed else self.engager.settings.retry_delay
         self._next_engage_at = time.monotonic() + delay
 
+    def _bank_visit(self) -> None:
+        """Équipe arrivée à la banque (course du ZoneRoamer, pods pleins) : chacun vide l'onglet ressources dans son
+        coffre (team/bank.py, comme --banque), puis retour dans la zone de combat. Seulement toute l'équipe là."""
+        if self._lost:
+            log.info("Banque : %s pas encore là, j'attends l'équipe", ", ".join(sorted(self._lost)))
+            return
+        log.info("Banque : toute l'équipe est là, passage au coffre")
+        done = bank_visit(self.members, self.travel_settings.hide_players_key, self.bank_mode, self.keep_key).run()
+        failed = [m.name for m in self.members if m.name not in done]
+        if failed:
+            log.warning("Banque : coffre pas vidé pour %s (captures gardées)", ", ".join(failed))
+        self._pods = {}
+        self._bank_floor, self._banked = {}, True
+        self.roamer.end_errand()
+        self._round_due = True
+
     def _roam(self) -> None:
         """Test de déplacement, exploration : une carte à la fois, suivie par toute l'équipe."""
         if not self._regroup():
@@ -582,7 +763,10 @@ class TeamBot:
 
     def _rest(self) -> None:
         """Repos de ceux dont la vie est basse, assis en même temps : tabouret dans chaque fenêtre, puis tour des
-        fenêtres toutes les CHECK_EVERY secondes jusqu'à ce que chacun soit remonté (ou rest.max_seconds)."""
+        fenêtres toutes les CHECK_EVERY secondes jusqu'à ce que chacun soit remonté (ou rest.max_seconds).
+
+        Ceux qui attendent sous rest.until s'assoient aussi (_sit_while_waiting), sans allonger le repos : il finit
+        quand ceux qui en avaient besoin sont remontés."""
         tired, self._tired = self._tired, []
         sitting = []
         for member in tired:
@@ -597,6 +781,8 @@ class TeamBot:
                 log.info("Vie à %.0f %% : je m'assois jusqu'à %.0f %%", 100 * ratio, 100 * self.rest_settings.until)
                 member.game.click(stool[0], frame.layout.spread(*STOOL_SPREAD))
             sitting.append(member)
+        if sitting:
+            self._sit_while_waiting(sitting)
         deadline = time.monotonic() + self.rest_settings.max_seconds
         while sitting and time.monotonic() < deadline:
             self.leader.game.sleep(CHECK_EVERY)
@@ -612,6 +798,30 @@ class TeamBot:
                     sitting.remove(member)
         if sitting:
             log.info("Fin du repos (durée maximale)")
+
+    def _sit_while_waiting(self, resting: list[Member]) -> None:
+        """Pendant le repos de `resting`, les autres sous rest.until (vie lue au tour des fenêtres, relue ici)
+        s'assoient aussi : l'équipe attend de toute façon, et assis la vie remonte plus vite. 25/10 (journal 181212) :
+        3 repos d'un seul personnage (Eldieso 39 %, Fourboun 43 %, Eldieso 39 %), 153 à 179 s chacun, 8,1 min sur
+        53 ; les 7 autres attendaient debout. Le tabouret est cliqué seulement s'il est vu ; le clic suivant sur la
+        carte (soleil, épée) les relève, comme ceux qui se reposent. Une fois par fin de combat : déjà assis, un second
+        clic sur le tabouret pourrait le relever."""
+        until = self.rest_settings.until
+        for member in self.members:
+            if member in resting or self._hp.get(member.name, 1.0) >= until \
+                    or self._seated_after.get(member.name, -1.0) == self._combat_ended_at:
+                continue
+            frame = member.game.look()
+            ratio = hp_ratio(frame)
+            if ratio is None or ratio >= until or read_scene(frame).phase is not Phase.OUT_OF_COMBAT \
+                    or member.popups.describe(frame) is not None:
+                continue
+            stool = match_template(frame, STOOL, box=frame.layout.box(*STOOL_ZONE))
+            if stool is None:
+                continue
+            log.info("Vie à %.0f %% : je m'assois aussi pendant le repos des autres", 100 * ratio)
+            member.game.click(stool[0], frame.layout.spread(*STOOL_SPREAD))
+            self._seated_after[member.name] = self._combat_ended_at
 
     # Changement de carte
 
@@ -677,7 +887,7 @@ class TeamBot:
         si une fenêtre vient d'être fermée : pas de clic sur cette capture."""
         if find_context_menu(frame) is not None:
             if not close_context_menu(member.game, frame):
-                escape_menu(member.game)
+                close_any_menu(member.game, member.name)  # 31/10 : plus d'Échap (Menu principal derrière un menu)
             return False  # il s'est écarté : le soleil au prochain essai, sur une capture fraîche
         if member.popups.describe(frame) is not None and member.popups.handle(frame, self._since_combat()):
             return False
@@ -802,6 +1012,7 @@ class TeamBot:
         trajet. Un menu ouvert à la place (quelqu'un sur le soleil) est fermé et la case recliquée ailleurs ; une
         fenêtre connue (Menu principal ouvert par un Échap) est fermée avant tout reclic."""
         pending = {member.name: _Walk(member, _scene(before), clicked) for member, before, clicked in walking}
+        sent = {member.name: clicked for member, _, clicked in walking}  # premier clic de chacun (écoute réseau)
         target = self._arrival(crossing)
         leader_view: Frame | None = None  # carte où est arrivé le principal, pour juger au décor
         start = time.monotonic()
@@ -832,9 +1043,21 @@ class TeamBot:
                     # Souvent lui-même, arrivé par ce soleil (21/10) : un clic à côté ferme le menu et l'écarte de la
                     # case (Échap ne le ferme pas), puis le soleil de nouveau, au centre.
                     if not close_context_menu(member.game, frame):
-                        escape_menu(member.game)
+                        close_any_menu(member.game, name)  # 31/10 : plus d'Échap derrière un menu
                     walk.spot = -1  # _reclick : le centre de la case
                     self._reclick(walk, member.game.look(park=False), crossing)
+                    continue
+                told = self._told_arrival(member, sent[name])
+                if told is not None:
+                    # Nouvelle carte annoncée par le jeu dans SA fenêtre (connection/network.py, 26/10) : exacte.
+                    if target is None or told == target:
+                        log.info("%s a suivi le principal (carte %s,%s annoncée par le jeu)", name, *told)
+                        self._lost.discard(name)
+                    else:
+                        log.warning("%s est arrivé en %s,%s d'après le jeu, pas sur la carte du principal (%s,%s)",
+                                    name, *told, *target)
+                        self._lost.add(name)
+                    del pending[name]
                     continue
                 popup = member.popups.describe(frame)
                 if popup is not None and member.popups.handle(frame, self._since_combat()):
@@ -892,6 +1115,15 @@ class TeamBot:
         for walk in pending.values():
             self._left_behind(walk.member, crossing,
                               f"toujours pas arrivé après {time.monotonic() - start:.0f} s")
+
+    def _told_arrival(self, member: Member, since: float) -> tuple[int, int] | None:
+        """Coordonnées de la carte annoncée par le jeu dans la fenêtre de `member` depuis `since` (time.monotonic()),
+        une fois chargée ; None sans écoute réseau, sans changement de carte, ou carte hors de la référence."""
+        net = getattr(member.game, "net", None)
+        map_id = net.new_map_since(since) if net is not None and net.alive() else None
+        if map_id is None or self.roamer is None:
+            return None
+        return self.roamer.traveler.passages.coords_of(map_id)
 
     def _still_follower(self, walk: _Walk, crossing: Crossing, pending: dict[str, _Walk]) -> None:
         """Suiveur immobile sur la carte de départ (_wait_followers) : décor revu sur une capture fraîche, puis reclic ;
@@ -965,9 +1197,22 @@ class TeamBot:
                 log.warning("%s n'est pas sur la carte du principal au départ : il le rejoindra d'abord", member.name)
                 self._mark_lost(member, frame)
 
+    def _told_at(self, member: Member) -> tuple[int, int] | None:
+        """Coordonnées de la carte de ce personnage d'après le serveur (numéro du dernier GDM, référence complétée) ;
+        None sans écoute vivante, avant le premier changement de carte, ou hors de la référence de la région."""
+        net = getattr(member.game, "net", None)
+        passages = getattr(getattr(self.roamer, "traveler", None), "passages", None)
+        if net is None or not net.alive() or net.map_id is None or passages is None:
+            return None
+        return passages.coords_of(net.map_id)
+
     def _same_place(self, member: Member) -> bool:
         """Le suiveur est sur la carte du principal : même décor, ou mêmes coordonnées lues dans les deux fenêtres (24/10,
         plaines des Porkass : Pesopepe arrivé en -1,-40, décor jugé autre, le bot arrêté)."""
+        # 31/10, utilisateur : le réseau d'abord ; numéro de carte annoncé par le serveur aux deux fenêtres.
+        nets = [getattr(m.game, "net", None) for m in (member, self.leader)]
+        if all(net is not None and net.alive() and net.map_id is not None for net in nets):
+            return nets[0].map_id == nets[1].map_id
         mine, theirs = member.game.look(park=False), self.leader.game.look(park=False)
         if same_map(mine, theirs):
             return True
@@ -983,11 +1228,42 @@ class TeamBot:
         de continuer dispersés."""
         if self.roamer is None:
             return True
+        traveler = getattr(self.roamer, "traveler", None)
+        teleported = getattr(traveler, "teleported", None)
+        if teleported:
+            # 25/10 : le principal a pris un zaap (aucun chemin à pied, brain/travel.py) ; ses suiveurs, restés au zaap
+            # de départ, le rejoignent chacun par son trajet : même itinéraire de la référence, même zaap.
+            traveler.teleported = None
+            behind = [m.name for m in self.followers if m.name not in self._lost]
+            for name in behind:
+                self._lost.add(name)
+                self._seen_at[name] = teleported[0]
+            # 26/10 (journal 173905) : partis seuls vers le rendez-vous de la zone, ils marchaient l'un après l'autre (une
+            # carte en ~40 s pour 7) ; le principal les attend à l'arrivée du zaap, puis l'équipe marche ensemble.
+            self._behind_zaap.update(behind)
+            if behind:
+                log.info("Le principal a pris le zaap de %s,%s vers %s,%s : %s le rejoignent par le zaap", *teleported[0],
+                         *teleported[1], ", ".join(behind))
         if not self._together_checked:
             self._check_together()
         if not self._lost:
             return True
+        if getattr(self.roamer.traveler, "_last_label", True) is None:
+            # 25/10 (journal 201109) : pas encore regardé, sa position était celle de --combat-zone (-3,-25) alors qu'il
+            # était à Taïnéla ; Elseiso envoyé seul aux Blops. Sa carte d'abord (lue, sinon demandée au jeu).
+            self.roamer.traveler.look()
         target = self.roamer.traveler.coords
+        # Principal hors de la zone : rendez-vous à la carte de la zone donnée au lancement, où il va lui aussi ; les
+        # suiveurs égarés y vont chacun de leur côté, le principal ne les attend pas (voir ZoneRoamer.meeting).
+        if isinstance(self.roamer, ZoneRoamer) and self.roamer.away is None:
+            # 26/10 (journal 173634) : pas encore regardé (None) pris pour « dans la zone » ; 5 suiveurs ont pris le zaap
+            # vers le principal au Berceau, hors de la zone. Où il est d'abord.
+            self.roamer.locate()
+        meeting = getattr(self.roamer, "meeting", None) if getattr(self.roamer, "away", False) else None
+        if meeting is not None:
+            target = meeting
+        else:
+            self._at_meeting.clear()  # le principal est dans la zone : ceux qui l'attendaient le rejoignent
         if target is None:
             # 23/10 : au départ, nom de carte du principal illisible ; parti aussitôt sans les 6 suiveurs restés sur la
             # carte voisine. Sa position d'abord (lue, sinon demandée au jeu : « /p %pos% »).
@@ -995,11 +1271,27 @@ class TeamBot:
             target = self.roamer.traveler.coords
         if target is None:
             return True  # carte du principal inconnue : rien pour guider les autres
-        for name in sorted(self._lost):
+        leader_at = self.roamer.traveler.coords
+        for name in sorted(self._lost - self._at_meeting):
             member = self.by_name[name]
+            target = leader_at if name in self._behind_zaap or meeting is None else meeting
+            if target is None:
+                continue  # carte du principal pas encore lue : au tour suivant
             journey = self._rejoin.get(name)
+            here = journey.traveler.coords if journey is not None else self._seen_at.get(name)
+            if meeting is not None and here is not None and here == leader_at and self._same_place(member):
+                # 26/10 (journal 173905) : en route vers le rendez-vous chacun de son côté, un pas après l'autre (~80 s
+                # par carte pour le principal et 7 suiveurs) ; sur la carte du principal, il le suit comme les autres
+                # (tous les soleils cliqués ensemble).
+                log.info("%s est sur la carte du principal (%s,%s) : il le suit désormais", name, *leader_at)
+                self._lost.discard(name)
+                self._rejoin.pop(name, None)
+                self._seen_at.pop(name, None)
+                continue
             if journey is None or journey.goal != target:
-                start = self._seen_at.get(name)
+                # 31/10 : la carte annoncée par le serveur d'abord (Pesopepe resté en 0,-32, cru au zaap 1,-32 avec le
+                # principal : trajet parti de la mauvaise carte, zaap cliqué là où il n'y en a pas).
+                start = self._told_at(member) or self._seen_at.get(name)
                 if start is None:
                     start = self._look_again(member)
                 if start is None and same_map(member.game.look(park=False), self.leader.game.look(park=False)):
@@ -1021,28 +1313,44 @@ class TeamBot:
                     return False
                 settings = replace(self.travel_settings, mode="aller", destination=target, start=start)
                 traveler = Traveler(member.game, settings, self.roamer.traveler.world, self.roamer.traveler.atlas)
+                traveler.asker.name = name  # sa ligne « /p », pas celle d'un autre du groupe (_name_asker)
                 traveler.learns = False  # 11/10 : ses sorties « bloquées » (pas sur la carte crue) ont tout faussé
                 journey = self._rejoin[name] = Journey(traveler, target)
-                log.info("%s rejoint le principal en %s,%s (depuis %s)", name, *target,
+                log.info("%s rejoint %s en %s,%s (depuis %s)", name,
+                         "le rendez-vous de la zone" if target == meeting else "le principal", *target,
                          f"{start[0]},{start[1]}" if start else "une carte inconnue")
+            before = journey.traveler.coords
             journey.step()
+            if journey.traveler.coords != before:
+                # 25/10 (journal 175311) : 7 suiveurs en route depuis 1,-33 (sortie du bas injoignable, détour par
+                # 0,-33), 5 min sans « progrès » : pause du bot alors que chacun changeait de carte.
+                self._progress("suiveur en route")
             if not journey.done:
                 continue
             del self._rejoin[name]
             arrived = journey.traveler.coords == target
+            if arrived and meeting is not None and target == meeting:
+                log.info("%s attend le principal au rendez-vous de la zone, en %s,%s", name, *target)
+                self._at_meeting.add(name)
+                self._seen_at[name] = target
+                continue
             if arrived and not self._same_place(member):
                 log.warning("%s se croit en %s,%s mais ne voit pas le même décor que le principal", name, *target)
                 arrived = False
             if arrived:
                 log.info("%s a rejoint le principal en %s,%s", name, *target)
                 self._lost.discard(name)
+                self._behind_zaap.discard(name)
                 self._seen_at.pop(name, None)
             else:
                 log.warning("%s ne peut pas rejoindre le principal en %s,%s : je m'arrête (amène-le sur sa carte, "
                             "puis relance)", name, *target)
+                tell_user(f"{name} ne peut pas rejoindre le principal en {target[0]},{target[1]} : bot arrêté ; "
+                          f"amène-le sur sa carte, puis relance.")
                 self.finished = True
                 return False
-        return not self._lost
+        # En route vers le rendez-vous : le principal ne les attend pas ; restés derrière son zaap : il les attend.
+        return not self._lost or (meeting is not None and not (self._lost & self._behind_zaap))
 
     # Combat
 
@@ -1065,6 +1373,13 @@ class TeamBot:
         self._flash_checked = set()
         if read_scene(host.game.look(park=False)).phase is Phase.PLACEMENT:
             fighters = self._placement(host)
+            if fighters == [host] and len(self.members) > 1 and not self._stop_reason:
+                # 25/10 (journal 171736) : épée vue par aucun suiveur, 2 combats sur 3 sans personne d'autre que le
+                # principal ; au second, Fourboun est mort seul. Ce combat est joué jusqu'au bout, puis fin de session.
+                log.warning("Personne n'a rejoint le combat de %s : il se bat seul. Je finis ce combat, puis je "
+                            "m'arrête (relance quand l'équipe est réunie)", host.name)
+                tell_user(f"Personne n'a rejoint le combat de {host.name} : il se bat seul, le bot s'arrête après.")
+                self._stop_reason = f"personne n'a rejoint le combat de {host.name}"
         else:
             fighters = [host] + [m for m in self.members if m is not host
                                  and read_scene(m.game.look(park=False)).phase is not Phase.OUT_OF_COMBAT]
@@ -1075,6 +1390,7 @@ class TeamBot:
             # 17/10 : Koalaloupour mort seul à Incarnam, réapparu à Astrub, le bot a continué comme si de rien n'était.
             log.warning("%s mort(s) pendant ce combat (« Tu as perdu ... points d'énergie » dans le chat) : je "
                         "m'arrête après ce combat", ", ".join(dead))
+            tell_user(f"{', '.join(dead)} mort(s) au combat : le bot s'arrête après ce combat.")
             self._stop_reason = f"{', '.join(dead)} mort(s) au combat"
         self._fight_over()
         self.fights += 1
@@ -1094,9 +1410,11 @@ class TeamBot:
         selon l'ordre de jeu (_seat_team, team/placement.py), une fois tout le monde arrivé."""
         log.info("Placement : combat de %s", host.name)
         hint = recent_click(host)  # près du groupe attaqué : l'épée est là
+        self.joiner.host_id = getattr(getattr(host.game, "net", None), "my_id", None)  # son épée, d'après le serveur
         # 21/10 : épées déjà là avant son clic d'attaque (sa capture d'avant ce clic) : d'autres combats, écartés.
         self.joiner.ignore_swords_before(getattr(host.game, "map_click_frame", None), hint)
         others = [m for m in self.members if m is not host]
+        self._send_help(host, others)
         # Tous rejoignent d'abord, l'un après l'autre sans s'attendre (cases tirées au hasard par le jeu).
         asked = [m for m in others if self.joiner.ask(m, hint)]
         deadline = time.monotonic() + self.joiner.timeout
@@ -1117,6 +1435,63 @@ class TeamBot:
                     self._ready(member)
                     member.game.sleep(random.uniform(*READY_GAP))
         return [host] + joined if self._wait_combat(host) else []
+
+    def _send_help(self, host: Member, others: list[Member]) -> None:
+        """Personnages pas sur la carte du combat de `host` (agressé en route, resté en arrière), d'après le serveur :
+        s'ils en sont à HELP_MAX_MAPS cartes au plus (sorties de la référence), ils y vont ensemble, soleil après
+        soleil, pendant le placement, pour rejoindre son combat ensuite (26/10, demande de l'utilisateur). Sans écoute,
+        ou carte inconnue : rien (comme avant)."""
+        net = getattr(host.game, "net", None)
+        if net is None or not net.alive() or self.roamer is None:
+            return
+        passages = self.roamer.traveler.passages
+        target = passages.coords_of(net.snapshot()[0]) if net.snapshot()[0] is not None else None
+        if target is None:
+            return
+        away: dict[tuple[int, int], list[Member]] = {}
+        for member in others:
+            feed = getattr(member.game, "net", None)
+            if feed is None or not feed.alive() or feed.in_fight() or feed.snapshot()[0] is None:
+                continue
+            here = passages.coords_of(feed.snapshot()[0])
+            if here is not None and here != target:
+                away.setdefault(here, []).append(member)
+        deadline = time.monotonic() + HELP_PLACEMENT
+        for start, members in away.items():
+            route = _short_route(passages, start, target, HELP_MAX_MAPS)
+            names = ", ".join(m.name for m in members)
+            if route is None:
+                log.info("%s : combat de %s en %s,%s, trop loin de %s,%s pour l'aider à temps", names, host.name,
+                         *target, *start)
+                continue
+            log.info("%s : %s est agressé en %s,%s, j'y vais (%d carte(s)) pour rejoindre son combat", names, host.name,
+                     *target, len(route))
+            here, entry = start, None
+            for side, dest in route:
+                cell = passages.sun_cell(here, side, entry)
+                if cell is None or time.monotonic() >= deadline:
+                    log.info("%s : pas de soleil connu vers %s,%s, ou plus le temps : je n'y vais pas", names, *dest)
+                    break
+                clicked = time.monotonic()
+                for member in members:
+                    frame = member.game.look(park=False)
+                    point, spread = _click_spot(frame, cell, 0)
+                    self.roamer.traveler.click_sun(point, spread, member.game)
+                end = min(deadline, clicked + HELP_WALK)
+                while time.monotonic() < end and any(
+                        passages.coords_of(m.game.net.new_map_since(clicked) or -1) != dest for m in members):
+                    host.game.sleep(0.3)
+                arrived = [m for m in members if passages.coords_of(m.game.net.new_map_since(clicked) or -1) == dest]
+                if len(arrived) < len(members):
+                    log.info("%s : pas arrivé(s) en %s,%s à temps", ", ".join(m.name for m in members
+                                                                          if m not in arrived), *dest)
+                members, here, entry = arrived, dest, OPPOSITE[side]
+                if not members:
+                    break
+            if here == target and members:
+                log.info("%s : arrivé(s) sur la carte du combat de %s, je le(s) fais rejoindre", names, host.name)
+                for member in members:
+                    self._lost.discard(member.name)
 
     def _look_again(self, member: Member) -> tuple[int, int] | None:
         """Carte d'un suiveur perdu, relue LOOK_AGAIN fois à quelques instants d'intervalle avant de demander « /p » ou
@@ -1149,6 +1524,13 @@ class TeamBot:
         """Cases joignables à pied d'où est le principal (carte officielle, brain/arena.walk_area) : depuis sa case
         d'arrivée si le soleil pris est dans la référence ; None si la carte ou la case ne se savent pas."""
         traveler = self.roamer.traveler
+        # 31/10 : la carte du client d'abord (numéro du GDM et sa clé, brain/mapdata.py : 60 cartes sur 60 d'accord
+        # avec les références) ; les références par coordonnées lues en secours.
+        from bot.brain.arena import fight_arena
+
+        arena = fight_arena(getattr(self.leader.game, "net", None))
+        if arena is not None:
+            return walk_area(arena, traveler.arrival_cell)
         arenas = Arenas.load().by_coords(traveler.coords) if traveler.coords is not None else []
         return walk_area(arenas[0], traveler.arrival_cell) if len(arenas) == 1 else None
 
@@ -1156,6 +1538,13 @@ class TeamBot:
         """Sans placement de l'équipe : les cases de placement lues une fois, pour reconnaître la carte officielle et
         contrôler ses placements (24/10, utilisateur : vérifier la référence en jeu ; brain/arena.py)."""
         if getattr(host.ai, "map", None) is None:
+            return
+        told = self._told_placement(host)
+        if told is not None:
+            # 31/10 : cases de placement d'après le serveur (GP), exactes ; plus de lecture des couleurs des cases.
+            placed = set(told[0] | told[1])
+            host.ai.map.placed = (placed, host.game.look(park=False))
+            host.ai._recognize_arena(placed=placed)
             return
         frame = self._placement_frame(host)
         if frame is None:
@@ -1180,6 +1569,36 @@ class TeamBot:
                 continue
             host.ai.ensure_tactical_mode(frame)
             return host.game.look(park=True)
+
+    @staticmethod
+    def _told_placement(host: Member) -> tuple[frozenset, frozenset, int | None] | None:
+        """Cases de placement des deux équipes et numéro de la mienne d'après le serveur (GP) ; None sans écoute."""
+        net = getattr(host.game, "net", None)
+        if net is None or not hasattr(net, "placement_told") or not net.alive():
+            return None
+        return net.placement_told()
+
+    def _colour_told(self, host: Member, seen: str | None) -> str | None:
+        """Couleur de mon équipe : celle vue à l'écran, comparée à celle du serveur (équipe 0 supposée rouge) ; le
+        serveur ne tranche que si l'écran ne peut pas et qu'un accord a déjà été vu à ce lancement (31/10 : la
+        couleur sert à reconnaître les alliés, une erreur ferait tirer sur l'équipe, incident du 26/10)."""
+        told = self._told_placement(host)
+        index = told[2] if told is not None else None
+        if index not in (0, 1):
+            return seen
+        guess = RED if index == 0 else BLUE
+        if seen is not None:
+            agree = seen == guess
+            if self._told_colour_ok is not False:
+                self._told_colour_ok = agree
+            log.info("Équipe %d d'après le serveur (%s supposé) ; %s à l'écran : %s", index, guess, seen,
+                     "accord" if agree else "DÉSACCORD, l'écran fait foi et le serveur ne tranchera plus")
+            return seen
+        if self._told_colour_ok:
+            log.info("Couleur de mon équipe d'après le serveur : %s (équipe %d ; accord vu à un combat précédent)",
+                     guess, index)
+            return guess
+        return None
 
     def _team_colour(self, placement: Placement, count: int) -> str | None:
         """Couleur de mon équipe : celle dont les cases occupées sont au nombre de mes personnages (8 contre 1 à 3
@@ -1209,7 +1628,7 @@ class TeamBot:
         placement = read_placement(frame)
         if host.game.recorder.keeps():  # aucune capture de placement à 8 dans tests/fixtures (17/10)
             host.game.recorder.save(frame.image, "placement_equipe_avant")
-        team = self._team_colour(placement, len(fighters))
+        team = self._colour_told(host, self._team_colour(placement, len(fighters)))
         known: dict[str, Cell] = {}
         if team is None:
             # Autant de monstres que de personnages : la couleur se vérifie en déplaçant `host` (comme en solo).
@@ -1362,6 +1781,7 @@ class TeamBot:
         fenêtre et la capture où la fenêtre de fin de combat a été vue (None : fin vue sans elle)."""
         watcher = next((m for m in fighters if m.in_front()), fighters[0])
         out_since = None
+        began = time.monotonic()
         started = False  # un tour lu dans la timeline : avant, un hors combat peut être l'écran d'après Prêt
         signals = self.signals
         if signals is not None:
@@ -1377,8 +1797,41 @@ class TeamBot:
             scene = read_scene(frame)
             self._report(watcher, frame, scene)
             if signals is not None:
-                signals.enabled_for_polling = scene.phase is Phase.COMBAT  # signaux : en attente d'un tour seulement
+                # Signaux : en attente d'un tour seulement, et pas avec l'écoute du serveur (GTS dit qui joue).
+                signals.enabled_for_polling = scene.phase is Phase.COMBAT and getattr(watcher.game, "net", None) is None
             if scene.phase is Phase.OUT_OF_COMBAT:
+                told = self._fight_told(fighters, began)
+                if told is not None:
+                    # 31/10, utilisateur : la fin du combat d'après le serveur seulement (GE), plus fiable que l'écran
+                    # (boss du donjon Bouftou : Eldieso K.O., sa fenêtre hors combat prise pour la fin).
+                    if told is False:  # en cours : K.O., écran de transition ; un autre en combat est regardé
+                        still = next((m for m in fighters if m is not watcher
+                                      and read_scene(m.game.look(park=False)).phase is not Phase.OUT_OF_COMBAT), None)
+                        if still is not None:
+                            log.info("%s hors combat (K.O. ?), combat en cours d'après le jeu : je regarde la fenêtre "
+                                     "de %s", watcher.name, still.name)
+                            watcher = still
+                        out_since = None
+                        watcher.game.sleep(self.poll)
+                        continue
+                    if watcher.popups.describe(frame) is not None:
+                        return watcher, frame  # fini d'après le jeu, fenêtre de résultat vue
+                    if out_since is None:
+                        out_since = time.monotonic()
+                    elif time.monotonic() - out_since >= FIGHT_END_CONFIRM:
+                        return None  # fini d'après le jeu, sans fenêtre de résultat
+                    watcher.game.sleep(self.poll)
+                    continue
+                # Sans écoute de ce combat (bot relancé en plein combat) : l'écran décide.
+                still = next((m for m in fighters if m is not watcher
+                              and read_scene(m.game.look(park=False)).phase is not Phase.OUT_OF_COMBAT), None)
+                if still is not None:
+                    # 31/10 (boss du donjon Bouftou) : Eldieso K.O. à son tour, sa fenêtre hors combat prise pour la fin
+                    # du combat, salle comptée deux fois. Un autre est encore en combat : sa fenêtre est regardée.
+                    log.info("%s hors combat (K.O. ?), %s encore en combat : je regarde sa fenêtre", watcher.name,
+                             still.name)
+                    watcher, out_since = still, None
+                    continue
                 if watcher.popups.describe(frame) is not None:
                     return watcher, frame  # fenêtre de résultat (ou de niveau supérieur) : le combat est fini
                 if out_since is None:
@@ -1401,8 +1854,28 @@ class TeamBot:
                     watcher = next((m for m in fighters if m.in_front()), watcher)  # pas de retour inutile
             watcher.game.sleep(self.poll)
 
+    @staticmethod
+    def _fight_told(fighters: list[Member], began: float) -> bool | None:
+        """Le combat d'après le serveur : False en cours (GJK entendu, pas encore GE), True fini (GE, GCK, carte
+        rechargée), None si aucune écoute n'a vu ce combat commencer (début entendu au plus FIGHT_HEARD_BEFORE s avant
+        `began`, le début des tours : le placement le précède)."""
+        told = None
+        for member in fighters:
+            net = getattr(member.game, "net", None)
+            fight = getattr(net, "fight", None) if net is not None else None
+            if fight is None or not net.alive():
+                continue
+            if net.in_fight():
+                return False
+            if fight.started_at >= began - FIGHT_HEARD_BEFORE:
+                told = True
+        return told
+
     def _player(self, watcher: Member, frame: Frame, scene: Scene, fighters: list[Member]) -> Member | None:
         """Le personnage dont c'est le tour ; None pendant le tour d'un monstre ou d'une invocation alliée."""
+        told = self._told_player(watcher, scene, fighters)
+        if told is not False:
+            return told
         if scene.current_team is None or (self.my_team is not None and scene.current_team != self.my_team):
             return None  # timeline illisible un instant, ou tour d'un monstre
         portrait = current_portrait(frame)
@@ -1465,6 +1938,35 @@ class TeamBot:
                 return self._found(member, found, current_portrait(seen) or portrait)
         self._search_failed(portrait)
         return None
+
+    def _told_player(self, watcher: Member, scene: Scene, fighters: list[Member]) -> Member | None | bool:
+        """Qui joue d'après le jeu (« GTS<id> », « GTF<id> », connection/network.py, 26/10) : le personnage, None
+        (tour d'un monstre, ou tour fini, ou tour déjà joué), False si l'écoute ne le dit pas (l'écran décide)."""
+        net = getattr(watcher.game, "net", None) or getattr(self.leader.game, "net", None)
+        if net is None or not net.alive() or not net.in_fight():
+            return False
+        turn, over, turn_at = net.fight_turn()
+        if turn is None:
+            return False
+        if over:
+            return None
+        member = next((m for m in fighters if getattr(getattr(m.game, "net", None), "my_id", None) == turn), None)
+        if member is None:
+            return False if turn > 0 else None  # un personnage pas encore reconnu : l'écran ; un monstre : attendre
+        if self._just_played is not None and self._just_played[0] == member.name and turn_at <= self._just_played[1]:
+            return None  # ce tour-là est déjà joué (GTF pas encore arrivé)
+        if self.my_team is None and self.learn_team:
+            # Jamais la couleur de la timeline ici : le tour est annoncé par le jeu avant qu'elle ne se mette à jour
+            # (26/10, journal 205705 : équipe des Blops prise pour la mienne, mes personnages se sont tapé dessus).
+            # La couleur du cercle sur sa case annoncée par le jeu.
+            # Contrôle de l'équipe annoncée par le serveur (GP) ; elle ne sert que si le cercle n'est pas vu et qu'un
+            # accord a déjà été constaté à ce lancement.
+            colour = self._colour_told(member, _circle_colour(member))
+            if colour is None:
+                return False  # pas encore vue : l'écran décide, comme avant
+            self.my_team = colour
+            log.info("Mon équipe pour ce combat : %s (cercle de %s sur sa case annoncée par le jeu)", colour, member.name)
+        return self._unless_stuck(member)
 
     def _early_start(self, member: Member, scene: Scene, frame: Frame) -> bool:
         """Notification de son tour, et la timeline de sa fenêtre montre le tour de mon équipe : il joue tout de suite,
@@ -1616,6 +2118,12 @@ class TeamBot:
         scene = read_scene(frame)
         if scene.phase is not Phase.COMBAT:
             return False
+        net = getattr(member.game, "net", None)
+        if net is not None and net.my_id is not None and net.alive() and net.in_fight():
+            # Son tour d'après le jeu (GTS, GTF) : sans attendre timer ni portrait (connection/network.py, 26/10).
+            turn, over, _ = net.fight_turn()
+            if turn is not None:
+                return turn == net.my_id and not over
         early = self._early is not None and self._early[0] == member.name
         if scene.timer_visible:
             if early:  # parti sur notification : son timer, enfin ; le portrait encadré maintenant est le sien
@@ -1630,37 +2138,71 @@ class TeamBot:
         return None
 
     def _close_results(self, watcher: Member, frame: Frame, fighters: list[Member]) -> None:
-        """Action refaite dans chaque fenêtre : la fenêtre de résultat a son bouton « Fermer » au même endroit partout
-        (même disposition) ; vu une fois chez `watcher`, il est cliqué dans chaque fenêtre du combat sans capture
-        (0,3 s par fenêtre au lieu de 1,2). Le tour des fenêtres qui suit vérifie, et ferme ce qui reste (niveau
-        supérieur, qui n'arrive pas à tout le monde). Les suiveurs d'abord : le principal reste devant."""
+        """Fenêtre de résultat fermée dans chaque fenêtre du combat, vue une fois chez `watcher`. Les suiveurs d'abord :
+        le principal reste devant. Le tour des fenêtres qui suit ferme ce qui reste (niveau supérieur, qui n'arrive pas
+        à tout le monde).
+
+        Plus de clic à l'aveugle (25/10, journal 181212 : « Fermer », vu chez Elseiso, cliqué au même endroit dans les 8
+        fenêtres ; dans la sienne, rien ne couvrait plus la barre de raccourcis à cet endroit, il a bu une potion de
+        Brâkmar). Avec 8 personnages, le bouton est juste au-dessus des objets de la barre : chaque fenêtre est
+        regardée, et cliquée seulement si son bouton y est vu, immobile (fenêtre ouverte)."""
+        from bot.brain.popups import still_open  # ici : la ligne d'import du module est partagée avec d'autres travaux
+
         known = find_known_popup(frame, watcher.popups.specs)
         if known is None or known.close_point is None:
-            # Vue en train de s'ouvrir, sans son bouton encore (03/10 : 2 combats sur 14, fermée ensuite fenêtre par
-            # fenêtre, ~1,5 s de plus) : un second regard.
+            # Vue en train de s'ouvrir, sans son bouton encore (03/10 : 2 combats sur 14) : un second regard.
             watcher.game.sleep(RESULT_LAG)
             frame = watcher.game.look(park=False)
             known = find_known_popup(frame, watcher.popups.specs)
-        else:
-            watcher.game.sleep(RESULT_LAG)
         if known is None or known.spec.name != RESULT or known.close_point is None:
             return  # niveau supérieur par-dessus, chez celui-ci : le tour des fenêtres s'en charge
-        point = to_reference(frame.layout, known.close_point)
+        watcher.game.sleep(RESULT_LAG)
+        again = find_known_popup(watcher.game.look(park=False), watcher.popups.specs)
+        if not _same_button(again, known, frame.layout.length(3)):
+            log.info("Bouton « Fermer » du résultat pas encore immobile : fermé fenêtre par fenêtre")
+            return
         log.info("Fenêtre « %s » : je la ferme dans les %d fenêtres du combat", RESULT, len(fighters))
+        # Même combat, même fenêtre de résultat : son bouton, immobile chez `watcher`, est à la même place (repère de
+        # référence) dans chaque fenêtre une fois ouverte. Ailleurs, la fenêtre de ce personnage s'ouvre encore : revue
+        # une fois (still_open) avant tout clic.
+        place = frame.layout.to_reference(again.close_point)
+        tolerance = 3  # px de référence
         for member in sorted(fighters, key=lambda m: m is self.leader):
-            layout = getattr(member.game, "layout", None) or frame.layout
-            member.game.click(layout.point(*point), known.close_spread)
+            shot = None if member is watcher else member.game.look(park=False)
+            seen = again if shot is None else find_known_popup(shot, member.popups.specs)
+            if seen is None or seen.spec.name != RESULT or seen.close_point is None:
+                log.info("%s : pas de bouton « Fermer » du résultat vu dans sa fenêtre, pas de clic", member.name)
+                continue
+            if shot is not None and max(abs(a - b) for a, b in
+                                        zip(shot.layout.to_reference(seen.close_point), place)) > tolerance:
+                seen = still_open(member.game, seen, member.popups.specs, shot, RESULT_LAG)
+                if seen is None or max(abs(a - b) for a, b in
+                                       zip(shot.layout.to_reference(seen.close_point), place)) > tolerance:
+                    log.info("%s : bouton « Fermer » pas encore à sa place (fenêtre en train de s'ouvrir), pas de clic : "
+                             "le tour des fenêtres la fermera", member.name)
+                    continue
+            member.game.click(seen.close_point, seen.close_spread)
             member.popups.closed_elsewhere(RESULT)
 
     def _fight_over(self) -> None:
         log.info("Combat terminé")
         self._progress("combat fini")
+        blind = [m.name for m in self.members if getattr(m.ai, "unknown_tint", False)]
+        if len(blind) >= UNKNOWN_TINT_STOP and not self._stop_reason:
+            # 26/10 (journal 012810) : nuit plus profonde qu'à minuit, teinte d'une autre forme pas encore apprise
+            # (perception/daylight.py) ; les 8 personnages, sans se repérer, ont passé tous leurs tours. Mieux vaut
+            # s'arrêter que d'enchaîner des combats à l'aveugle ; les captures « sol_tactique_inconnu » servent à
+            # apprendre cette teinte.
+            self._stop_reason = (f"teinte jour/nuit pas reconnue par {len(blind)} personnages ce combat (nuit pas "
+                                 "encore apprise) : arrêt pour ne pas combattre à l'aveugle")
+            log.warning("Teinte jour/nuit pas reconnue (%s) : je m'arrête après ce combat", ", ".join(blind))
         self._fight_errors = 0
         self._combat_ended_at = time.monotonic()
         self._last_team = self.my_team or self._last_team
         if self.learn_team:
             self.my_team = None  # la couleur de l'équipe peut changer d'un combat à l'autre
         self._round_due = True  # fenêtres de résultat, de niveau supérieur et vie : dans chaque fenêtre
+        self._hp_report_due = True
         self._cells = {}
         if self.engager is not None:
             self._next_engage_at = time.monotonic() + random.uniform(*self.engager.settings.pause_between_fights)

@@ -18,11 +18,12 @@ from dataclasses import fields
 from pathlib import Path
 from tkinter import messagebox, ttk
 
+from bot.alerts import alert_text
 from bot.brain.memory import CharacterMemory
 from bot.capture.window import character_name
 from bot.config import ROOT, load_settings
 from bot.connection.characters import FORGOTTEN, forget_character, known_characters, memory_dir, parse_names
-from bot.gui.launch import (COMBAT_MODES, GUI_PATH, IMAGES, MODES, RESUMES, SERVERS, WORLDS, BotProcess, Choices,
+from bot.gui.launch import (BANK_MODES, COMBAT_MODES, GUI_PATH, IMAGES, KEY_MODES, MODES, RESUMES, SERVERS, WORLDS, BotProcess, Choices,
                             bot_command, build_args, character_names, default_choices, deletion_problems,
                             detect_screens, detect_windows, display_command, known_dungeons, load_choices,
                             main_options, save_choices, stop_key, team_names, validate)
@@ -51,6 +52,11 @@ HELP = {
     "resume": "Reprise du farm de donjon. Début : chacun est situé d'après son décor et ne fait que ce qui lui manque. "
               "Une étape de l'entrée (entrée, salle des dalles, soleil, PNJ) : toute l'équipe reprend à cette étape. "
               "Salles : l'équipe déjà passée, aux combats à partir de la salle N (--donjon nom:etape, nom:salles:N).",
+    "keys": "Clés du donjon, au début du farm seulement. Non : chacun entre avec la clé qu'il a. Sacs : les clés des "
+            "sacs (d'après le serveur) réparties par échanges pour que chacun en ait autant ; passages ramenés à ceux "
+            "qu'elles permettent (total // taille de l'équipe). Sacs + banque : de même, et s'il en manque, ceux qui en "
+            "ont moins les reprennent dans leur coffre avant (trajet jusqu'à la banque pas encore automatique) "
+            "(donjon.cles).",
     "combat_only": "Le bot n'attaque pas les groupes : il joue les combats que tu lances toi-même (--combat-only).",
     "observe": "Le bot regarde et écrit dans le journal ce qu'il voit, sans aucun clic ni aucune touche (--observe).",
     "monde": "Où se trouve le personnage : Incarnam ou le Monde des Douze, qui ont chacun leurs coordonnées (--monde).",
@@ -61,6 +67,16 @@ HELP = {
     "refresh": "Cherche à nouveau les fenêtres du jeu ouvertes (titre « <Nom> - Dofus Retro ») et les écrans.",
     "notifications": "En équipe : qui joue, d'après les notifications Windows que le jeu envoie au début de chaque "
                      "tour (option du jeu « Notifications en arrière-plan »), vérifiées au timer (--notifications).",
+    "bank_mode": "Ressources à la banque : chacun les dépose dans son propre coffre, ou les suiveurs les donnent "
+                 "au principal (échanges par lots qui tiennent dans ses pods) qui dépose tout dans son coffre ; ce qui "
+                 "ne passe pas va dans le coffre du suiveur (team.banque_mode).",
+    "bank": "Banque automatique : en combat de zone, dès qu'un personnage atteint 90 % de pods hors combat, toute "
+            "l'équipe va à la banque d'Astrub (4,-16) sans combattre en chemin, chacun vide l'onglet ressources dans son "
+            "coffre, puis l'équipe retourne dans sa zone. Décoché : le bot écrit seulement qu'il faut passer à la banque "
+            "(team.banque_auto de config/settings.yaml).",
+    "zaap": "Déplacements par zaap : quand aucun chemin à pied n'existe (le Berceau de Taïnéla, une autre région), le "
+            "bot passe par un zaap connu du personnage (« Utiliser », recherche, « Se téléporter » ; coûte des kamas). "
+            "Décoché : jamais de zaap, le trajet s'arrête avec un message (travel.zaap de config/settings.yaml).",
     "burst": "Rafale (à l'essai) : quand le même sort est relancé sur la même cible, les lancers s'enchaînent sans "
              "nouveau plan entre deux (combat.burst de config/settings.yaml). Au premier plan seulement.",
     "verbose": "Écrit aussi le détail dans le journal : clics, combattants (--verbose).",
@@ -383,6 +399,10 @@ class App:
         self.entries["resume"] = ("donjon", select)
         self.resume_room = self._entry(resume, "resume_room", 3, "resume")
         self.resume_room.pack(side="left", padx=(4, 0))
+        ttk.Label(resume, text="clés").pack(side="left", padx=(12, 3))
+        keys = self._select(resume, "keys", KEY_MODES, 13)
+        keys.pack(side="left")
+        self.entries["keys"] = ("donjon", keys)
         world = ttk.Frame(box)
         world.grid(row=row + 1, column=0, columnspan=2, sticky="w", pady=(6, 0))
         ttk.Label(world, text="Monde :").pack(side="left", padx=(0, 8))
@@ -390,6 +410,14 @@ class App:
         self.combat_only = self._check(box, "Je lance les combats moi-même (le bot n'attaque pas les groupes)",
                                        "combat_only")
         self.combat_only.grid(row=row + 2, column=0, columnspan=2, sticky="w", pady=(4, 0))
+        self.zaap = self._check(box, "Déplacements par zaap quand la marche est impossible (coûte des kamas)", "zaap")
+        self.zaap.grid(row=row + 3, column=0, columnspan=2, sticky="w", pady=(2, 0))
+        self.bank = self._check(box, "Banque automatique quand les pods sont pleins (mode zone, équipe)", "bank")
+        self.bank.grid(row=row + 4, column=0, columnspan=2, sticky="w", pady=(2, 0))
+        bank_mode = ttk.Frame(box)
+        bank_mode.grid(row=row + 5, column=0, columnspan=2, sticky="w", pady=(2, 0))
+        ttk.Label(bank_mode, text="Ressources à la banque :").pack(side="left", padx=(20, 8))
+        self._radios(bank_mode, "bank_mode", BANK_MODES).pack(side="left")
         return box
 
     def _dungeon_select(self, cell: ttk.Frame) -> None:
@@ -659,6 +687,10 @@ class App:
         code = self.runner.check()
         for line in self.runner.lines():
             self._append(line)
+            alert = alert_text(line)
+            if alert:  # 31/10 : message du bot pour l'utilisateur (clés qui manquent...), dans une fenêtre aussi
+                self.root.after(0, lambda text=alert: messagebox.showwarning("Le bot te prévient", text,
+                                                                             parent=self.root))
         if code is not None:
             result = "terminé normalement" if code == 0 else f"terminé (code {code})"
             self.note(f"{time.strftime('%H:%M:%S')} Bot {result}")
