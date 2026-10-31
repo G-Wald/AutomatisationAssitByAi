@@ -1,0 +1,158 @@
+# Clé de chaque donjon : nom exact du donjon (langue du client, table DU) -> numéro et nom exact de la clé (table I).
+# 31/10, utilisateur : « associer chaque donjon à sa clé avec le nom exact » ; le bot lit cette table seulement
+# (bot/team/keys.py, key_of), jamais une ressemblance de noms (« Donjon Bouftou » n'a pas été reconnu ce jour-là).
+# Construite par tools/donjons_reference.py (noms qui se recouvrent) ; « a_confirmer » : associée à la main d'après
+# le nom de la clé, à vérifier en jeu. Donjons sans clé connue : cle vide.
+- donjon: "Donjon Bouftou"
+  cle: 1568
+  nom_cle: "Clef du Donjon des Bouftous"
+- donjon: "Donjon des champs"
+  cle: 8143
+  nom_cle: "Clef des Champs"
+- donjon: "Bibliothèque du Maître Corbac"
+  cle: 7926
+  nom_cle: "Clef du Donjon du Maître Corbac"
+  a_confirmer: true
+- donjon: "Labyrinthe du Minotoror"
+  cle: 7924
+  nom_cle: "Clef du Labyrinthe du Minotoror"
+- donjon: "Labyrinthe du Dragon Cochon"
+  cle: 7511
+  nom_cle: "Clef du labyrinthe du Dragon Cochon"
+  a_confirmer: true
+- donjon: "Antre du Dragon Cochon"
+  cle: 8320
+  nom_cle: "Clef de l'antre du Dragon Cochon"
+- donjon: "Sanctuaire des Dragoeufs"
+  cle: 8342
+  nom_cle: "Clef du Sanctuaire des Dragoeufs"
+- donjon: "Gladiatrool"
+  cle:
+- donjon: "Donjon Ensablé"
+  cle: 8437
+  nom_cle: "Clef du Donjon Ensablé"
+- donjon: "Donjon des Tofus"
+  cle: 7918
+  nom_cle: "Clef du Donjon des Tofus"
+- donjon: "Donjon des Squelettes"
+  cle: 1570
+  nom_cle: "Clef du Donjon des Squelettes"
+- donjon: "Donjon des Forgerons"
+  cle: 1569
+  nom_cle: "Clef du Donjon des Forgerons"
+- donjon: "Donjon des Bulbes"
+  cle: 7310
+  nom_cle: "Clef de la caverne des Bulbes"
+- donjon: "Donjon des Larves"
+  cle:
+- donjon: "Grotte Hesque"
+  cle: 8917
+  nom_cle: "Clef de la Grotte Hesque"
+- donjon: "Donjon des Bworks"
+  cle: 8135
+  nom_cle: "Clef du Donjon des Bworks"
+- donjon: "Donjon des Scarafeuilles"
+  cle: 8139
+  nom_cle: "Clef du Donjon des Scarafeuilles"
+- donjon: "Donjon des Craqueleurs"
+  cle: 7927
+  nom_cle: "Clef du Donjon des Craqueleurs"
+- donjon: "Donjon des Abraknydes"
+  cle: 7557
+  nom_cle: "Clef du Donjon Abraknyde"
+- donjon: "Cale de l'Arche d'Otomai"
+  cle: 8971
+  nom_cle: "Clef de la Cale de l'arche d'Otomaï"
+- donjon: "Donjon des Canidés"
+  cle: 8156
+  nom_cle: "Clef du Donjon des Canidés"
+- donjon: "Donjon du Koulosse"
+  cle: 7908
+  nom_cle: "Clef du Donjon du Koulosse"
+- donjon: "Donjon des Rats de Bonta"
+  cle: 8439
+  nom_cle: "Clef du Donjon des Rats de Bonta"
+- donjon: "Donjon des Rats de Brâkmar"
+  cle: 8438
+  nom_cle: "Clef du Donjon des Rats de Brâkmar"
+- donjon: "Goulet du Rasboul"
+  cle: 8972
+  nom_cle: "Clef du Goulet du Rasboul"
+- donjon: "Repaire des Pandikazes"
+  cle: 7309
+  nom_cle: "Clef des Pandikazes"
+  a_confirmer: true
+- donjon: "Donjon des Kitsounes"
+  cle: 7311
+  nom_cle: "Clef du Donjon des Kitsounes"
+- donjon: "Laboratoire du Tynril"
+  cle: 8975
+  nom_cle: "Clef du Laboratoire du Tynril"
+- donjon: "Donjon des Rats du Château d'Amakna"
+  cle:
+- donjon: "Donjon du Chêne Mou"
+  cle: 8436
+  nom_cle: "Clef du Donjon du Chêne Mou"
+- donjon: "Canopée du Kimbo"
+  cle: 8977
+  nom_cle: "Clef de la Canopée du Kimbo"
+- donjon: "Donjon Fungus"
+  cle: 9247
+  nom_cle: "Clef du Donjon Fungus"
+- donjon: "Donjon du Bworker"
+  cle: 6884
+  nom_cle: "Clef du Donjon du Bworker"
+- donjon: "Antre du Kralamoure Géant"
+  cle:
+- donjon: "Belvédère d'Ilyzaelle"
+  cle: 11474
+  nom_cle: "Clef du Belvédère d'Ilyzaelle"
+- donjon: "Sanctuaire de Qu'Tan"
+  cle: 11475
+  nom_cle: "Clef du Sanctuaire de Qu'Tan"
+- donjon: "Sanctuaire de Pandala"
+  cle:
+- donjon: "Portail de Rushu"
+  cle:
+- donjon: "Château du Wa Wabbit"
+  cle:
+- donjon: "Donjon Wabbit"
+  cle:
+- donjon: "Donjon d'Incarnam"
+  cle: 8545
+  nom_cle: "Clef du Donjon d'Incarnam"
+- donjon: "Repaire de Skeunk"
+  cle: 8073
+  nom_cle: "Clef du Repaire de Skeunk"
+- donjon: "Donjon des Blops"
+  cle: 9248
+  nom_cle: "Clef du donjon des Blops"
+- donjon: "Donjon de Moon"
+  cle:
+- donjon: "Donjon du Tofu Royal"
+  cle: 8142
+  nom_cle: "Clef Secrète du Tofulailler Royal"
+  a_confirmer: true
+- donjon: "Donjon des Firefoux"
+  cle: 7312
+  nom_cle: "Clef du Donjon des Firefoux"
+- donjon: "Cachette secrète des Mercenaires"
+  cle:
+- donjon: "Sanctuaire des Familiers"
+  cle:
+- donjon: "Antre du Minotot"
+  cle: 8307
+  nom_cle: "Clef de la salle du Minotot"
+  a_confirmer: true
+- donjon: "Donjon du Sapik"
+  cle:
+- donjon: "Donjon du Papa Nowel"
+  cle:
+- donjon: "Donjon du Père Fwetar"
+  cle:
+- donjon: "Antre du Blop Multicolore Royal"
+  cle: 9254
+  nom_cle: "Clef de l'antre du Blop Multicolore"
+  a_confirmer: true
+- donjon: "Gelaxième Dimension"
+  cle:

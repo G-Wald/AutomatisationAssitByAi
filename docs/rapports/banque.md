@@ -2,6 +2,27 @@
 
 Recherche (données Dofus Rétro seulement) et conception. Aucune donnée importée : chaque source attend ton accord.
 
+## 30/10 : mode « principal » validé en jeu (team.banque_mode)
+
+- Passage complet (`--banque --set team.banque_mode=principal`) : 8 sur 8 vidés en 10 min. 11 échanges conclus vers
+  Fourboun (Eldieso 40 pods, Walitcoin 25, Pesopepe 59 en 6 lots), chaque lot déposé dans son coffre ; 4 suiveurs
+  passés par leur propre coffre (portrait du principal pas trouvé, corrigé depuis).
+- Échange conclu, messages du serveur : `ERK<de>|<à>|1`, `ECK1`, `EMKO+uid|qté` / `EmKO+uid|qté|modèle|`, puis
+  `EK<id>` (« Accepter » du premier), et quand le second accepte : `OR` (donneur), `OAKO` (receveur), `Ow`, `EVa`.
+- « Accepter » est grisé quelques secondes après chaque changement d'une offre : cliqué 4 s après le dernier objet.
+- Portrait du principal : menu lu à l'OCR de Windows (titre au nom, ligne « Echange »), deux tours si l'OCR manque le
+  titre. L'ordre des portraits change d'une session à l'autre.
+- Poser les objets en arrière-plan :
+  - double-clic réel sur une pile = 1 objet, fiable (le serveur dit lequel : poids connu) ;
+  - glisser lent (1 s de prise, 60 pas en 2,4 s) vers une case vide de l'offre -> fenêtre de quantité, mais une fois
+    sur deux seulement ; la fenêtre s'ouvre à côté du point de lâcher (« max » -220 px, champ -118, coche -22) ;
+  - donc : petites piles (5) au double-clic ; au-delà, glisser + nombre tapé ; si la fenêtre ne s'ouvre pas, le reste
+    au double-clic (40 au plus).
+  - La vraie souris de l'utilisateur au-dessus d'une fenêtre du jeu envoie aussi des mouvements : elle peut casser un
+    glisser du bot (pas les clics).
+- Coffre : fenêtre « Coffre » à gauche, sac à droite, positions relevées (team/bank.py, CHEST_*). Le principal paie
+  l'accès à chaque lot (718 kamas pour Fourboun le 30/10) : lots les plus gros possible.
+
 ## Ce qui est établi pour Rétro
 
 ### Pods
