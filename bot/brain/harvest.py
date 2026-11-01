@@ -137,6 +137,10 @@ class Harvester:
         log.info("Récolte : %d ressource(s) visée(s) sur la carte (%s)", len(targets), ", ".join(names) or "aucune")
         done = 0
         while done < most:
+            in_fight = getattr(self.game.net, "in_fight", None)
+            if in_fight is not None and in_fight():
+                log.info("Combat pendant la récolte : je m'arrête là (le combat d'abord)")
+                break
             left = self.available(targets)
             if not left:
                 break

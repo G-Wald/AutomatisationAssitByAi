@@ -24,6 +24,7 @@ import inspect
 import logging
 import random
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 
 import numpy as np
@@ -153,7 +154,6 @@ RESULT_LAG = 0.2  # elle s'ouvre partout en même temps, à un instant près
 # combats sur 31 ; fenêtres fermées ensuite une à une, le principal déjà reparti au combat suivant).
 END_LOAD_WAIT = 8.0  # s au plus après GE pour la carte rechargée chez tous les combattants
 RESULT_OPEN_WAIT = 4.0  # s au plus, carte rechargée, pour voir chaque fenêtre de résultat s'ouvrir et la fermer
-RESULT_CLICK_EFFECT = 0.6  # s après un clic sur « Fermer » avant de la revoir (encore là : reclic)
 UNKNOWN_TINT_STOP = 3  # personnages au sol tactique pas reconnu dans un combat : arrêt (pas une fiche passagère)
 # Placement de toute l'équipe (team.place, team/placement.py). Une passe : un clic dans la fenêtre de chacun de ceux
 # qui bougent, puis une lecture des cases (PLACE_SETTLE après le premier clic, encore PLACE_RECHECK plus tard si un
@@ -240,6 +240,22 @@ def _live_net(member: Member):
     """L'écoute du serveur de ce personnage, si elle est vivante ; None sinon."""
     net = getattr(member.game, "net", None)
     return net if net is not None and net.alive() else None
+
+
+def _popup_views(members: list[Member]) -> list[tuple[Member, Frame, object]]:
+    """Capture de chaque fenêtre et fenêtre connue vue dessus (find_known_popup), dans l'ordre de `members`. En
+    arrière-plan, toutes en même temps : ~0,15 s de recherche par capture où une fenêtre est ouverte, 8 fenêtres
+    regardées l'une après l'autre prenaient ~3,5 s (01/11). Au premier plan, chacune doit passer devant : l'une après
+    l'autre."""
+
+    def view(member: Member) -> tuple[Member, Frame, object]:
+        frame = member.game.look(park=False)
+        return member, frame, find_known_popup(frame, member.popups.specs)
+
+    if len(members) < 2 or not all(getattr(m.game, "background", False) for m in members):
+        return [view(m) for m in members]
+    with ThreadPoolExecutor(max_workers=len(members)) as pool:
+        return list(pool.map(view, members))
 
 
 def _net_moved(net) -> float:
@@ -2319,49 +2335,52 @@ class TeamBot:
 
     def _close_told_results(self, fighters: list[Member]) -> None:
         """Fin du combat d'après le serveur, carte rechargée : une fenêtre de résultat s'ouvre dans chaque fenêtre du
-        combat. Toutes regardées à tour de rôle (suiveurs d'abord, le principal reste devant), chacune fermée dès que son
-        bouton « Fermer » est vu immobile sur deux regards, puis revue : encore là, recliquée. Le serveur ne dit rien
-        de la fermeture (fenêtre du jeu seulement) : seul l'écran la confirme. Pas vue en RESULT_OPEN_WAIT s : le tour
-        des fenêtres s'en charge."""
+        combat. Toutes regardées à tour de rôle (suiveurs d'abord, le principal reste devant), chacune cliquée dès que
+        son bouton « Fermer » est à sa place : la première revue RESULT_LAG s plus tard (bouton immobile, fenêtre
+        ouverte), les autres d'un seul regard quand leur bouton est à la même place (repère de référence), sinon
+        revues comme la première. Pas vue en RESULT_OPEN_WAIT s : le tour des fenêtres qui suit s'en charge ; il
+        regarde aussi chaque fenêtre et referme celle restée ouverte (le serveur ne dit rien de la fermeture,
+        fenêtre du jeu seulement : seul l'écran la confirme).
+
+        01/11 après-midi : deux regards exigés par fenêtre, ~0,3 s chacun ; la boucle finissait à 4 s avant d'avoir
+        revu les fenêtres cliquées (« fermée chez 0/8 », fermées en fait)."""
+        from bot.brain.popups import still_open  # ici : la ligne d'import du module est partagée avec d'autres travaux
+
         left = sorted(fighters, key=lambda m: m is self.leader)
-        last: dict[str, object] = {}  # dernier bouton « Fermer » vu, pour le juger immobile
-        clicked: dict[str, float] = {}
-        closed, reclicks = [], 0
+        place: tuple[float, float] | None = None  # bouton « Fermer » vu immobile, en repère de référence
+        why: dict[str, str] = {}  # pourquoi pas encore cliquée, pour le journal
+        tolerance = 3  # px de référence
         start = time.monotonic()
         deadline = start + RESULT_OPEN_WAIT
         while left and time.monotonic() < deadline:
-            for member in list(left):
-                name = member.name
-                if name in clicked and time.monotonic() - clicked[name] < RESULT_CLICK_EFFECT:
-                    continue
-                frame = member.game.look(park=False)
-                seen = find_known_popup(frame, member.popups.specs)
+            for member, frame, seen in _popup_views(left):
                 if seen is None:
-                    if name in clicked:
-                        closed.append(name)
-                        left.remove(member)
                     continue  # pas encore ouverte
+                why[member.name] = seen.spec.name
                 if seen.spec.name != RESULT:
                     # « Informations » (niveau supérieur) par-dessus : le « Fermer » du résultat ne répond pas avant.
                     member.popups.handle(frame, self._since_combat())
-                    last.pop(name, None)
                     continue
-                if seen.close_point is None or last.get(name) is None or \
-                        not _same_button(seen, last[name], frame.layout.length(3)):
-                    last[name] = seen if seen.close_point is not None else None
-                    continue  # en train de s'ouvrir : revue au tour suivant
-                if name in clicked:
-                    reclicks += 1
-                    log.info("%s : « %s » encore ouverte après le clic, je reclique", name, RESULT)
+                if seen.close_point is None:
+                    why[member.name] = "bouton « Fermer » pas encore vu"
+                    continue  # en train de s'ouvrir
+                spot = frame.layout.to_reference(seen.close_point)
+                if place is None or max(abs(a - b) for a, b in zip(spot, place)) > tolerance:
+                    seen = still_open(member.game, seen, member.popups.specs, frame, RESULT_LAG)
+                    if seen is None or seen.spec.name != RESULT or seen.close_point is None:
+                        why[member.name] = f"bouton « Fermer » qui bouge (à {spot}, référence {place})"
+                        continue  # bouton qui bouge : fenêtre en train de s'ouvrir, revue au tour suivant
+                    place = place or frame.layout.to_reference(seen.close_point)
                 member.game.click(seen.close_point, seen.close_spread)
                 member.popups.closed_elsewhere(RESULT)
-                clicked[name] = time.monotonic()  # bouton gardé (last) : encore là au regard suivant, reclic aussitôt
+                left.remove(member)
             if left:
                 self.leader.game.sleep(0.05)
-        log.info("Fenêtre « %s » fermée chez %d/%d en %.1f s (fin d'après le jeu)%s", RESULT, len(closed),
-                 len(fighters), time.monotonic() - start, f", {reclicks} reclic(s)" if reclicks else "")
+        log.info("Fenêtre « %s » : « Fermer » cliqué chez %d/%d en %.1f s (fin d'après le jeu)", RESULT,
+                 len(fighters) - len(left), len(fighters), time.monotonic() - start)
         if left:
-            log.info("Pas vue fermée chez %s : le tour des fenêtres s'en charge", ", ".join(m.name for m in left))
+            log.info("Pas cliquée chez %s : le tour des fenêtres s'en charge",
+                     ", ".join(f"{m.name} ({why.get(m.name, 'rien de vu')})" for m in left))
 
     def _fight_over(self) -> None:
         log.info("Combat terminé")

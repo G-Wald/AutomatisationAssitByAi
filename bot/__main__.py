@@ -108,6 +108,14 @@ def _goto(args: argparse.Namespace, settings: dict) -> bool:
     return (args.travel or (settings.get("travel") or {}).get("mode")) == "aller"
 
 
+def _harvest(text: str) -> tuple[str, int]:
+    """« Bûcheron:23 » -> (« Bûcheron », 23)."""
+    job, _, level = text.partition(":")
+    if not job.strip() or not level.strip().isdigit():
+        raise argparse.ArgumentTypeError("attendu METIER:NIVEAU, ex. Bûcheron:23")
+    return job.strip(), int(level)
+
+
 def _reading(text: str) -> str:
     try:
         return reading_mode(text)
@@ -253,6 +261,10 @@ def main() -> int:
                              "son inventaire dans son coffre, puis le bot s'arrête")
     parser.add_argument("--passages", type=int, default=1, metavar="N",
                         help="avec --donjon : N passages complets (entrée, combats de salle en salle, sortie)")
+    parser.add_argument("--recolte", type=_harvest, metavar="METIER:NIVEAU",
+                        help="solo, avec --zone ou --combat-zone : récolte les ressources de ce métier (jusqu'à ce "
+                             "niveau) sur chaque carte de la zone avant de passer à la suivante, sans attaquer de "
+                             "groupe ; s'arrête quand les pods sont presque pleins. Ex. --recolte Bûcheron:23")
     parser.add_argument("--equipe", action="store_true",
                         help="mode équipe : toutes les fenêtres du jeu (ou celles de team.members), un personnage chacune")
     parser.add_argument("--principal", metavar="NOM",
@@ -337,6 +349,8 @@ def main() -> int:
     elif not args.observe:
         place(args, settings)  # observation : rien n'est touché, pas même les fenêtres
     forced = True if args.equipe or args.principal else None
+    if forced is None and args.recolte is not None:
+        forced = False  # récolte : un personnage seul (--title), même avec d'autres fenêtres ouvertes
     if forced is None and str((settings.get("team") or {}).get("enabled", "")).strip().lower() == "auto":
         # team.enabled: auto : mode équipe dès que plusieurs fenêtres de personnages sont ouvertes, solo sinon.
         names = {character_name(w.title, title) for w in find_windows(title)} - {""}
@@ -344,6 +358,8 @@ def main() -> int:
         log.info("Mode %s : %d fenêtre(s) de personnage ouverte(s)", "équipe" if forced else "solo", len(names))
     team = TeamSettings.from_settings(settings, enabled=forced, leader=args.principal)
     if team.enabled:
+        if args.recolte is not None:
+            log.warning("--recolte : en solo seulement (sans --equipe ni --principal), ignoré")
         return run_team(args, settings, team, title, recorder, connection)
     if args.notifications:
         log.warning("--notifications : seulement en mode équipe (--equipe), ignoré")
@@ -364,8 +380,18 @@ def main() -> int:
         if args.combat_zone is not None:
             args.travel, args.position = "zone", args.combat_zone
         goto = _goto(args, settings)
-        bot = Bot(game, settings, act=not args.observe, engage=False if args.combat_only or goto else None,
-                  travel=args.travel, start=args.position, region=WORLDS.get(args.monde))
+        if args.recolte is not None:
+            # Ressources et leur état d'après le serveur seulement (brain/harvest.py) : écoute de cette fenêtre.
+            from bot.connection.network import shared_listener
+
+            listener = shared_listener()
+            if listener is None:
+                log.error("--recolte : écoute du serveur impossible (Npcap), pas de récolte")
+                return 1
+            game.net = listener.follow(window.hwnd, character_name(window.title, title) or "")
+        bot = Bot(game, settings, act=not args.observe,
+                  engage=False if args.combat_only or goto or args.recolte else None,
+                  travel=args.travel, start=args.position, region=WORLDS.get(args.monde), harvest=args.recolte)
         log.info("Fenêtre : %s", window.title)
         log.info("Début de session : %s", SESSION_MODES[session_mode])
         if args.observe:
@@ -376,7 +402,10 @@ def main() -> int:
                      "aller": "trajet jusqu'à une carte"}.get(bot.travel_settings.mode)
             if moves:
                 log.info("Monde : %s", bot.travel_settings.region)
-            if bot.engager is None and moves:
+            if args.recolte is not None and moves:
+                log.info("Mode : récolte (%s jusqu'au niveau %d) sur chaque carte, puis %s ; sans lancer de combat",
+                         *args.recolte, moves)
+            elif bot.engager is None and moves:
                 log.info("Mode : %s, sans lancer de combat", moves)
             else:
                 log.info("Mode : %s%s", "combats + attaque des groupes" if bot.engager else "combats seulement",

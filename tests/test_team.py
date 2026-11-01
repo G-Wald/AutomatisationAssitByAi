@@ -1301,8 +1301,7 @@ def test_fight_end_told_waits_for_the_map_reloaded_in_every_window():
     assert TeamBot._end_loaded([a, b])
 
 
-def test_told_results_closed_in_every_window_once_open_and_still(monkeypatch):
-    monkeypatch.setattr("bot.team.loop.RESULT_CLICK_EFFECT", 0)
+def test_told_results_closed_in_every_window_once_open_and_still():
     screen = Screen()
     result, out = load_frame("coeur_43pv"), load_frame("hors_combat")
     # B : encore fermée au premier regard (elle s'ouvre), puis ouverte, immobile, puis fermée.
@@ -1314,15 +1313,28 @@ def test_told_results_closed_in_every_window_once_open_and_still(monkeypatch):
     assert clicks[0][2] == clicks[1][2]
 
 
-def test_told_result_still_open_after_the_click_is_clicked_again(monkeypatch):
-    monkeypatch.setattr("bot.team.loop.RESULT_CLICK_EFFECT", 0)
+def test_told_results_after_the_first_still_button_need_a_single_look():
+    # 01/11 après-midi : deux regards par fenêtre (~0,3 s chacun) ; le bouton immobile une fois, à la même place
+    # (repère de référence) dans les autres fenêtres : un regard, puis le clic.
     screen = Screen()
-    result, out = load_frame("coeur_43pv"), load_frame("hors_combat")
-    leader = member("A", screen, result, result, result, out)
-    bot = team_bot(leader)
-    monkeypatch.setattr(leader.popups, "closed_elsewhere", lambda name: None)
-    bot._close_told_results([leader])
-    assert len(events(screen, "click")) == 2  # clic pas pris : recliqué, puis vue fermée
+    result = load_frame("coeur_43pv")
+    a, b, c = (member(name, screen, result) for name in "ABC")
+    bot = team_bot(a, b, c)
+    bot._close_told_results([a, b, c])
+    assert [e[0] for e in events(screen, "click")] == ["B", "C", "A"]
+    looks = [e[0] for e in events(screen, "look")]
+    assert looks.count("B") == 2 and looks.count("C") == 1 and looks.count("A") == 1
+
+
+def test_told_results_looked_at_together_in_background():
+    screen = Screen()
+    result = load_frame("coeur_43pv")
+    a, b, c = (member(name, screen, result) for name in "ABC")
+    for m in (a, b, c):
+        m.game.background = True  # regards en même temps (threads), clics dans l'ordre : le principal en dernier
+    bot = team_bot(a, b, c)
+    bot._close_told_results([a, b, c])
+    assert [e[0] for e in events(screen, "click")] == ["B", "C", "A"]
 
 
 def test_result_window_not_clicked_blind_while_it_still_opens():

@@ -39,6 +39,7 @@ SETTLE_AFTER_READY = 5
 AFTER_READY_SECONDS = 15
 PLACEMENT_FIRST_TRY = 0.3  # placement : premier essai de lecture des cases, une fois le bandeau d'entrée parti
 PLACEMENT_GIVE_UP = 4.0  # au-delà, Prêt sans changer de case
+HARVEST_PODS_FULL = 0.9  # mode récolte : arrêt à ce remplissage des pods (Ow, annoncé par le serveur)
 
 
 class Bot:
@@ -49,11 +50,13 @@ class Bot:
     deadline: float | None = None
 
     def __init__(self, game: Game, settings: dict, act: bool = True, engage: bool | None = None,
-                 travel: str | None = None, start: tuple[int, int] | None = None, region: str | None = None) -> None:
+                 travel: str | None = None, start: tuple[int, int] | None = None, region: str | None = None,
+                 harvest: tuple[str, int] | None = None) -> None:
         """`engage` : force l'attaque des groupes (True) ou la désactive (False) ; None = config.
         `travel` : façon de changer de carte (voir brain/travel.py) ; None = config.
         `start` : coordonnées de la carte de départ, si le bot ne sait pas encore lire tous ses chiffres.
-        `region` : Incarnam ou Monde des Douze (None : config)."""
+        `region` : Incarnam ou Monde des Douze (None : config).
+        `harvest` : (métier, niveau) : récolte de chaque carte avant la suivante (--recolte, mode zone ; 01/11)."""
         combat = settings.get("combat") or {}
         popups = settings.get("popups") or {}
         timing = settings.get("timing") or {}
@@ -79,6 +82,14 @@ class Bot:
         if self.engager is not None:  # Z sans infobulle : clavier sondé par la touche A (fenêtre sourde, 20/10)
             self.engager.probe_key = self.travel_settings.show_exits_key
             self.engager.probe_first = self.roamer is not None
+        self.harvester = None
+        if harvest is not None:
+            from bot.brain.harvest import Harvester
+
+            job, level = harvest
+            self.harvester = Harvester(game, lambda r: r.job == job and r.level <= level, popups=self.popups)
+        self._harvested_map: int | None = None  # dernière carte récoltée (une fois par passage)
+        self.harvested = 0  # ressources récoltées depuis le lancement
         self.finished = False  # test de déplacement ou exploration terminés
         self._empty_searches = 0
         rest_settings = RestSettings.from_settings(settings)
@@ -162,6 +173,23 @@ class Bot:
             if self.learn_team:
                 self.my_team = None  # la couleur de mon équipe peut changer d'un combat à l'autre
 
+    def _harvest_here(self) -> bool:
+        """Mode récolte : les ressources du métier sur cette carte (carte annoncée par le serveur), une fois par passage ;
+        False si elle l'est déjà (ou carte encore inconnue) : on passe à la suivante. Pods presque pleins : fin de la
+        session (la banque viendra ensuite)."""
+        net = getattr(self.game, "net", None)
+        if net is None or net.map_id is None or net.map_id == self._harvested_map:
+            return False
+        self._harvested_map = net.map_id
+        done = self.harvester.run(net.map_id)
+        self.harvested += done
+        pods = getattr(net, "pods", None)
+        log.info("Récolte : %d ressource(s) depuis le lancement%s", self.harvested,
+                 f", pods {pods[0]}/{pods[1]}" if pods else "")
+        if pods and pods[0] >= HARVEST_PODS_FULL * pods[1] and not self._stop_reason:
+            self._stop_reason = f"pods presque pleins ({pods[0]}/{pods[1]})"
+        return True
+
     def _report(self, frame: Frame, scene: Scene) -> None:
         """Journalise chaque changement d'état, avec une capture annotée."""
         popup = self.popups.describe(frame) if scene.phase is not Phase.COMBAT else None  # pas de fenêtre en combat
@@ -217,6 +245,8 @@ class Bot:
                 if self.rester is not None:
                     self.rester.rest()
                 return
+            if self.harvester is not None and self._harvest_here():
+                return  # récolte de cette carte faite : carte suivante au tour de boucle d'après (combat subi ?)
             self.roamer.step()
             if self.roamer.done:
                 self.finished = True

@@ -102,3 +102,46 @@ def test_search_text_of_an_item_name():
 
     assert search_text("Faux de l'apprenti paysan") == "apprenti paysan"
     assert search_text("Marteau du Bouftou") == "Marteau du Bouftou"
+
+
+def test_harvest_stops_when_a_fight_starts():
+    # 01/11, mode récolte : une agression pendant la récolte, plus aucun clic sur la carte.
+    class Game:
+        net = ClientFeed("Elseiso")
+
+    Game.net.feed("GJK2|0|1|0|30000|4")
+    harvester = Harvester(Game(), lambda r: True)
+    harvester.targets = lambda map_id=None: [Resource(168, "Frêne", "Bûcheron", "Couper", 1)]
+    harvester.harvest = lambda resource: pytest.fail("pas de récolte en combat")
+    assert harvester.run(7334) == 0
+
+
+def test_harvest_mode_harvests_each_map_once_then_stops_with_full_pods(monkeypatch):
+    from bot.brain.loop import Bot
+    from bot.config import load_settings
+    from tests.test_brain import FakeGame
+    from tests.conftest import load_frame
+
+    game = FakeGame(load_frame("hors_combat"))
+    game.net = ClientFeed("Elseiso")
+    game.net.map_id = 7334
+    bot = Bot(game, load_settings(), engage=False, harvest=("Bûcheron", 23))
+    runs = []
+    monkeypatch.setattr(bot.harvester, "run", lambda map_id: runs.append(map_id) or 4)
+    assert bot._harvest_here() and not bot._harvest_here()  # une fois par passage : la carte suivante ensuite
+    game.net.map_id, game.net.pods = 7335, (1700, 1800)
+    assert bot._harvest_here()
+    assert runs == [7334, 7335] and bot.harvested == 8 and "pods" in bot._stop_reason
+    assert bot.harvester.wanted(Resource(1, "Noyer", "Bûcheron", "Couper", 20))
+    assert not bot.harvester.wanted(Resource(1, "Chêne", "Bûcheron", "Couper", 30))
+    assert not bot.harvester.wanted(Resource(1, "Blé", "Paysan", "Faucher", 1))
+
+
+def test_harvest_option_is_a_job_and_a_level():
+    import argparse
+
+    from bot.__main__ import _harvest
+
+    assert _harvest("Bûcheron:23") == ("Bûcheron", 23)
+    with pytest.raises(argparse.ArgumentTypeError):
+        _harvest("Bûcheron")
