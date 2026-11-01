@@ -603,6 +603,11 @@ def _capture_windows(members: list, label: str) -> None:
 
 def _keep_summary(recorder: Recorder) -> None:
     """Fin du lancement : son bilan chiffré dans data/bilans/ (bot/debug/bilans.py)."""
+    from bot.connection.network import current_listener
+
+    listener = current_listener()
+    if listener is not None:
+        log.info("Écoute du serveur : %s", listener.health())
     path = archive(recorder.dir)
     if path is not None:
         log.info("Bilan chiffré de la session : %s", path)

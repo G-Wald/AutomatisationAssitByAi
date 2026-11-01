@@ -675,7 +675,10 @@ class Engager:
         _no_menu_after_click)."""
         frame = self.game.look(park=False)
         if find_flash_menu(frame, around=group) is not None:
-            log.info("Le clic sur le groupe a ouvert le menu de Flash : je le ferme (pas d'Échap)")
+            # 01/11 (journal 162522) : 21 ratés sur 29 attaques dans la cité d'Astrub, partout sur l'écran, cause pas
+            # vue (aucune capture) : la capture du raté, point visé marqué, avant de fermer le menu.
+            path = self.game.recorder.save(annotate(frame, marks=[(group, "visé")]), "groupe_rate", lossless=True)
+            log.info("Le clic sur le groupe a ouvert le menu de Flash (capture : %s) : je le ferme (pas d'Échap)", path)
             close_flash_menu(self.game, frame, around=group)
         elif close_npc_dialog(self.game, frame):
             pass

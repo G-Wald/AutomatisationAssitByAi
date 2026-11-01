@@ -2133,3 +2133,36 @@ def test_told_result_seen_late_is_looked_at_again_after_the_deadline(monkeypatch
     bot = team_bot(leader, late)
     bot._close_told_results([late, leader])
     assert sorted(e[0] for e in events(screen, "click")) == ["A", "B"]
+
+
+def _placing(name: str, my_id: int):
+    net = _heard(name, 1906, my_id)
+    net.feed("GJK2|0|1|0|30000|4")  # placement
+    return net
+
+
+def test_ready_not_announced_by_the_server_is_clicked_again_on_the_button(monkeypatch):
+    # 01/11 : le Prêt n'était jamais vérifié (20/10 : F1 ignoré par une fenêtre sourde aux touches).
+    monkeypatch.setattr("bot.team.loop.READY_HEARD", 0.05)
+    screen = Screen()
+    placement = load_frame("preparation")
+    a, b = member("A", screen, placement), member("B", screen, placement)
+    a.game.net, b.game.net = _placing("A", 1), _placing("B", 2)
+    bot = team_bot(a, b)
+    bot._ready(a)
+    bot._ready(b)
+    a.game.net.feed("GR11")  # A prêt d'après le serveur, B non
+    bot._confirm_ready([a, b])
+    assert [e[0] for e in events(screen, "press")] == ["A", "B"]
+    assert [e[0] for e in events(screen, "click")] == ["B"]  # B recliqué, sur le bouton
+
+
+def test_no_ready_press_for_a_character_the_server_says_is_ready():
+    screen = Screen()
+    placement = load_frame("preparation")
+    a = member("A", screen, placement)
+    a.game.net = _placing("A", 1)
+    a.game.net.feed("GR11")
+    bot = team_bot(a)
+    bot._ready(a)  # un appui le ferait repasser « pas prêt »
+    assert events(screen, "press") == [] and events(screen, "click") == []

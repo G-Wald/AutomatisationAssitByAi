@@ -149,6 +149,7 @@ FOLLOWER_RECLICKS = 2
 MAX_POPUPS = 6  # regards d'affilée dans une même fenêtre du jeu : fermer résultat, niveau supérieur, et retenter
 RESULT = "résultat du combat"  # même fenêtre, même bouton « Fermer » dans chaque fenêtre du combat
 RESULT_LAG = 0.2  # elle s'ouvre partout en même temps, à un instant près
+READY_HEARD = 1.5  # s : Prêt annoncé par le serveur (GR1<id>) après l'appui ; sinon recliqué une fois (bouton)
 # Fin du combat d'après le serveur (GE) : la carte est rechargée (GDK) ~3,5 s plus tard dans chaque fenêtre, et le
 # résultat ne s'ouvre qu'après (01/11, journal 113029 : « fini sans fenêtre de résultat » conclu 1 s après GE, 24
 # combats sur 31 ; fenêtres fermées ensuite une à une, le principal déjà reparti au combat suivant).
@@ -468,6 +469,7 @@ class TeamBot:
         self._overtime_warned = False
         self._result_unseen = False  # dernier combat fini sans fenêtre de résultat vue
         self._told_end = False  # dernier combat fini d'après le serveur (_close_told_results)
+        self._ready_pressed: dict[str, float] = {}  # heure du dernier appui sur Prêt de chacun (_confirm_ready)
         self._departure_map: int | None = None  # carte quittée par le principal d'après le serveur (_dispatch)
         self._result_check_at: float | None = None  # ... et rien fermé chez le principal : nouveau regard à cette heure
         self._leader_closed = False  # le dernier tour des fenêtres a fermé une fenêtre chez le principal
@@ -1565,6 +1567,7 @@ class TeamBot:
                 if member.name not in ready:
                     self._ready(member)
                     member.game.sleep(random.uniform(*READY_GAP))
+            self._confirm_ready([host] + joined)
         return [host] + joined if self._wait_combat(host) else []
 
     def _send_help(self, host: Member, others: list[Member]) -> None:
@@ -1869,25 +1872,50 @@ class TeamBot:
             marks = [(frame.grid.center(c), f"{order.index(n) + 1} {n}") for n, c in known.items()]
             host.game.recorder.save(annotate(frame, cells=set(enemies), marks=marks), "placement_equipe")
 
-    def _ready(self, member: Member) -> None:
-        """Un seul appui : un second annulerait le premier.
-
-        TODO (20/10, fenêtre sourde aux touches, S3 à S8) : F1 « Prêt » peut être ignoré comme F1 de fin de tour. Le
-        remède serait un clic sur le bouton Prêt quand la fenêtre est sourde (brain/recovery.is_deaf), mais il faut
-        d'abord savoir ce qui change à l'écran après Prêt (bouton qui change d'aspect ? encadré du portrait ?) : rien
-        n'est encore validé sur des captures, et un second Prêt annulerait le premier. Pas de clic ici en attendant :
-        captures de placement avant et après Prêt à relever (une fenêtre qui a reçu F1, une qui l'a ignoré)."""
+    def _ready(self, member: Member, button: bool = False) -> None:
+        """Un seul appui : un second annulerait le premier. Avec l'écoute (01/11), le serveur dit qui est prêt
+        (« GR1<id> ») : pas d'appui pour un personnage déjà prêt, et un Prêt pas annoncé est recliqué une fois
+        (_confirm_ready). `button` : le bouton plutôt que la touche (20/10 : fenêtre sourde aux touches, F1 ignoré)."""
         frame = member.game.look(park=False)
         scene = read_scene(frame)
         if scene.phase is not Phase.PLACEMENT:
             return
-        if self.team.ready_key:
+        net = _live_net(member)
+        my_id = getattr(net, "my_id", None) if net is not None else None
+        if my_id is not None and my_id in net.fight_ready():
+            log.info("%s déjà prêt d'après le serveur : pas d'appui (il annulerait)", member.name)
+            return
+        self._ready_pressed[member.name] = time.monotonic()
+        if self.team.ready_key and not button:
             log.info("Placement : Prêt (%s)", self.team.ready_key.upper())
             member.game.press(self.team.ready_key)
         elif scene.ready_button is not None:
             log.info("Placement : je clique sur Prêt")
             member.game.click(scene.ready_button, frame.layout.spread(*READY_SPREAD))
         member.game.sleep(0.03)
+
+    def _confirm_ready(self, members: list[Member]) -> None:
+        """Prêt de chacun annoncé par le serveur (GR1) dans les READY_HEARD s qui suivent son appui ; sinon recliqué une
+        fois, sur le bouton (01/11 : le Prêt n'était jamais vérifié, un F1 ignoré bloquait le combat jusqu'à ce que tu
+        cliques). Sans écoute ou sans mon identifiant : rien (comme avant)."""
+        waiting = {}
+        for member in members:
+            net = _live_net(member)
+            pressed = self._ready_pressed.get(member.name)
+            if net is not None and getattr(net, "my_id", None) is not None and pressed is not None:
+                waiting[member.name] = (member, net, pressed)
+        deadline = time.monotonic() + READY_HEARD
+        while waiting:
+            for name, (member, net, pressed) in list(waiting.items()):
+                if net.ready_at >= pressed or net.my_id in net.fight_ready() or not net.in_fight():
+                    del waiting[name]  # prêt, ou combat commencé / fini
+            if not waiting or time.monotonic() >= deadline:
+                break
+            self.leader.game.sleep(0.1)
+        for member, net, _ in waiting.values():
+            log.info("%s : Prêt pas annoncé par le serveur en %.1f s : je clique sur le bouton Prêt", member.name,
+                     READY_HEARD)
+            self._ready(member, button=True)
 
     def _wait_combat(self, host: Member) -> bool:
         """Jusqu'au début du combat (timeline affichée). Entre Prêt et la timeline, l'écran ressemble quelques secondes

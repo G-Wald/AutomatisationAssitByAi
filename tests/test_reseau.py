@@ -550,3 +550,21 @@ def test_zone_is_kept_when_the_bank_errand_starts_before_the_first_step():
     traveler.look = lambda: (None, SimpleNamespace(zone_name=None))
     roamer.start_errand((4, -16), "Pods pleins")
     assert roamer.zone_name == "Forêt d'Astrub" and roamer._saved_meeting == (3, -26)
+
+
+def test_listener_health_line_for_the_session_summary():
+    # 01/11 : les messages tronqués ne se voyaient qu'en fouillant les journaux ; l'état de l'écoute au bilan.
+    import threading
+
+    from bot.connection.network import NetworkListener
+
+    listener = NetworkListener.__new__(NetworkListener)
+    listener._lock = threading.Lock()
+    quiet, alive = ClientFeed("Pesopepe"), ClientFeed("Fourboun")
+    quiet.heard_at, alive.heard_at = time.monotonic() - 120, time.monotonic()
+    listener._feeds = {1: quiet, 2: alive}
+    listener.counts = {"messages": 1200, "segments_renvoyes": 3, "segments_a_cheval": 1, "octets_ecartes": 410,
+                       "messages_anormaux": 0}
+    line = listener.health()
+    assert line.startswith("1200 messages, 3 paquets renvoyés et 1 à cheval écartés (410 octets), 0 message(s)")
+    assert "plus rien du serveur pour Pesopepe" in line and "Fourboun" not in line

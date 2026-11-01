@@ -1158,6 +1158,9 @@ class NetworkListener:
         self._ports: dict[int, tuple[ClientFeed | None, float]] = {}  # port local -> (flux ou None, relu à)
         self._buffers: dict[int, bytes] = {}
         self._next_seq: dict[int, int] = {}  # port local -> numéro TCP attendu ensuite (fresh_part)
+        # État de l'écoute pour le bilan de la session (health) : messages lus, segments renvoyés écartés...
+        self.counts: dict[str, int] = dict.fromkeys(
+            ("messages", "segments_renvoyes", "segments_a_cheval", "octets_ecartes", "messages_anormaux"), 0)
         self._refreshed = 0.0
         self._stop = threading.Event()
         self._threads: list[threading.Thread] = []
@@ -1167,6 +1170,18 @@ class NetworkListener:
         self._journal: Path | None = None
         self._journal_files: dict[str, object] = {}
         self._journal_lock = threading.Lock()
+
+    def health(self) -> str:
+        """Une ligne pour le bilan de la session : messages lus, paquets renvoyés écartés, messages au début anormal
+        (octets perdus), fenêtres suivies dont le serveur ne dit plus rien (écran à la place)."""
+        counts = dict(self.counts)
+        with self._lock:
+            feeds = list(self._feeds.values())
+        silent = sorted(f.name or "?" for f in feeds if f.heard_at and not f.alive())
+        return (f"{counts['messages']} messages, {counts['segments_renvoyes']} paquets renvoyés et "
+                f"{counts['segments_a_cheval']} à cheval écartés ({counts['octets_ecartes']} octets), "
+                f"{counts['messages_anormaux']} message(s) au début anormal"
+                + (f", plus rien du serveur pour {', '.join(silent)} (écran à la place)" if silent else ""))
 
     def keep_journal(self, folder) -> None:
         """Écrit désormais les messages du serveur dans `folder`/reseau_<personnage>.txt (heure, texte)."""
@@ -1297,13 +1312,23 @@ class NetworkListener:
                 feed = self._feed_of(port)
                 if feed is None:
                     continue
+                size = len(chunk)
                 chunk, self._next_seq[port] = fresh_part(self._next_seq.get(port), seq, chunk)
+                if len(chunk) < size:
+                    self.counts["segments_renvoyes" if not chunk else "segments_a_cheval"] += 1
+                    self.counts["octets_ecartes"] += size - len(chunk)
                 if not chunk:
                     continue
                 *messages, self._buffers[port] = (self._buffers.get(port, b"") + chunk).split(b"\x00")
                 for message in messages:
                     text = message.decode("utf-8", errors="replace").strip()
                     if text:
+                        self.counts["messages"] += 1
+                        if not text[0].isalpha():
+                            # 01/11 (journal 144405) : début de message perdu (« ;129 »), vu seulement en fouillant
+                            # les journaux. Compté, et dit au bilan de la session (health).
+                            self.counts["messages_anormaux"] += 1
+                            log.debug("Message réseau au début anormal (%s) : %s", feed.name or "?", text[:40])
                         feed.feed(text)
                         self._write_journal(feed, text)
             except Exception:  # un message inattendu ne doit jamais arrêter l'écoute
