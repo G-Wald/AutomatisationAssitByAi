@@ -1637,3 +1637,43 @@ def test_points_of_a_fought_group_are_forgotten(monkeypatch):
     monkeypatch.setattr(engager, "_wait_for_combat", lambda *args, **kwargs: True)
     assert engager._probe(frame, tooltip) is Outcome.COMBAT
     assert engager._probed_points(tooltip, frame) == []
+
+
+def test_clear_point_avoids_the_raised_drawing_of_a_tactical_block():
+    # 01/11 (journal 071237) : clic sur le bord gauche de (19, 23) tombé sur le dessin surélevé du bloc de (18, 24)
+    # (un arbre), « pas bougé » deux fois.
+    from bot.perception.fighters import clear_point
+
+    grid = load_frame("combat_portee_sort").grid
+    x, y = grid.center((19, 23))
+    assert clear_point(grid, (19, 23), [])[0] == (x, y)
+    (px, py), _ = clear_point(grid, (19, 23), [], raised={(18, 24)})
+    assert px > x  # à droite, loin du bloc en bas à gauche
+    (px, py), _ = clear_point(grid, (19, 23), [], raised={(19, 25)})  # bloc juste en dessous : le centre reste libre
+    assert (px, py) == (x, y)
+
+
+def test_clear_point_on_a_cell_hidden_by_bodies_aims_near_the_top_of_the_heads():
+    # 01/11 : (15, 17) cachée par les corps de trois personnages ; le repli au centre tombait sur l'un d'eux. Le point
+    # le moins enfoncé dans un corps : le bord gauche, 0,8 demi-hauteur sous le haut du corps de (14, 20).
+    from bot.perception.fighters import Fighter, clear_point
+
+    grid = load_frame("combat_portee_sort").grid
+    front = [Fighter(RED, *grid.center(c), c) for c in ((15, 19), (14, 20), (16, 20))]
+    x, y = grid.center((15, 17))
+    (px, py), _ = clear_point(grid, (15, 17), front)
+    assert (px, py) == (x - 0.7 * grid.half_w, y)
+
+
+def test_clicks_follow_the_relief_of_the_client_map():
+    # 01/11 (journal 113029, carte 0,-23) : (13, 11), en pente au niveau 8, visée à son centre « à plat » ; le clic est
+    # tombé sur le flanc du sommet de (13, 13) (niveau 9), dessiné jusqu'à (13, 9). 4 « pas bougé » de suite.
+    from bot.perception.fighters import LEVEL_HALF_HEIGHTS, cell_point, clear_point
+
+    grid = load_frame("combat_portee_sort").grid
+    lift = {(13, 11): 1.5, (13, 13): 2.0}
+    x, y = grid.center((13, 11))
+    assert cell_point(grid, (13, 11), lift) == (x, y - 1.5 * LEVEL_HALF_HEIGHTS * grid.half_h)
+    (px, py), _ = clear_point(grid, (13, 11), [], raised={(13, 13)}, lift=lift)
+    assert py < y - 1.5 * LEVEL_HALF_HEIGHTS * grid.half_h + 0.5 * grid.half_h  # sur la case relevée, pas plus bas
+    assert clear_point(grid, (13, 11), [])[0] == (x, y)  # carte plate : comme avant

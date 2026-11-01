@@ -459,6 +459,15 @@ class Spell:
         )
 
 
+TOLD_ROWS = 1000  # lignes des sorts annoncés par le serveur sans ligne lue dans la fenêtre : 1000 + numéro du sort
+
+
+def _told_level(spell: dict, level: int) -> dict | None:
+    """Niveau `level` (1 à 6) d'un sort de Solomonk ; None s'il n'y est pas."""
+    levels = spell.get("niveaux") or []
+    return levels[level - 1] if 1 <= level <= len(levels) else None
+
+
 def _filled(entry: SpellEntry) -> int:
     """Ce qu'une lecture de ligne a pu lire : PA, portée, niveau (une même ligne vue sur deux pages de la liste peut
     être mieux lue sur l'une : 04/10, portées « 5-8 PO » lues sur une page, pas sur l'autre)."""
@@ -511,6 +520,7 @@ class SpellBook:
         self._stats_read_at: str | None = None
         self._recalled_slots: dict[str, str] = {}  # cases de la barre retenues à la dernière session (journal)
         self._damage_logged = False
+        self._told_taken = False  # sorts annoncés à la connexion appliqués (une fois)
 
     def read(self) -> bool:
         """Début de session, une fois par personnage. Mode mémoire : reprend ce qui a été retenu (aucune fenêtre
@@ -525,6 +535,9 @@ class SpellBook:
         fresh = self.session.stats and self._take_told_stats()
         if not self.entries and self._tries < READ_TRIES:
             fresh = self._read_window() or fresh
+        if not self._told_taken:
+            self._told_taken = True
+            fresh = self._take_told_spells() or fresh
         if not self._stats_done:
             self._stats_done = True
             self.stats = StatsReader(self.game).read()
@@ -553,6 +566,72 @@ class SpellBook:
         log.info("Caractéristiques annoncées par le serveur%s : %s", " (changées)" if before is not None and
                  before.source == "serveur" else "", told.describe())
         return True
+
+    def _told_later(self) -> bool:
+        """Sorts annoncés par le serveur retenus pour ce personnage, pas encore pris (_take_told_spells)."""
+        from bot.connection.network import known_spells
+
+        return not self._told_taken and bool(self.name and known_spells(self.name))
+
+    def _take_told_spells(self) -> bool:
+        """Sorts annoncés par le serveur à la connexion du personnage (« SL », connection/network.py, retenus d'une
+        session à l'autre) : ils font foi pour le sort de chaque ligne, son niveau et sa case dans la barre (01/11 : chez
+        Fourboun, barre lue à l'écran La Bloqueuse en 11 et un « sort n°4 » inconnu en 13 ; le serveur dit La Bloqueuse
+        en 13). Les lignes lues gardent leurs icônes (sort grisé, barre montrée). True si quelque chose a changé."""
+        from bot.connection.network import known_spells
+
+        told = known_spells(self.name) if self.name else {}
+        if not told or not self.spells:
+            return False
+        sorts = self.reference["sorts"]
+        cle_of = {spell_id: (sorts.get(str(spell_id)) or {}).get("cle") for spell_id in told}
+        row_of = {spell.key: row for row, spell in self.spells.items() if spell.key}
+        # Sort pas reconnu à l'écran : le seul sort annoncé qui manque, connu de Solomonk et dont le niveau annoncé a
+        # les PA et la portée lus sur sa ligne.
+        unknown = [row for row, spell in self.spells.items() if not spell.data]
+        missing = [spell_id for spell_id, cle in cle_of.items() if cle and cle not in row_of]
+        for row in unknown:
+            entry = self.spells[row].entry
+            fitting = [spell_id for spell_id in missing
+                       if (level := _told_level(sorts[str(spell_id)], told[spell_id][0])) and fits(level, entry)]
+            if len(fitting) == 1:
+                row_of[cle_of[fitting[0]]] = row
+                missing.remove(fitting[0])
+        # Appris depuis la dernière lecture de la fenêtre (01/11 : Tir Puissant chez Eldieso, Cupidité chez Walitcoin,
+        # vus « pas appris » à l'écran) : une ligne sans icône, PA et portée de Solomonk au niveau annoncé.
+        for spell_id in missing:
+            level = _told_level(sorts[str(spell_id)], told[spell_id][0])
+            if level is None:
+                continue
+            row = TOLD_ROWS + spell_id
+            entry = SpellEntry(row=row, pa=None, spell_range=None, learned=True, icon=None, level=told[spell_id][0])
+            self.spells[row] = Spell(entry, None, sorts[str(spell_id)]["nom"])
+            row_of[cle_of[spell_id]] = row
+        changed, slots = False, {}
+        for spell_id, (level_no, slot) in told.items():
+            row = row_of.get(cle_of[spell_id]) if cle_of[spell_id] else None
+            if row is None:
+                continue
+            spell, reference = self.spells[row], sorts[str(spell_id)]
+            level = _told_level(reference, level_no)
+            if level is not None and (spell.key != reference["cle"] or spell.data != level):
+                log.info("%s : %s niveau %d d'après le serveur%s", self.name, reference["nom"], level_no,
+                         f" (lu : {spell.name}, niveau {spell.level})" if spell.data else
+                         " (appris depuis la dernière lecture de la fenêtre)" if row >= TOLD_ROWS else
+                         " (pas reconnu à l'écran)")
+                role = (self.knowledge.get(reference["cle"]) or {}).get("role") or deduce_role(level)
+                self.spells[row] = Spell(spell.entry, reference["cle"], reference["nom"], level, role)
+                changed = True
+            if slot is not None:
+                slots[slot] = spell.entry
+        if slots and slots != self.slots:
+            self.slots = slots
+            for slot, entry in sorted(slots.items()):
+                spell = self.spells.get(entry.row)
+                log.info("Case %d de la barre : %s (d'après le serveur)", slot,
+                         spell.name if spell else f"sort n°{entry.row + 1}")
+            changed = True
+        return changed
 
     def numpad_known(self) -> bool:
         """Pavé numérique déjà essayé avec succès sur la 2e rangée de la barre, à une session précédente."""
@@ -758,7 +837,10 @@ class SpellBook:
             log.info("%s : %s", spell.name, spell.summary())
             if spell.remark:
                 log.warning("%s : %s", spell.name, spell.remark)
-            if not spell.data:
+            if not spell.data and self._told_later():
+                # 01/11 : Fourboun, « sort n°4 inconnu » à chaque connexion alors que le serveur le dit (Arbre).
+                log.info("Sort n°%d pas reconnu à l'écran : d'après le serveur juste après", spell.entry.row + 1)
+            elif not spell.data:
                 path = self.game.recorder.save(frame.image, "sort_inconnu", lossless=True) if frame is not None else None
                 log.warning("Sort n°%d inconnu%s : la tactique ne s'en servira pas", spell.entry.row + 1,
                             f" (capture : {path})" if path else "")
@@ -883,8 +965,10 @@ class SpellBook:
             spell = match.spells.get(entry.row) if match else None
             if spell is None:
                 if match and entry.row in match.contradictions:
-                    log.warning("Sort n°%d (%s) : aucun sort de la classe ne correspond (chiffres mal lus ?)",
-                                entry.row + 1, entry.describe())
+                    # Sorts annoncés par le serveur retenus : ils trancheront juste après (_take_told_spells).
+                    log.log(logging.INFO if self._told_later() else logging.WARNING,
+                            "Sort n°%d (%s) : aucun sort de la classe ne correspond (chiffres mal lus ?)",
+                            entry.row + 1, entry.describe())
                 spell = next((s for s in self.reference["sorts"].values() if s["cle"] == keys[entry.row]), None)
             if spell is None:
                 self.spells[entry.row] = Spell(entry, keys[entry.row], f"sort n°{entry.row + 1}")

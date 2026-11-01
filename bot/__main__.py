@@ -327,6 +327,8 @@ def main() -> int:
         from bot.connection.network import shared_listener
 
         listener = shared_listener()
+        if listener is not None and (settings.get("reseau") or {}).get("journal", True):
+            listener.keep_journal(recorder.dir)  # reseau_<personnage>.txt : chaque message du serveur, sans le chat
         for window in client_windows() if listener is not None else []:
             listener.follow(window.hwnd, "")  # écoutée dès la connexion : caractéristiques annoncées (« As »)
     if connection.enabled:

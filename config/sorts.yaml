@@ -13,6 +13,7 @@
 #   retrait_pa    : dégâts + retrait de PA (l'ennemi frappera moins fort)
 #   poison        : dégâts sur plusieurs tours
 #   degats        : dégâts
+#   invocations   : dégâts sur une invocation seulement, quand aucun autre sort ne touche personne (Désinvocation)
 #   autre         : la tactique ne s'en sert pas : ni dégâts ni bonus (soins, invocations, autres bonus, malus :
 #                   Sac Animé, Clé Réductrice...), ou un malus (recul, vol...) avec moins d'1 dégât moyen par PA
 #                   (Aveuglement du Féca au niveau 1 : 1 dégât pour 3 PA)
@@ -36,3 +37,9 @@ sorts:
   tir_eloigne: {role: boost_portee}
   # Ne frappent que des invocations (le jeu refuse de les lancer sur un monstre) : jamais utilisés pour attaquer.
   sacrifice_poupesque: {role: autre}  # Sadida (03/10 : essayé à chaque tour, jamais parti)
+  # 01/11 (l'utilisateur) : Désinvocation ne frappe que les invocations ; tuer l'invocateur tue ses invocations, donc
+  # seulement sur une invocation quand aucune autre cible n'est atteignable.
+  desinvocation: {role: invocations}  # Enutrof
+  # 01/11 (serveur : « GA;118 » à chaque combattant touché) : Cupidité (Enutrof) donne +100 Force et Intelligence à
+  # tout le monde autour, un monstre compris (Sanglier d'Halouine). Gardée en bonus lancé avant de taper (utilisateur :
+  # à faire au début, même si elle renforce l'ennemi) : rôle déduit des effets, pas de ligne ici.

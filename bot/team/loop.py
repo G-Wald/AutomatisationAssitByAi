@@ -628,6 +628,7 @@ class TeamBot:
             self._hp_report_due = False
             log.info("Vie après le combat : %s", ", ".join(f"{name} {100 * ratio:.0f} %" for name, ratio in
                                                          sorted(self._hp.items(), key=lambda item: item[1])))
+            self.learn_levels(friends=False)  # passage de niveau annoncé par le serveur (PM) : limite recalculée
         return None
 
     def _recheck_results(self) -> None:
@@ -771,7 +772,10 @@ class TeamBot:
         sitting = []
         for member in tired:
             frame = member.game.look()
-            ratio = hp_ratio(frame)
+            # Vie annoncée par le serveur (As) d'abord. Assis, il n'annonce que le rythme de récupération (ILS, 01/11 :
+            # « ILS2000 », la vie gagnée « ILF » au lever) : la remontée se suit au cœur, plus bas.
+            ratio = _told(member, "life_ratio")
+            ratio = hp_ratio(frame) if ratio is None else ratio
             if ratio is None or ratio >= self.rest_settings.below:
                 continue
             stool = match_template(frame, STOOL, box=frame.layout.box(*STOOL_ZONE))
@@ -850,6 +854,10 @@ class TeamBot:
         self._dispatch_to = (self._departure[0] + delta[0], self._departure[1] + delta[1]) \
             if self._departure is not None and delta else None
         names, again = [], []
+        # Carte de départ du principal, relevée avant que la suivante soit annoncée (01/11, journal 113029 : arrivé
+        # pendant ce tour des suiveurs, 3 d'entre eux comparés à sa nouvelle carte, crus ailleurs, rejoints à pied).
+        leader_net = getattr(self.leader.game, "net", None)
+        leader_map = leader_net.map_id if leader_net is not None and leader_net.alive() else None
         for member in random.sample(self.followers, len(self.followers)):
             if member.name in self._lost:
                 continue  # pas sur la carte du principal : il ne le suit pas à l'aveugle
@@ -860,13 +868,17 @@ class TeamBot:
                     continue  # parti (ou en train de changer de carte) : pas de nouveau clic
                 if not self._clear_for_click(member, now):
                     continue  # fenêtre fermée : il sera recliqué pendant l'attente des suiveurs
-            elif not same_map(now, frame):
+            elif not self._on_leader_map(member, now, frame, leader_map):
                 # 11/10 : noms de carte illisibles dans la cité, un suiveur ailleurs a cliqué le même soleil sur sa
                 # carte à lui et s'est éloigné. Pas le même décor que le principal : il le rejoindra par son trajet.
                 log.warning("%s n'est pas sur la carte du principal (décor différent) : il ne le suit pas à l'aveugle",
                             member.name)
                 self._mark_lost(member, now)
                 continue
+            elif member.popups.describe(now) is not None:
+                # 01/11 (journaux 113029, 122800) : « résultat du combat » ouvert après le passage de fermeture ; le clic
+                # sur le soleil tombait dessus, le suiveur restait sur place et rejoignait le principal à pied.
+                member.popups.handle(now, self._since_combat())
             layout = getattr(member.game, "layout", None) or frame.layout
             target = layout.point(*reference)
             # Autres joueurs cachés (touche E) pendant le clic.
@@ -915,12 +927,16 @@ class TeamBot:
         for name in self._dispatched:
             member = self.by_name[name]
             frame = member.game.look(park=False)
-            if same_map(frame, here):
+            if self._on_leader_map(member, frame, here):
                 continue
             passed.append(name)
             log.warning("%s est passé sans le principal (resté sur sa carte) : il le rejoindra par son trajet", name)
             self._lost.add(name)
-            self._note_seen(name, read_map_label(frame), self._dispatch_to)
+            told = self._told_at(member)
+            if told is not None:
+                self._seen_at[name] = told  # carte annoncée par le serveur
+            else:
+                self._note_seen(name, read_map_label(frame), self._dispatch_to)
         if passed and self.roamer is not None and self._dispatch_side is not None:
             self._leader_left_behind(passed)
 
@@ -968,10 +984,19 @@ class TeamBot:
             if read_scene(frame).phase is not Phase.OUT_OF_COMBAT:
                 self._round_due = True  # combat (agression) : pris en charge au tour des fenêtres
                 continue
-            label = read_map_label(frame)
-            if _reads_as(label, self._arrival(crossing), crossing.after):
+            told = self._net_same_map(member)
+            if told is True:
+                continue  # déjà sur la carte d'arrivée (numéro de carte annoncé par le serveur dans les deux fenêtres)
+            at = self._told_at(member)
+            if told is False and at is not None and before is not None and at != before:
+                log.warning("%s n'est pas sur la carte que quitte le principal (il est en %s,%s d'après le jeu) : il "
+                            "ne le suit pas", member.name, *at)
+                self._seen_at[member.name] = at
+                continue
+            label = read_map_label(frame) if told is None else None
+            if told is None and _reads_as(label, self._arrival(crossing), crossing.after):
                 continue  # déjà sur la carte d'arrivée
-            if _reads_as(label, before, crossing.before) is False:
+            if told is None and _reads_as(label, before, crossing.before) is False:
                 log.warning("%s n'est pas sur la carte que quitte le principal (il est sur %s) : il ne le suit pas",
                             member.name, label.describe())
                 if label.coords is not None:
@@ -1134,7 +1159,8 @@ class TeamBot:
             return  # il arrive : pas de reclic (jugé au regard suivant)
         if find_context_menu(fresh) is not None or member.popups.describe(fresh) is not None:
             return  # menu ou fenêtre : fermés au regard suivant, avant tout clic
-        label = read_map_label(fresh)
+        # Écoute réseau : une arrivée est annoncée (_told_arrival), le nom de la carte n'a rien à trancher.
+        label = read_map_label(fresh) if self._net_same_map(member) is None else None
         if label is not None and label.coords is not None and label.coords == self._arrival(crossing):
             # Décor presque pareil d'une carte à l'autre (24/10, plaines des Porkass : suiveurs crus sur la carte de
             # départ, recliqués sur la nouvelle carte, partis une ou deux cartes trop loin) : la carte lue tranche.
@@ -1167,6 +1193,10 @@ class TeamBot:
     def _mark_lost(self, member: Member, frame: Frame | None = None) -> None:
         """Suiveur pas sur la carte du principal : perdu ; sa carte est notée si elle se lit."""
         self._lost.add(member.name)
+        told = self._told_at(member)
+        if told is not None:
+            self._seen_at[member.name] = told  # carte annoncée par le serveur
+            return
         label = read_map_label(frame if frame is not None else member.game.look(park=False))
         if label is not None and label.readable and label.coords is not None:
             self._seen_at[member.name] = label.coords
@@ -1193,7 +1223,7 @@ class TeamBot:
         here = self.leader.game.look(park=False)
         for member in self.followers:
             frame = member.game.look(park=False)
-            if not same_map(frame, here):
+            if not self._on_leader_map(member, frame, here):
                 log.warning("%s n'est pas sur la carte du principal au départ : il le rejoindra d'abord", member.name)
                 self._mark_lost(member, frame)
 
@@ -1206,13 +1236,39 @@ class TeamBot:
             return None
         return passages.coords_of(net.map_id)
 
+    def _net_same_map(self, member: Member, leader_map: int | None = None) -> bool | None:
+        """Même carte que le principal d'après le serveur (numéro du dernier GDM dans les deux fenêtres) ; None sans
+        écoute vivante dans l'une ou l'autre. `leader_map` : la carte du principal à comparer, si elle a pu changer
+        depuis (_dispatch : sa carte de départ)."""
+        nets = [getattr(m.game, "net", None) for m in (member, self.leader)]
+        told = [net is not None and net.alive() and net.map_id is not None for net in nets]
+        if told[0] and leader_map is not None:
+            return nets[0].map_id == leader_map
+        if all(told):
+            return nets[0].map_id == nets[1].map_id
+        if told[0]:
+            # 01/11 : Pesopepe reconnecté (carte annoncée à sa connexion, 1,-28), le principal sans changement de carte
+            # depuis le début de l'écoute ; décor jugé autre juste après la connexion, le bot arrêté. Coordonnées de
+            # la carte annoncée contre celles où le principal se sait.
+            mine = self._told_at(member)
+            traveler = getattr(getattr(self, "roamer", None), "traveler", None)
+            theirs = getattr(traveler, "coords", None) if not getattr(traveler, "doubt", True) else None
+            if mine is not None and theirs is not None:
+                return mine == theirs
+        return None
+
+    def _on_leader_map(self, member: Member, frame: Frame, leader_frame: Frame, leader_map: int | None = None) -> bool:
+        """Même carte que le principal : d'après le serveur (01/11), sinon au décor des deux captures."""
+        told = self._net_same_map(member, leader_map)
+        return told if told is not None else same_map(frame, leader_frame)
+
     def _same_place(self, member: Member) -> bool:
         """Le suiveur est sur la carte du principal : même décor, ou mêmes coordonnées lues dans les deux fenêtres (24/10,
         plaines des Porkass : Pesopepe arrivé en -1,-40, décor jugé autre, le bot arrêté)."""
         # 31/10, utilisateur : le réseau d'abord ; numéro de carte annoncé par le serveur aux deux fenêtres.
-        nets = [getattr(m.game, "net", None) for m in (member, self.leader)]
-        if all(net is not None and net.alive() and net.map_id is not None for net in nets):
-            return nets[0].map_id == nets[1].map_id
+        told = self._net_same_map(member)
+        if told is not None:
+            return told
         mine, theirs = member.game.look(park=False), self.leader.game.look(park=False)
         if same_map(mine, theirs):
             return True
@@ -1335,8 +1391,18 @@ class TeamBot:
                 self._seen_at[name] = target
                 continue
             if arrived and not self._same_place(member):
-                log.warning("%s se croit en %s,%s mais ne voit pas le même décor que le principal", name, *target)
-                arrived = False
+                # 01/11 : Pesopepe reconnecté en 1,-28, décor plus clair que celui du principal (teinte jour/nuit de
+                # chaque fenêtre), nom de carte illisible : le bot arrêté alors que « /p » avait répondu 1,-28 par le
+                # serveur. Cette réponse tranche.
+                asker = getattr(journey.traveler, "asker", None)
+                told = asker.ask(force=True) if asker is not None else None
+                if told == target:
+                    log.info("%s : décor autre que celui du principal, mais en %s,%s d'après le jeu (« /p »)", name,
+                             *target)
+                else:
+                    log.warning("%s se croit en %s,%s mais ne voit pas le même décor que le principal%s", name,
+                                *target, f" (« /p » : {told[0]},{told[1]})" if told else "")
+                    arrived = False
             if arrived:
                 log.info("%s a rejoint le principal en %s,%s", name, *target)
                 self._lost.discard(name)
@@ -1504,16 +1570,30 @@ class TeamBot:
                 return label.coords
         return None
 
-    def learn_levels(self) -> None:
+    def learn_levels(self, friends: bool = True) -> None:
         """Niveaux jamais lus (nouveaux personnages, 25/10 : groupes de niveau 75 laissés, limite par défaut 70, pour
         une équipe qui en cumule ~270) : lus dans la liste des amis du principal, retenus, la limite recalculée. Le
         principal n'est pas dans sa propre liste : la moyenne des autres (Engager.level_limit). Au lancement, après le
         groupe (bot/__main__.py)."""
         if self.engager is None or not getattr(self.engager, "team_levels", None):
             return
+        # 01/11 : niveaux annoncés par le serveur avec le groupe (PM, principal compris) : ni liste des amis ni moyenne,
+        # et un passage de niveau retenu.
+        told = {}
+        for member in self.members:
+            net = getattr(member.game, "net", None)
+            told.update(getattr(net, "group_levels", None) or {})
+        changed = {m.name: told[m.name] for m, level in zip(self.members, self.engager.team_levels)
+                   if told.get(m.name) is not None and told[m.name] != level}
+        for name, level in changed.items():
+            save_level(self._settings, name, level)
+        if changed:
+            self.engager.team_levels = [load_level(self._settings, m.name) for m in self.members]
+            log.info("Niveaux d'après le serveur (%s) : niveau maximal des groupes %d",
+                     ", ".join(f"{name} {level}" for name, level in changed.items()), self.engager.level_limit())
         missing = [m.name for m, level in zip(self.members, self.engager.team_levels)
                    if level is None and m is not self.leader]
-        if not missing:
+        if not missing or not friends:
             return
         for name, level in friend_levels(Player(self.leader.name, self.leader.game), missing).items():
             save_level(self._settings, name, level)
@@ -2187,7 +2267,12 @@ class TeamBot:
     def _fight_over(self) -> None:
         log.info("Combat terminé")
         self._progress("combat fini")
-        blind = [m.name for m in self.members if getattr(m.ai, "unknown_tint", False)]
+        # 01/11 : combattants d'après le serveur, la teinte ne compte plus (CombatAI.blind_fight).
+        blind = [m.name for m in self.members if getattr(m.ai, "blind_fight", False)]
+        tinted = [m.name for m in self.members if getattr(m.ai, "unknown_tint", False) and m.name not in blind]
+        if tinted:
+            log.info("Sol tactique pas reconnu (teinte jour/nuit) chez %s, sans conséquence : combattants d'après le "
+                     "serveur", ", ".join(tinted))
         if len(blind) >= UNKNOWN_TINT_STOP and not self._stop_reason:
             # 26/10 (journal 012810) : nuit plus profonde qu'à minuit, teinte d'une autre forme pas encore apprise
             # (perception/daylight.py) ; les 8 personnages, sans se repérer, ont passé tous leurs tours. Mieux vaut

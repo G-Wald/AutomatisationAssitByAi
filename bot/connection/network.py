@@ -28,6 +28,7 @@ lancer le bot en administrateur).
 
 import ctypes
 import ctypes.wintypes as wt
+import json
 import logging
 import os
 import socket
@@ -37,6 +38,7 @@ import threading
 import time
 from collections import deque
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from bot.brain.arena import map_cell
 from bot.brain.inventory import Exchange, Inventory, Item
@@ -105,6 +107,11 @@ class FighterState:
     pa: int = 0
     pm: int = 0
     dead: bool = False
+    # Invisible (31/10, Prespic, sort Camouflage) : « GA;150;lanceur;cible,tours,? » (tours 0 : visible de nouveau),
+    # et case -1 dans GTM tant qu'il l'est ; ses déplacements ne sont pas annoncés. Sa dernière case connue reste
+    # celle de son acteur, mais il n'est plus une cible.
+    hidden: bool = False
+    summoned: bool = False  # invocation (« GA;181 ») : seule cible de Désinvocation (01/11, l'utilisateur)
 
 
 @dataclass
@@ -140,6 +147,7 @@ class ClientFeed:
     move_cells: list[int] = field(default_factory=list)
     spent_at: float = 0.0  # dernière action de mon personnage qui a coûté des PA (GA;102 : sort lancé, raté ou arme)
     cast_at: float = 0.0  # dernier sort lancé par mon personnage (GA;300)
+    cast_spell: int | None = None  # son numéro (celui de Solomonk)
     failed_at: float = 0.0  # dernier échec critique de mon personnage (GA;302 : sort raté, PA perdus)
     # Banque (team/bank.py) : dialogue d'un PNJ ouvert (DCK), sa question et ses réponses (DQ), échange ou coffre ouvert
     # (ECK), fermé (EV), pods changés (Ow).
@@ -154,6 +162,7 @@ class ClientFeed:
     exchange_left_at: float = 0.0
     pods_at: float = 0.0
     tackled_at: float = 0.0
+    death_at: float = 0.0  # dernier combattant mort annoncé (GA;103) : son animation retient le clic suivant (01/11)
     # Récolte (brain/harvest.py, 27/10) : clé de la carte (GDM, la même à chaque passage : mapData déchiffré, ressources
     # par case), état des objets interactifs qui ne sont pas dans leur état de départ (GDF « case;état;? » : 2 en cours,
     # 3 récolté, 4 repousse), récoltes commencées (GA1;501;récolteur;case,durée en ms), quantité obtenue (IQ), niveaux
@@ -184,6 +193,12 @@ class ClientFeed:
     # « PM-id » départ, « PCK » nouveau groupe, « PV » groupe quitté). Le cadre du groupe range ses miniatures par
     # initiative décroissante (vu chez Fourboun et Eldieso : Enu-six 371, Eldieso 348, ... Elseiso 6).
     group: dict[int, tuple[str, int]] = field(default_factory=dict)
+    # Niveau et vie (vie, vie max) de chaque membre du groupe, par nom, des mêmes messages (01/11).
+    group_levels: dict[str, int] = field(default_factory=dict)
+    group_life: dict[str, tuple[int, int]] = field(default_factory=dict)
+    # Connexion (01/11) : personnage du dernier « ASK » de cette fenêtre, et ses sorts (« SL », parse_spell_list).
+    login_name: str = ""
+    spells: dict[int, tuple[int, int | None]] = field(default_factory=dict)
     # Réponse à « /p %pos% » renvoyée par le serveur (31/10, observé : « cMK$|1715951|Eldieso|[2, -34]| », reçue par
     # tout le groupe, l'expéditeur compris) : seules les réponses de mon personnage sont lues, rien d'autre du chat.
     told_coords: tuple[int, int] | None = None
@@ -221,6 +236,12 @@ class ClientFeed:
                     self.inventory_at = now  # en plus de ce qui suit (ECK, EV, OM, OAKO gardent leur rôle)
                     if text.startswith("ASK|"):
                         self._keep_login_bag(text)
+                        parts = text.split("|")
+                        if len(parts) > 2 and _is_int(parts[1]):
+                            remember_id(parts[2], int(parts[1]))  # « ASK|id|nom|... » : mon personnage
+                            self.login_name = parts[2]
+                            if self.my_id is None and self.name in ("", parts[2]):
+                                self.my_id = int(parts[1])
             except Exception:
                 log.debug("Inventaire : message ignoré (%s)", text[:60], exc_info=True)
             if text.startswith("GDM|"):
@@ -239,6 +260,11 @@ class ClientFeed:
                 self.fight.ended_at = now  # « GCK|1|Nom » suit toujours la fin d'un combat
             elif text == "GDK":
                 self.loaded_at = now
+            elif text.startswith("SL") and text[2:3].isdigit():
+                # Sorts du personnage qui vient de se connecter (suit son « ASK ») : retenus, la fenêtre des sorts et la
+                # barre n'ont plus à être lues pour savoir lesquels, à quel niveau, dans quelle case.
+                self.spells = parse_spell_list(text[2:].rstrip("|"))
+                remember_spells(self.login_name or self.name, self.spells)
             elif text.startswith("As"):
                 fields = text[2:].split("|")
                 for index, name in ((5, "life"), (6, "energy")):
@@ -307,6 +333,11 @@ class ClientFeed:
                     fields = entry.split(";")
                     if len(fields) > 9 and _is_int(fields[0]) and _is_int(fields[9]):
                         self.group[int(fields[0])] = (fields[1], int(fields[9]))
+                        if fields[8].isdigit():
+                            self.group_levels[fields[1]] = int(fields[8])
+                        life = fields[7].split(",")
+                        if len(life) == 2 and all(v.isdigit() for v in life) and int(life[1]) > 0:
+                            self.group_life[fields[1]] = (int(life[0]), int(life[1]))
             elif text.startswith("PM-"):
                 if _is_int(text[3:]):
                     self.group.pop(int(text[3:]), None)
@@ -359,6 +390,9 @@ class ClientFeed:
                 if len(parts) > 2 and _is_int(parts[2]) and int(parts[2]) == self.my_id:
                     if text.startswith("GA;300;"):
                         self.cast_at = now
+                        # « GA;300;lanceur;sort,case,... » (01/11) : le numéro du sort parti, pour vérifier la case.
+                        spell = parts[3].split(",")[0] if len(parts) > 3 else ""
+                        self.cast_spell = int(spell) if spell.isdigit() else None
                     else:
                         self.failed_at = now
             elif text.startswith(("GA;100;", "GA;108;")):
@@ -382,11 +416,19 @@ class ClientFeed:
                     actor.team = owner.team if owner is not None else None
                     self.actors[who] = actor
                     if self.fight is not None and not self.fight.ended_at:
-                        self.fight.fighters.setdefault(who, FighterState()).dead = False
+                        state = self.fight.fighters.setdefault(who, FighterState())
+                        state.dead, state.summoned = False, True
+            elif text.startswith("GA;150;"):
+                parts = text.split(";")
+                target, _, rest = (parts[3] if len(parts) > 3 else "").partition(",")
+                turns = rest.split(",")[0]
+                if _is_int(target) and _is_int(turns) and self.fight is not None:
+                    self.fight.fighters.setdefault(int(target), FighterState()).hidden = int(turns) > 0
             elif text.startswith("GA;103;"):
                 parts = text.split(";")
                 if len(parts) > 3 and _is_int(parts[3]) and self.fight is not None:
                     self.fight.fighters.setdefault(int(parts[3]), FighterState()).dead = True
+                    self.death_at = now
             elif text.startswith("GA;903;"):
                 # Refus de rejoindre un combat (31/10, Walitcoin : « Rejoindre » cliqué deux fois sans effet, 20 s
                 # perdues) : dit à cette fenêtre seule, avant tout GJK.
@@ -501,7 +543,9 @@ class ClientFeed:
             if len(values) >= 6 and all(_is_int(v) for v in values[2:6]):
                 state.hp, state.pa, state.pm = int(values[2]), int(values[3]), int(values[4])
                 state.dead = False
-                self._place(who, int(values[5]))
+                state.hidden = int(values[5]) < 0  # case -1 : invisible (31/10, Prespic) ; sinon sa case
+                if not state.hidden:
+                    self._place(who, int(values[5]))
             if len(values) >= 8 and _is_int(values[7]):
                 state.max_hp = int(values[7])
 
@@ -528,6 +572,7 @@ class ClientFeed:
             self.actors[actor.id] = actor
             if actor.name and actor.name == self.name:
                 self.my_id = actor.id
+                remember_id(self.name, actor.id)
 
     def _party_position(self, text: str, now: float) -> None:
         """« id|nom|[x, y]| » du canal de groupe : coordonnées retenues seulement si c'est mon personnage qui parle."""
@@ -723,8 +768,21 @@ class ClientFeed:
             out = []
             for who, state in self.fight.fighters.items():
                 actor = self.actors.get(who)
-                if actor is not None and not state.dead:
+                if actor is not None and not state.dead and not state.hidden and actor.cell >= 0:
                     out.append((who, map_cell(actor.cell), actor.team, state))
+            return out
+
+    def hidden_fighters(self) -> list[tuple[int, tuple[int, int] | None, int | None]]:
+        """Combattants invisibles du combat en cours : (id, dernière case connue ou None, équipe)."""
+        with self._lock:
+            if self.fight is None or self.fight.ended_at:
+                return []
+            out = []
+            for who, state in self.fight.fighters.items():
+                actor = self.actors.get(who)
+                if state.hidden and not state.dead:
+                    cell = map_cell(actor.cell) if actor is not None and actor.cell >= 0 else None
+                    out.append((who, cell, actor.team if actor is not None else None))
             return out
 
     def life_at(self, cell: tuple[int, int]) -> int | None:
@@ -793,6 +851,86 @@ class ClientFeed:
         """Comme wait_new_map, sans attendre."""
         with self._lock:
             return self.map_id if self.map_at >= after and self.loaded_at >= self.map_at else None
+
+
+IDS_FILE = Path(__file__).resolve().parents[2] / "data" / "personnages_ids.json"  # nom -> numéro (local)
+_ids_cache: dict[str, int] | None = None
+
+
+def known_ids() -> dict[str, int]:
+    """Numéros des personnages déjà entendus (data/personnages_ids.json) : fixes d'une session à l'autre."""
+    global _ids_cache
+    if _ids_cache is None:
+        try:
+            _ids_cache = {str(k): int(v) for k, v in json.loads(IDS_FILE.read_text(encoding="utf-8")).items()}
+        except (OSError, ValueError):
+            _ids_cache = {}
+    return _ids_cache
+
+
+def remember_id(name: str, ident: int) -> None:
+    """Retient le numéro de `name` (écrit seulement s'il est nouveau ou a changé)."""
+    ids = known_ids()
+    if not name or ids.get(name) == ident:
+        return
+    ids[name] = ident
+    try:
+        IDS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        IDS_FILE.write_text(json.dumps(ids, ensure_ascii=False, indent=1), encoding="utf-8")
+    except OSError:
+        log.debug("Numéros des personnages pas écrits", exc_info=True)
+
+
+SPELLS_FILE = Path(__file__).resolve().parents[2] / "data" / "personnages_sorts.json"  # nom -> sorts (local)
+NOT_IN_BAR = 0x7E  # position d'un sort appris absent de la barre (« 173~1~7e », 01/11)
+_spells_cache: dict[str, dict[int, tuple[int, int | None]]] | None = None
+
+
+def parse_spell_list(body: str) -> dict[int, tuple[int, int | None]]:
+    """« SL<id>~<niveau>~<case>;... » (envoyé à la connexion, 01/11) -> {id: (niveau, case de la barre ou None)}.
+
+    Le numéro est celui des sorts chez Solomonk (161 Flèche Magique, 183 Ronce) ; la case s'écrit en hexadécimal, comme
+    la numérotation de la barre du bot (Eldieso : Flèche Empoisonnée « c », case 12 ; Flèche d'Immobilisation « d »,
+    case 13 ; Walitcoin : Remblai 7, Force de l'Age « a », 10)."""
+    spells = {}
+    for entry in body.split(";"):
+        parts = entry.split("~")
+        if len(parts) < 3 or not parts[0].isdigit() or not parts[1].isdigit():
+            continue
+        try:
+            slot = int(parts[2], 16)
+        except ValueError:
+            continue
+        spells[int(parts[0])] = (int(parts[1]), slot if 0 < slot < NOT_IN_BAR else None)
+    return spells
+
+
+def known_spells(name: str) -> dict[int, tuple[int, int | None]]:
+    """Sorts de `name` annoncés à sa dernière connexion entendue (data/personnages_sorts.json) ; {} si jamais."""
+    global _spells_cache
+    if _spells_cache is None:
+        try:
+            raw = json.loads(SPELLS_FILE.read_text(encoding="utf-8"))
+            _spells_cache = {str(who): {int(k): (int(v[0]), v[1] if v[1] is None else int(v[1]))
+                                        for k, v in (spells or {}).get("sorts", {}).items()}
+                             for who, spells in raw.items()}
+        except (OSError, ValueError, TypeError, IndexError, AttributeError):
+            _spells_cache = {}
+    return _spells_cache.get(name, {})
+
+
+def remember_spells(name: str, spells: dict[int, tuple[int, int | None]]) -> None:
+    """Retient les sorts annoncés à la connexion de `name` (écrit seulement s'ils ont changé)."""
+    if not name or not spells or known_spells(name) == spells:
+        return
+    _spells_cache[name] = dict(spells)
+    record = {who: {"sorts": {str(k): list(v) for k, v in sorted(told.items())}}
+              for who, told in sorted(_spells_cache.items())}
+    try:
+        SPELLS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        SPELLS_FILE.write_text(json.dumps(record, ensure_ascii=False, indent=1), encoding="utf-8")
+    except OSError:
+        log.debug("Sorts des personnages pas écrits", exc_info=True)
 
 
 FIGHT_TAIL = 3.0  # s après « GE » : un message de tour encore reçu n'est pas un nouveau combat
@@ -941,16 +1079,44 @@ def _interfaces(pcap) -> list[tuple[bytes, list[str]]]:
     return found
 
 
-def payloads(raw: bytes, link: int) -> tuple[int, bytes] | None:
-    """(port de destination, données TCP) d'une trame IPv4 ; None si ce n'en est pas une."""
+def segment(raw: bytes, link: int) -> tuple[int, int, bytes] | None:
+    """(port de destination, numéro de séquence, données TCP) d'une trame IPv4 ; None si ce n'en est pas une."""
     off = 14 if link == 1 else 4 if link == 0 else 0  # Ethernet ; boucle locale (NULL) ; IP brute
     if len(raw) < off + 20 or raw[off] >> 4 != 4:
         return None
     tcp = off + (raw[off] & 0x0F) * 4
     if len(raw) < tcp + 20:
         return None
-    dport = struct.unpack("!H", raw[tcp + 2:tcp + 4])[0]
-    return dport, raw[tcp + (raw[tcp + 12] >> 4) * 4:]
+    dport, seq = struct.unpack("!HI", raw[tcp + 2:tcp + 8])
+    return dport, seq, raw[tcp + (raw[tcp + 12] >> 4) * 4:]
+
+
+def payloads(raw: bytes, link: int) -> tuple[int, bytes] | None:
+    """(port de destination, données TCP) d'une trame IPv4 ; None si ce n'en est pas une."""
+    found = segment(raw, link)
+    return (found[0], found[2]) if found is not None else None
+
+
+SEQ_MOD = 1 << 32
+NEW_STREAM_BEHIND = 1 << 20  # numéro très en arrière (plus d'1 Mo) : nouvelle connexion sur le même port
+
+
+def fresh_part(expected: int | None, seq: int, data: bytes) -> tuple[bytes, int | None]:
+    """(données pas encore lues, numéro attendu ensuite) d'un segment TCP. 01/11 (journal 113029, Eldieso) : un
+    segment renvoyé par le réseau (retransmission) relu deux fois, « Tir Puissant » annoncé deux fois, 6 PA dépensés
+    au lieu de 3 et le sort suivant, ignoré par le jeu, cru parti. Déjà lu : rien ; à cheval : la fin seulement ; trou
+    (segment perdu ou en avance) ou nouvelle connexion : tout, et la suite repart de lui."""
+    if not data:
+        return b"", expected
+    end = (seq + len(data)) % SEQ_MOD
+    if expected is None:
+        return data, end
+    behind = (expected - seq) % SEQ_MOD  # octets du segment déjà lus (s'il commence avant l'attendu)
+    if behind >= SEQ_MOD // 2 or behind > NEW_STREAM_BEHIND:
+        return data, end  # en avance (trou), ou nouvelle connexion
+    if behind >= len(data):
+        return b"", expected  # déjà lu en entier
+    return data[behind:], end
 
 
 def _usable(ips: list[str]) -> bool:
@@ -983,10 +1149,36 @@ class NetworkListener:
         self._feeds: dict[int, ClientFeed] = {}  # PID de la fenêtre -> son flux
         self._ports: dict[int, tuple[ClientFeed | None, float]] = {}  # port local -> (flux ou None, relu à)
         self._buffers: dict[int, bytes] = {}
+        self._next_seq: dict[int, int] = {}  # port local -> numéro TCP attendu ensuite (fresh_part)
         self._refreshed = 0.0
         self._stop = threading.Event()
         self._threads: list[threading.Thread] = []
         self._lock = threading.Lock()
+        # Journal réseau de la session (31/10, compte rendu : un raté doit pouvoir s'expliquer après coup) : chaque
+        # message du serveur, par personnage, dans le dossier de la session ; jamais le chat (« cM »).
+        self._journal: Path | None = None
+        self._journal_files: dict[str, object] = {}
+        self._journal_lock = threading.Lock()
+
+    def keep_journal(self, folder) -> None:
+        """Écrit désormais les messages du serveur dans `folder`/reseau_<personnage>.txt (heure, texte)."""
+        self._journal = Path(folder)
+
+    def _write_journal(self, feed: "ClientFeed", text: str) -> None:
+        if self._journal is None or text.startswith("cM"):
+            return
+        name = "".join(c if c.isalnum() or c in "-_" else "_" for c in (feed.name or "connexion"))
+        with self._journal_lock:
+            handle = self._journal_files.get(name)
+            if handle is None:
+                try:
+                    handle = self._journal_files[name] = open(self._journal / f"reseau_{name}.txt", "a",
+                                                              encoding="utf-8", buffering=1)
+                except OSError:
+                    log.debug("Journal réseau impossible", exc_info=True)
+                    self._journal = None
+                    return
+            handle.write(f"{time.strftime('%H:%M:%S')}.{int(time.time() * 1000) % 1000:03d} {text}\n")
 
     def follow(self, hwnd: int, name: str) -> ClientFeed:
         """Flux de la fenêtre `hwnd` (personnage `name`). Nom vide : fenêtre suivie dès l'écran de connexion (pour les
@@ -997,6 +1189,10 @@ class NetworkListener:
             if feed is None or feed.name not in ("", name):
                 feed = self._feeds[pid] = ClientFeed(name)
             feed.name = feed.name or name
+            if feed.my_id is None and name:
+                # Numéro du personnage, le même à chaque session (31/10) : connu dès le lancement, même relancé en
+                # plein combat (les messages du combat ne donnent que des numéros).
+                feed.my_id = known_ids().get(name)
             self._ports = {}  # relu au prochain message
             return feed
 
@@ -1086,18 +1282,22 @@ class NetworkListener:
                                 "%.0f s", result, RESCAN_EVERY)
                 return
             try:
-                parsed = payloads(ctypes.string_at(data, header.contents.caplen), link)
-                if parsed is None or not parsed[1]:
+                parsed = segment(ctypes.string_at(data, header.contents.caplen), link)
+                if parsed is None or not parsed[2]:
                     continue
-                port, chunk = parsed
+                port, seq, chunk = parsed
                 feed = self._feed_of(port)
                 if feed is None:
+                    continue
+                chunk, self._next_seq[port] = fresh_part(self._next_seq.get(port), seq, chunk)
+                if not chunk:
                     continue
                 *messages, self._buffers[port] = (self._buffers.get(port, b"") + chunk).split(b"\x00")
                 for message in messages:
                     text = message.decode("utf-8", errors="replace").strip()
                     if text:
                         feed.feed(text)
+                        self._write_journal(feed, text)
             except Exception:  # un message inattendu ne doit jamais arrêter l'écoute
                 log.debug("Message réseau ignoré", exc_info=True)
 

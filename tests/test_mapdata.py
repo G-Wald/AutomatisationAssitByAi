@@ -46,7 +46,7 @@ def test_map_minus_1_minus_16_deciphered_with_the_key_heard_from_the_server():
     assert {75, 168, 206, 207, 321, 366, 438} <= set(by_number)  # Noyer, Frênes, Châtaigniers (tests/test_recolte.py)
     assert by_number[168] == by_number[206] == by_number[321] == by_number[366]  # mêmes arbres, même graphisme
     assert map_cell(168) in found.interactive and found.suns and found.suns <= found.walkable | found.sight_blockers
-    assert found.blocks == found.sight_blockers - found.walkable and not found.blocks & found.holes
+    assert found.blocks == found.sight_blockers and not found.blocks & found.holes  # arbres compris (01/11)
     assert found.walkable | found.blocks | found.holes == found.cells and len(found.cells) == 479
     assert load_map(7334, KEY_7334) is found  # gardée en mémoire
 
@@ -54,6 +54,7 @@ def test_map_minus_1_minus_16_deciphered_with_the_key_heard_from_the_server():
 @pytest.mark.skipif(not KEYS or not references() or not BUILT_MAPS.exists(), reason="clés, références ou client absents")
 def test_blocks_and_holes_agree_with_the_combat_reference():
     # 31/10 : mêmes définitions que tools/reference_combat.py ; mesuré : 60 cartes sur 60, blocs et trous identiques.
+    # 01/11 : les arbres (objets interactifs sans ligne de vue) sont des blocs ; la référence les compte comme du sol.
     entries = references()
     compared = 0
     for map_id, key in KEYS.items():
@@ -61,7 +62,8 @@ def test_blocks_and_holes_agree_with_the_combat_reference():
         if found is None or entry is None:
             continue
         compared += 1
-        assert found.blocks == {tuple(c) for c in entry["blocs"]}, map_id
+        blocks = {tuple(c) for c in entry["blocs"]}
+        assert blocks <= found.blocks and found.blocks - blocks <= set(found.interactive), map_id
         assert found.holes == {tuple(c) for c in entry["trous"]}, map_id
     assert compared
 
@@ -92,7 +94,7 @@ def test_fight_arena_from_the_client_map_with_the_reference_coords_and_placement
     arena = fight_arena(Net(7334, KEY_7334))
     assert arena.ident == "7334" and arena.coords == "?" and arena.placements == ()  # pas de référence (conftest)
     assert arena.blocks == found.blocks and arena.holes == found.holes
-    assert arena.sight_only == found.sight_blockers & found.walkable
+    assert not found.walkable & found.sight_blockers  # arbres : des blocs (01/11)
     walkable = sorted(found.walkable)
     folder = tmp_path / "references"
     folder.mkdir()
@@ -121,3 +123,45 @@ def test_reference_of_a_map_changed_by_a_game_update_is_not_recognized(monkeypat
 def test_cache_does_not_keep_maps_read_from_other_folders(tmp_path):
     assert load_map(7334, "00ff", directories=[tmp_path]) is None
     assert not any(memo[1] == "00ff" for memo in mapdata._cache)
+
+
+def test_a_tree_without_line_of_sight_is_a_block():
+    # 01/11 (journal 071237) : arbres (objet interactif, déplacement 1, pas de ligne de vue) pris pour des cases
+    # praticables ; 5 clics de déplacement sur 5 vers l'un d'eux, ou par l'un d'eux, sans effet.
+    from bot.brain.mapdata import _build
+
+    floor = {"active": True, "ligne_de_vue": True, "deplacement": 4, "objet2": 0, "objet2_interactif": False}
+    tree = dict(floor, ligne_de_vue=False, deplacement=1, objet2=7500, objet2_interactif=True)
+    found = _build(1, "0", 15, [floor, tree])
+    assert found.walkable == {map_cell(0)} and found.blocks == {map_cell(1)} and map_cell(1) in found.interactive
+
+
+@needs_7334
+def test_first_fight_recognized_by_the_reference_takes_the_client_map(monkeypatch, tmp_path):
+    # 01/11 : 1er combat de la session, pas de GDM entendu ; la carte reconnue par la référence (qui compte les arbres
+    # comme du sol) est remplacée par sa carte du client quand sa clé est retenue.
+    from bot.brain.combat import CombatAI, CombatSettings
+    from conftest import load_frame
+    from test_brain import FakeGame
+
+    found = load_map(7334, KEY_7334)
+    walkable = sorted(found.walkable)
+    placements = [[list(c) for c in walkable[:6]], [list(c) for c in walkable[-6:]]]
+    entry = {"carte": "-1,-16", "blocs": [], "trous": [], "placements": placements}
+    folder = tmp_path / "references"
+    folder.mkdir()
+    (folder / "combat_monde_des_douze.json").write_text(json.dumps({"7334": entry}), encoding="utf-8")
+    monkeypatch.setattr("bot.brain.arena.Arenas._loaded", None)
+    ai = CombatAI(FakeGame(load_frame("combat_mon_tour")), CombatSettings())
+    ai._recognize_arena(placed={tuple(c) for c in placements[0] + placements[1]})
+    assert ai.map.arena.from_client and ai.map.arena.blocks == found.blocks
+
+
+def test_relief_of_the_client_map():
+    # 01/11 : niveau du sol et pente de chaque case (carte 0,-23 : sommets, pentes) ; à plat au niveau 7.
+    from bot.brain.mapdata import _build
+
+    flat = {"active": True, "ligne_de_vue": True, "deplacement": 4, "objet2": 0, "objet2_interactif": False,
+            "niveau_sol": 7, "pente": 1}
+    found = _build(1, "0", 15, [flat, dict(flat, niveau_sol=8, pente=9), dict(flat, niveau_sol=9, deplacement=0)])
+    assert found.lift == {map_cell(1): 1.5, map_cell(2): 2.0}

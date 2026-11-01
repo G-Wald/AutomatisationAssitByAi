@@ -40,14 +40,21 @@ class Rester:
         self.game = game
         self.settings = settings
 
+    def _told(self) -> float | None:
+        """Vie annoncée par le serveur (« As », écoute réseau) ; None sans elle : le cœur à l'écran."""
+        net = getattr(self.game, "net", None)
+        return net.life_ratio() if net is not None and net.alive() else None
+
     def needs_rest(self) -> bool:
-        ratio = hp_ratio(self.game.look(park=False))
+        ratio = self._told()
+        ratio = hp_ratio(self.game.look(park=False)) if ratio is None else ratio
         return ratio is not None and ratio < self.settings.below
 
     def rest(self) -> None:
         """S'assoit si la vie est basse, jusqu'à `until` (ou `max_seconds`)."""
         frame = self.game.look()
-        ratio = hp_ratio(frame)
+        ratio = self._told()
+        ratio = hp_ratio(frame) if ratio is None else ratio  # assis, la remontée se suit au cœur (ILS seulement)
         if ratio is None or ratio >= self.settings.below:
             return
         stool = match_template(frame, STOOL, box=frame.layout.box(*STOOL_ZONE))

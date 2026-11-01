@@ -105,12 +105,16 @@ class SpellEntry:
     pa: int | None
     spell_range: tuple[int, int] | None  # portée telle qu'écrite : « 1-5 PO » -> (1, 5), « 4 PO » -> (4, 4) ; voir reach
     learned: bool  # sort appris (les autres sont grisés, avec les PA et la portée de leur niveau 1)
-    icon: np.ndarray  # icône BGR avec ICON_MARGIN px de marge autour, pour la reconnaître et la retrouver dans la barre
+    # Icône BGR avec ICON_MARGIN px de marge autour, pour la reconnaître et la retrouver dans la barre ; None : sort
+    # annoncé par le serveur sans ligne lue dans la fenêtre (appris depuis la dernière lecture, 01/11).
+    icon: np.ndarray | None
     level: int | None = None  # niveau du sort (« Niv. 2 ») ; None : pas appris ou illisible
     low_written: bool = True  # False : un seul nombre écrit (« 4 PO »), la portée minimale 0 n'est pas écrite
 
     @property
-    def icon_core(self) -> np.ndarray:
+    def icon_core(self) -> np.ndarray | None:
+        if self.icon is None:
+            return None
         return self.icon[ICON_MARGIN:-ICON_MARGIN, ICON_MARGIN:-ICON_MARGIN]
 
     @property
@@ -417,6 +421,8 @@ def slot_greyed(frame: Frame, slot: int, entry: SpellEntry) -> bool:
 
     Mesuré sur les journaux du 28/09 : une icône lançable garde 0,96 à 0,99 de la luminosité de son icône dans
     la fenêtre des sorts, une icône grisée 0,49 à 0,50 (le chiffre de relance posé dessus compris)."""
+    if entry.icon is None:
+        return False  # pas d'icône de référence : le serveur dira s'il refuse le sort
     slot_image = frame.crop(frame.layout.box(*spell_slot_box(slot)))
     return icon_brightness(slot_image) < GREYED_RATIO * icon_brightness(entry.icon_core)
 

@@ -80,3 +80,11 @@ def _possessions_kept_aside(monkeypatch, tmp_path):
     """31/10 : le sac de la connexion (ASK) est écrit dès qu'il est entendu ; les tests qui en envoient un écrivaient
     dans data/possessions (Fourboun et Enu-six écrasés). Leurs fichiers vont dans un dossier temporaire."""
     monkeypatch.setattr("bot.brain.possessions.FOLDER", tmp_path / "possessions")
+    # Numéros des personnages (31/10) : jamais écrits dans data/ par un test.
+    monkeypatch.setattr("bot.connection.network.IDS_FILE", tmp_path / "personnages_ids.json")
+    monkeypatch.setattr("bot.connection.network._ids_cache", None)
+    # Sorts annoncés à la connexion (01/11) : de même.
+    monkeypatch.setattr("bot.connection.network.SPELLS_FILE", tmp_path / "personnages_sorts.json")
+    monkeypatch.setattr("bot.connection.network._spells_cache", None)
+    # Animations longues apprises pendant une session (01/11) : chaque test repart de l'attente par défaut.
+    monkeypatch.setattr("bot.brain.combat._slow_animations", {})

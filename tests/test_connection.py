@@ -685,3 +685,28 @@ def test_lookalike_character_name_is_not_chosen():
     assert find_character(frame, view, ["Fourboun"]) is None
     assert find_character(frame, view, ["Gela"]) is None  # 0,98 de ressemblance avec la plaque « Gela-[A13] »
     assert find_character(frame, view, ["Fourboun", "Vegano-[Gal]"]) == (4, "Vegano-[Gal]")
+
+
+def test_window_dropped_during_the_others_login_is_reconnected(titles, monkeypatch):
+    # 01/11 : Pesopepe compté en jeu d'après son titre, déconnecté pendant la connexion des autres : reconnecté avant
+    # que l'équipe soit formée, sans lancer le launcher.
+    def react(game, point, button):
+        if game.screen == "connexion_choix_serveur" and inside(point, (1480, 770, 1640, 815)):
+            game.screen = "connexion_choix_personnage"
+            peso.window.title = "Dofus Retro v1.49.6"  # déconnecté pendant ce temps (inactivité)
+            peso.screen = "connexion_choix_personnage"
+        elif game.screen == "connexion_choix_personnage" and inside(point, (1180, 780, 1300, 825)):
+            game.window.title = f"{game.name} - Dofus Retro v1.49.6"
+            game.screen = "hors_combat"
+
+    gela = ScreenGame("connexion_choix_serveur", react)
+    gela.name = "Gela-[A13]"
+    peso = ScreenGame("hors_combat", react, "Brawli-[Gal] - Dofus Retro v1.49.6")
+    peso.name = "Brawli-[Gal]"
+    games = {g.window.hwnd: g for g in (gela, peso)}
+    launches = []
+    monkeypatch.setattr(manager_module, "client_windows", lambda: [gela.window, peso.window])
+    monkeypatch.setattr(manager_module, "launch_clients", lambda *args: launches.append(1) or [])
+    names = connect_windows(ConnectionSettings(), ["Gela-[A13]", "Brawli-[Gal]"], lambda w: games[w.hwnd], gela)
+    assert sorted(names) == ["Brawli-[Gal]", "Gela-[A13]"] and launches == []
+    assert peso.window.title.startswith("Brawli-[Gal]")

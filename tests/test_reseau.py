@@ -390,3 +390,129 @@ def test_my_position_answer_is_read_from_the_server_and_nothing_else_of_the_chat
     net.feed("cMK$|1715951|Eldieso|salut|", now=12.0)
     assert net.position_told_since(11.0) is None
     assert all(not text.startswith("cMK") for _, text in net.recent)  # le chat n'est jamais gardé
+
+
+def test_the_session_network_journal_keeps_every_server_message_but_never_the_chat(tmp_path):
+    # 31/10, compte rendu : chaque raté doit pouvoir s'expliquer après coup ; le chat des autres joueurs jamais gardé.
+    from bot.connection.network import ClientFeed, NetworkListener
+
+    listener = NetworkListener(None, {})
+    feed = ClientFeed("Waldarch-[Gal]")
+    listener._write_journal(feed, "GA;150;-1;-1,1")  # rien tant que le journal n'est pas demandé
+    listener.keep_journal(tmp_path)
+    for text in ("GTS-1|29000", "cMK:|123|Autre|salut|", "cMK$|1|Waldarch-[Gal]|[2, -34]|", "GE1|0|1"):
+        listener._write_journal(feed, text)
+    lines = (tmp_path / "reseau_Waldarch-_Gal_.txt").read_text(encoding="utf-8").splitlines()
+    assert [line.split(" ", 1)[1] for line in lines] == ["GTS-1|29000", "GE1|0|1"]
+
+
+def test_character_ids_are_kept_from_one_session_to_the_next():
+    # 31/10 : le numéro d'un personnage ne change pas ; connu dès le lancement, même relancé en plein combat.
+    from bot.connection import network
+
+    net = network.ClientFeed("Eldieso")
+    net.feed("ASK|1715951|Eldieso|38|9|0|10|0|0|0||0")
+    assert net.my_id == 1715951 and network.known_ids() == {"Eldieso": 1715951}
+    network._ids_cache = None  # nouvelle session : relu du fichier
+    listener = network.NetworkListener(None, {})
+    network.window_pid, saved = (lambda hwnd: 42), network.window_pid
+    try:
+        assert listener.follow(1, "Eldieso").my_id == 1715951
+    finally:
+        network.window_pid = saved
+
+
+def test_group_levels_and_life_from_the_server():
+    # 01/11 : « PM~id;nom;gfx;c1;c2;c3;accessoires;vie,max;niveau;initiative;... » : niveau et vie de chaque membre.
+    net = ClientFeed("Fourboun")
+    net.feed("PM~1610317;Fourboun;100;0;0;0;1b0c,1fe2,1b0f,,;352,352;44;100;100;0")
+    net.feed("PM+1610318;Fourbodeux;100;6623967;8521707;7802321;1b0c,1fe2,96e,6af,;300,335;36;259;100;0")
+    assert net.group_levels == {"Fourboun": 44, "Fourbodeux": 36}
+    assert net.group_life == {"Fourboun": (352, 352), "Fourbodeux": (300, 335)}
+
+
+def test_cast_spell_number_from_the_server():
+    net = ClientFeed("Eldieso")
+    net.my_id = 1715951
+    net.feed("GA;300;1715951;168,297,1014,5,51,1,1")
+    assert net.cast_spell == 168 and net.cast_at > 0
+
+
+def test_team_levels_come_from_the_group_messages(tmp_path):
+    # 01/11 : niveaux de l'équipe d'après PM (principal compris), retenus ; pas de liste des amis à lire.
+    from types import SimpleNamespace
+
+    from bot.team.loop import TeamBot
+    from bot.team.member import load_level
+
+    settings = {"session": {"memory": str(tmp_path)}}
+    net = ClientFeed("Fourboun")
+    net.heard_at = time.monotonic()
+    net.feed("PM~1610317;Fourboun;100;0;0;0;;352,352;44;100;100;0")
+    net.feed("PM~1610318;Fourbodeux;100;0;0;0;;335,335;36;259;100;0")
+    members = [SimpleNamespace(name=name, game=SimpleNamespace(net=net)) for name in ("Fourboun", "Fourbodeux")]
+    engager = SimpleNamespace(team_levels=[None, 30], level_limit=lambda: 0)
+    bot = SimpleNamespace(engager=engager, members=members, leader=members[0], _settings=settings)
+    TeamBot.learn_levels(bot, friends=False)
+    assert [load_level(settings, m.name) for m in members] == [44, 36] and engager.team_levels == [44, 36]
+
+
+def test_followers_on_the_leader_map_by_the_server():
+    from types import SimpleNamespace
+
+    from bot.team.loop import TeamBot
+
+    def member(map_id):
+        net = ClientFeed("x")
+        net.heard_at, net.map_id = time.monotonic(), map_id
+        return SimpleNamespace(game=SimpleNamespace(net=net))
+
+    leader = member(1906)
+    bot = SimpleNamespace(leader=leader)
+    assert TeamBot._net_same_map(bot, member(1906)) is True
+    assert TeamBot._net_same_map(bot, member(1911)) is False
+    assert TeamBot._net_same_map(bot, SimpleNamespace(game=SimpleNamespace(net=None))) is None
+    # 01/11 (journal 113029) : le principal arrivé sur la carte suivante pendant le tour des suiveurs ; comparés à sa
+    # carte de départ, ceux restés sur elle le suivent.
+    leader.game.net.map_id = 1911
+    assert TeamBot._net_same_map(bot, member(1906), leader_map=1906) is True
+
+
+def test_reconnected_follower_compared_with_where_the_leader_knows_he_is():
+    # 01/11 : Pesopepe reconnecté en 1,-28 (carte annoncée à sa connexion), le principal sans carte annoncée depuis le
+    # début de l'écoute mais qui se sait en 1,-28 : même carte, sans juger au décor.
+    from types import SimpleNamespace
+
+    from bot.team.loop import TeamBot
+
+    peso_net, leader_net = ClientFeed("Pesopepe"), ClientFeed("Fourboun")
+    peso_net.heard_at = leader_net.heard_at = time.monotonic()
+    peso_net.map_id = 7354
+    passages = SimpleNamespace(coords_of=lambda map_id: {7354: (1, -28)}.get(map_id))
+    traveler = SimpleNamespace(coords=(1, -28), doubt=False, passages=passages)
+    peso = SimpleNamespace(game=SimpleNamespace(net=peso_net))
+    bot = SimpleNamespace(leader=SimpleNamespace(game=SimpleNamespace(net=leader_net)),
+                          roamer=SimpleNamespace(traveler=traveler))
+    bot._told_at = lambda member: TeamBot._told_at(bot, member)
+    assert TeamBot._net_same_map(bot, peso) is True
+    traveler.coords = (2, -27)
+    assert TeamBot._net_same_map(bot, peso) is False
+    traveler.doubt = True  # le principal ne sait pas où il est : le décor
+    assert TeamBot._net_same_map(bot, peso) is None
+
+
+def test_a_retransmitted_tcp_segment_is_read_once():
+    # 01/11 (journal 113029, Eldieso) : segment renvoyé par le réseau relu, « Tir Puissant » annoncé deux fois.
+    from bot.connection.network import fresh_part, segment
+
+    ip = bytes([0x45, 0, 0, 0, 0, 0, 0, 0, 64, 6, 0, 0, 34, 253, 140, 241, 192, 168, 1, 71])
+    tcp = (443).to_bytes(2, "big") + (49701).to_bytes(2, "big") + (1000).to_bytes(4, "big") + bytes(4) \
+        + bytes([0x50, 0x18]) + bytes(6)
+    assert segment(bytes(14) + ip + tcp + b"GDK\x00", 1) == (49701, 1000, b"GDK\x00")
+    data, nxt = fresh_part(None, 1000, b"GA;300\x00")
+    assert data == b"GA;300\x00" and nxt == 1007
+    assert fresh_part(nxt, 1000, b"GA;300\x00") == (b"", 1007)  # renvoyé : rien de neuf
+    assert fresh_part(nxt, 1004, b"00\x00BN\x00") == (b"BN\x00", 1010)  # à cheval : la fin seulement
+    assert fresh_part(1010, 1020, b"GTF\x00") == (b"GTF\x00", 1024)  # trou (segment perdu) : lu quand même
+    assert fresh_part(1024, 3_000_000_000, b"GDK\x00") == (b"GDK\x00", 3_000_000_004)  # nouvelle connexion
+    assert fresh_part((1 << 32) - 2, (1 << 32) - 2, b"ABCD") == (b"ABCD", 2)  # numéro qui reboucle

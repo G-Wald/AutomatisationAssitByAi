@@ -207,7 +207,7 @@ def take_from_chest(member, template: int, count: int, rank_of=None) -> int:
                      if exchange.storage.get(u) != value]
             log.warning("%s : la pile de clés n'a pas quitté le coffre d'après le serveur%s : Échap", member.name,
                         f" (une autre pile a bougé : {other}, place de la pile à calibrer)" if other else "")
-            escape_menu(game)
+            close_unexpected(game, f"Clés, {member.name}")  # menu d'abord sans Échap, puis le coffre (01/11)
             return 0
         _wait_until(lambda: (net.held(template) or 0) > held, CHEST_WAIT)
         left = dict(chest_stacks(net, template)).get(uid, 0)
@@ -479,7 +479,9 @@ class BankVisit:
             if entry is not None:
                 break
         if entry is None:
-            escape_menu(game)
+            # Le menu du bouton est peut-être ouvert sans être reconnu : Échap devant lui ouvrirait le Menu principal
+            # (31/10, Waldarch) ; fermeture sûre d'abord (01/11).
+            close_unexpected(game, f"Banque, {member.name}")
             return self._fail(member, "« Transférer tous les objets » pas reconnu")
         pods_before = net.pods[0] if net is not None and net.pods else None
         bag_before = bag_quantities(net) if net is not None else {}

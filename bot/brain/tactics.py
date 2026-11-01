@@ -66,6 +66,11 @@ class CombatSpell:
     boost_zone: tuple[str, int] = ("point", 0)
 
     @property
+    def summons_only(self) -> bool:
+        """Ne frappe que des invocations (Désinvocation : rôle « invocations », config/sorts.yaml)."""
+        return self.role == "invocations"
+
+    @property
     def damage_boost(self) -> bool:
         """Sort de bonus de dégâts (sans dégâts lui-même)."""
         return self.damage <= 0 and bool(self.boost_flat or self.boost_pct)
@@ -153,12 +158,16 @@ class SpellUse:
         """Dégâts en plus de `spell` grâce aux bonus de dégâts en cours."""
         return spell.boosted(*self.damage_bonus) - spell.damage
 
-    def record(self, spell: CombatSpell, target: Cell) -> None:
+    def record(self, spell: CombatSpell, target: Cell, failed: bool = False) -> None:
+        """Sort parti. `failed` : échec critique (PA perdus sans effet) : ni bonus de portée ni bonus de dégâts (01/11,
+        journal 122800 : Tir Éloigné en échec critique, +4 de portée comptés, 3 sorts refusés hors de portée)."""
         self.pa -= spell.pa
         self.last_cast_turn[spell.spell_id] = self.turn
         self.casts_this_turn[spell.spell_id] += 1
         self.casts_on_target[(spell.spell_id, target)] += 1
         self.fight_casts[spell.name] += 1
+        if failed:
+            return
         if spell.range_bonus:
             self.bonuses.append((spell.range_bonus, self.turn + max(spell.bonus_turns, 1) - 1))
         if spell.damage_boost:

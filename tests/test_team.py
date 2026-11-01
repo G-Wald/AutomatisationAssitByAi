@@ -138,6 +138,12 @@ class FakeAI:
         self.turns: list[dict] = []
         self.on_turn = None
         self._me_cell = None
+        self.unknown_tint = False  # sol tactique pas reconnu (CombatAI.blind_fight)
+        self.told_fight = False  # combattants d'après le serveur
+
+    @property
+    def blind_fight(self):
+        return self.unknown_tint and not self.told_fight
 
     def new_combat(self):
         pass
@@ -1990,3 +1996,19 @@ def test_server_silence_after_the_click_is_not_a_join():
     assert time.monotonic() - started < 1 and events(screen, "look") == []
     follower.game.net = None
     assert joiner.wait_placement(follower, time.monotonic() + 0.2)
+
+
+def test_a_result_window_left_open_is_closed_before_the_follower_clicks_the_sun():
+    # 01/11 (journaux 113029, 122800) : « résultat du combat » ouvert après le passage de fermeture ; le clic sur le
+    # soleil tombait dessus, le suiveur restait sur place et rejoignait le principal à pied.
+    from types import SimpleNamespace
+
+    screen = Screen()
+    foret = load_frame("hors_combat_foret")
+    a, b = member("A", screen, foret), member("B", screen, foret)
+    handled = []
+    b.popups = SimpleNamespace(describe=lambda frame: "résultat du combat",
+                               handle=lambda frame, since: handled.append(since) or True)
+    bot = team_bot(a, b, engage=False)
+    bot._dispatch("droite", (27, 9), foret, 0)
+    assert len(handled) == 1 and len(events(screen, "click")) == 1 and not bot._lost

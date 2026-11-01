@@ -25,6 +25,7 @@ from bot.perception.grid import Cell
 log = logging.getLogger(__name__)
 
 MAP_DIRS = (CLIENT_MAPS, BUILT_MAPS)  # jeu installé d'abord (version du moment), puis la copie des références
+BASE_LEVEL = 7  # niveau du sol des cartes plates (toutes les cases de 1,-28 et 0,-28)
 SUN_GFX = (1029, 1030)  # objet2 des soleils (tools/cles_cartes.GFX_SOLEILS : vérifié sur 97 % des sorties)
 VERSION = re.compile(r"^(\d+)_(\d+)X?\.swf$")
 
@@ -40,6 +41,9 @@ class MapData:
     suns: frozenset[Cell]  # soleils (sorties de la carte)
     interactive: dict[Cell, int] = field(default_factory=dict)  # objets interactifs : case -> gfx (ressources...)
     numbers: dict[Cell, int] = field(default_factory=dict, repr=False)  # case de la grille -> numéro de case du client
+    # Relief (01/11, carte 0,-23) : hauteur dessinée de chaque case active hors du sol de base (niveau 7), en niveaux ;
+    # une pente compte un demi-niveau de plus (hauteur moyenne de ses coins). Absente : à plat.
+    lift: dict[Cell, float] = field(default_factory=dict, repr=False)
 
     @property
     def cells(self) -> frozenset[Cell]:
@@ -125,14 +129,20 @@ def _decipher(map_id: int, key: str, date: str | None, directories) -> MapData |
 
 
 def _build(map_id: int, date: str, width: int, cases: list[dict]) -> MapData:
-    walkable, blockers, inactive, suns, interactive, numbers = set(), set(), set(), set(), {}, {}
+    walkable, blockers, inactive, suns, interactive, numbers, lift = set(), set(), set(), set(), {}, {}, {}
     for number, case in enumerate(cases):
         cell = map_cell(number, width)
         numbers[cell] = number
         if not case["active"]:
             inactive.add(cell)
             continue
-        if case["deplacement"] > 0:
+        level, slope = case.get("niveau_sol", BASE_LEVEL), case.get("pente", 1)
+        if (height := level - BASE_LEVEL + (0.5 if slope != 1 else 0.0)) != 0:
+            lift[cell] = height
+        # Sans ligne de vue : jamais praticable. 01/11 (journal 071237) : les seules cases « déplacement > 0 » sans ligne
+        # de vue (169 sur 105 cartes) sont des arbres (objet interactif, déplacement 1), dessinés en blocs en mode
+        # tactique ; 5 clics de déplacement sur 5 vers l'un d'eux, ou par l'un d'eux, sans effet.
+        if case["deplacement"] > 0 and case["ligne_de_vue"]:
             walkable.add(cell)
         if not case["ligne_de_vue"]:
             blockers.add(cell)
@@ -141,7 +151,7 @@ def _build(map_id: int, date: str, width: int, cases: list[dict]) -> MapData:
         if case["objet2_interactif"] and case["objet2"]:
             interactive[cell] = case["objet2"]
     return MapData(map_id, date, width, frozenset(walkable), frozenset(blockers), frozenset(inactive),
-                   frozenset(suns), interactive, numbers)
+                   frozenset(suns), interactive, numbers, lift)
 
 
 def known_key(map_id: int | None, net=None) -> str | None:

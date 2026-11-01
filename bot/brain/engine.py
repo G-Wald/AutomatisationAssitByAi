@@ -408,9 +408,10 @@ class _Planner:
     def __init__(self, me: Cell, pm: int, enemies: list[Cell], allies: list[Cell], spells: list[CombatSpell],
                  use: SpellUse, board: Board, weights: Weights, avoid: set[Cell], missed: set[Cell],
                  can_move: bool, move_first: bool = True, life: dict[Cell, int] | None = None,
-                 names: dict[Cell, str] | None = None) -> None:
+                 names: dict[Cell, str] | None = None, summons: frozenset[Cell] = frozenset()) -> None:
         self.me, self.pm = me, max(pm, 0)
         self.enemies = tuple(enemies)
+        self.summon_ids = frozenset(i for i, e in enumerate(self.enemies) if e in summons)  # invocations ennemies
         self.allies = frozenset(allies)
         self._idle = False  # recherche d'un tour sans coup possible : un bonus seul est permis (_casts_from)
         self.ally_cells = tuple(sorted(self.allies))
@@ -579,6 +580,8 @@ class _Planner:
                 if not hits:
                     continue
                 target_enemy = next((i for i, p in enumerate(positions) if p == target), None)
+                if spell.summons_only and target_enemy not in self.summon_ids:
+                    continue  # Désinvocation : une invocation seulement
                 moved, blocked = self._push(spell, origin, target, positions, hits)
                 outcome = (hits, target_enemy, moved)
                 if outcome in seen:
@@ -1104,7 +1107,8 @@ def _better(a: tuple, b: tuple) -> bool:
 def plan_turn(me: Cell, pm: int, enemies: list[Cell], allies: list[Cell], spells: list[CombatSpell], use: SpellUse,
               board: Board, weights: Weights = Weights(), avoid: set[Cell] = frozenset(),
               missed: set[Cell] = frozenset(), can_move: bool = True, move_first: bool = True,
-              life: dict[Cell, int] | None = None, names: dict[Cell, str] | None = None) -> TurnPlan:
+              life: dict[Cell, int] | None = None, names: dict[Cell, str] | None = None,
+              summons: frozenset[Cell] = frozenset()) -> TurnPlan:
     """Meilleur plan du tour depuis l'état actuel (voir le début du module).
 
     `pm` : PM restants ; `use` : PA restants et compteurs du tour (lancers, cibles refusées, portées mesurées,
@@ -1112,9 +1116,10 @@ def plan_turn(me: Cell, pm: int, enemies: list[Cell], allies: list[Cell], spells
     (déjà occupées ce tour ; le repli peut y revenir) ; `missed` : destinations pas atteintes ce tour, plus
     essayées ; `can_move` : faux quand le tour a déjà compté assez de déplacements (ni approche, ni repli) ;
     `move_first` : faux pour lancer d'ici sans aller ailleurs d'abord (le repli reste possible) ; `life` : vie connue
-    des ennemis, par case (lue au survol) ; `names` : noms des alliés, par case (journal)."""
+    des ennemis, par case (lue au survol) ; `names` : noms des alliés, par case (journal) ; `summons` : cases des
+    invocations ennemies, seules cibles des sorts qui ne frappent qu'elles (CombatSpell.summons_only)."""
     return _Planner(me, pm, enemies, allies, spells, use, board, weights, set(avoid), set(missed), can_move,
-                    move_first, life, names).plan()
+                    move_first, life, names, frozenset(summons)).plan()
 
 
 def cast_blocker(spell: CombatSpell, me: Cell, target: Cell, enemies: list[Cell], allies: list[Cell], use: SpellUse,

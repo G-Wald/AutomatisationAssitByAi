@@ -293,3 +293,20 @@ def test_dossiers_rapport_complet_et_json(tmp_path, capsys):
     donnees = json.loads(sortie.read_text(encoding="utf-8"))
     assert donnees["sessions"][0]["compteurs"]["passages_ok"] == 2
     assert donnees["outils"][0]["issue"] == "réussi"
+
+
+def test_a_reclicked_move_is_no_failure():
+    # 01/11 (l'utilisateur) : un clic de déplacement recliqué ne fausse pas les analyses ; seul le déplacement resté
+    # sans effet après le reclic compte comme raté.
+    from tools.bilan_sessions import MOTIFS
+
+    motifs = {m.cle: m for m in MOTIFS}
+
+    def found(line: str) -> list[str]:
+        return [k for k in ("pas_bouge", "reclic_deplacement") if motifs[k].regex.search(line)]
+
+    assert found("Clic de déplacement pas pris (rien du serveur en 0.6 s) : je reclique sur (1, 2)") == \
+        ["reclic_deplacement"]
+    assert found("Mon personnage n'a pas bougé : je reclique sur (1, 2)") == ["reclic_deplacement"]  # anciens journaux
+    assert found("Mon personnage n'a pas bougé (capture : x.png)") == ["pas_bouge"]
+    assert not motifs["reclic_deplacement"].probleme and motifs["pas_bouge"].probleme

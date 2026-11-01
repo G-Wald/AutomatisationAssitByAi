@@ -321,7 +321,7 @@ def test_keys_are_taken_back_from_the_chest(no_list):
 
 
 def test_nothing_is_taken_when_the_server_says_nothing(no_list, monkeypatch):
-    monkeypatch.setattr(bank, "escape_menu", lambda game: None)
+    monkeypatch.setattr(bank, "close_unexpected", lambda game, why: True)  # menu puis coffre fermés (01/11)
     monkeypatch.setattr(bank, "CHEST_WAIT", 0.2)
     net = ClientFeed("Fourboun")
     net.feed("ASK|1|Fourboun|10|0|0|0|")

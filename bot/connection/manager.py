@@ -28,6 +28,7 @@ from bot.team.member import Focus, MemberGame, TaggedRecorder
 
 log = logging.getLogger(__name__)
 
+RECHECKS = 2  # fenêtres revenues à l'écran de connexion pendant celle des autres : reconnectées, 2 fois au plus
 CASCADE_POLL = 0.1  # en cascade : aucune fenêtre n'a rien à faire, regard suivant dans 0,1 s au plus
 
 
@@ -47,6 +48,16 @@ def connect_windows(settings: ConnectionSettings, wanted: list[str], make_game: 
     jeu."""
     windows = client_windows()
     names = _connect(windows, settings, wanted, make_game, control, screens) if windows else []
+    for _ in range(RECHECKS):
+        # 01/11 : Pesopepe compté en jeu d'après le titre de sa fenêtre, déconnecté (inactivité) pendant la connexion
+        # des 7 autres ; revenu à l'écran de connexion, il n'était plus dans l'équipe et rien ne le reconnectait.
+        names = [name for window in windows if (name := logged_in(window))]
+        dropped = [window for window in windows if is_open(window) and not logged_in(window)]
+        if not dropped or not missing_characters(wanted, names):
+            break
+        log.warning("%d fenêtre(s) revenue(s) à l'écran de connexion pendant la connexion des autres : je la(les) "
+                    "reconnecte", len(dropped))
+        names += _connect(dropped, settings, wanted, make_game, control, screens)
     if names and not missing_characters(wanted, names):
         return names
     log.info("%s : je lance les comptes disponibles avec le launcher",

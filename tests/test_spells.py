@@ -169,3 +169,32 @@ def test_best_assignment_gives_each_row_a_different_column():
     assert best_assignment([[5, 4, 0], [5, 0, 0]]) == [1, 0]  # la 2e ligne n'a que la 1re colonne
     assert best_assignment([[1, 2], [3, 1]]) == [1, 0]
     assert best_assignment([]) == []
+
+
+def test_spells_told_at_login_set_levels_slots_and_new_spells(monkeypatch):
+    # 01/11 : « SL<id>~<niveau>~<case hexadécimale> » à la connexion ; les numéros sont ceux de Solomonk. Le serveur fait
+    # foi pour le niveau, la case de la barre, et un sort appris depuis la dernière lecture de la fenêtre (Cupidité).
+    from bot.connection import network
+
+    spells = book()
+    pieces = next(s for s in spells.spells.values() if s.key == "lancer_de_pieces")
+    told = "SL51~1~1;43~4~2;49~5~3;41~1~4;42~1~5;47~1~6;48~1~7;45~1~8;425~1~9;53~1~a;52~1~c;46~1~7e;|"
+    feed = network.ClientFeed("")
+    feed.feed("ASK|1568583|Walitcoin|31|3|0|30|0|0|ffffff||0")
+    feed.feed(told)
+    assert feed.spells[51] == (1, 1) and feed.spells[52] == (1, 12) and feed.spells[46] == (1, None)
+    assert spells._take_told_spells()
+    by_key = {s.key: s for s in spells.spells.values()}
+    assert by_key["lancer_de_pieces"].level == 1 and by_key["lancer_de_pieces"].entry is pieces.entry
+    assert by_key["cupidite"].level == 1 and by_key["cupidite"].entry.icon is None
+    slot_of = {spells.spells[entry.row].key: slot for slot, entry in spells.slots.items()}
+    assert slot_of["lancer_de_pieces"] == 1 and slot_of["force_de_l_age"] == 10 and slot_of["cupidite"] == 12
+    assert "desinvocation" not in slot_of  # appris, pas dans la barre (« 7e »)
+    assert not spells._take_told_spells()  # rien de changé la seconde fois
+
+
+def test_spell_without_icon_is_never_seen_greyed():
+    from bot.perception.spellbook import slot_greyed
+
+    entry = SpellEntry(row=1052, pa=None, spell_range=None, learned=True, icon=None, level=1)
+    assert entry.icon_core is None and not slot_greyed(load_frame("hors_combat"), 3, entry)

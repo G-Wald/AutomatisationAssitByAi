@@ -20,7 +20,7 @@ import json
 import logging
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
@@ -50,9 +50,8 @@ class Arena:
     blocks: frozenset[Cell]  # ni marche ni ligne de vue
     holes: frozenset[Cell]  # pas de marche, ligne de vue (fosse, vide autour de la carte)
     placements: tuple[frozenset[Cell], ...] = ()  # cases de placement des deux camps (couleur selon le combat)
-    # 31/10 : cases praticables sans ligne de vue (carte du client seulement : 21 sur 60 cartes déchiffrées) ; les
-    # références les comptent comme du sol.
-    sight_only: frozenset[Cell] = frozenset()
+    from_client: bool = False  # d'après la carte du client (mapData de la version du jeu) : la ligne de vue en vient
+    lift: dict[Cell, float] = field(default_factory=dict, compare=False)  # relief, en niveaux (MapData.lift)
 
     @property
     def unwalkable(self) -> frozenset[Cell]:
@@ -236,7 +235,7 @@ def client_arena(map_id: int | None, key: str | None = None, net=None, date: str
                  map_id)
         placements = ()
     return Arena(str(map_id), reference.coords if reference is not None else "?", found.blocks, found.holes,
-                 placements, found.sight_blockers & found.walkable)
+                 placements, from_client=True, lift=dict(found.lift))
 
 
 def fight_arena(net) -> Arena | None:

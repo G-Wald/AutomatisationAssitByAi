@@ -358,8 +358,7 @@ class Engager:
         self._z_until = float("-inf")  # jusqu'à quand les infobulles de Z peuvent rester affichées (game.now)
         self._unreachable: list[tuple[Point, float]] = []  # (clic, quand) : groupe touché, combat jamais lancé
         self._probed: list[tuple[GroupTooltip, list[tuple[float, float]]]] = []  # points cliqués par groupe (_probe)
-        # Écoute du serveur (_engage_by_net) : carte dont la nuit a été vérifiée, clics sans combat par (carte, groupe).
-        self._night_map: int | None = None
+        # Écoute du serveur (_engage_by_net) : clics sans combat par (carte, groupe).
         self._net_misses: dict[tuple[int | None, int], int] = {}
         self._net_missed_at: dict[tuple[int | None, int], float] = {}  # dernier raté (time.monotonic())
         self.miss_forget = NET_MISS_FORGET  # s : ratés d'un groupe oubliés (team/dungeon.py : DUNGEON_MISS_FORGET)
@@ -589,18 +588,12 @@ class Engager:
         case et le niveau de chacun de leurs monstres (GM|+), suivis quand ils bougent (GA;1) ; clic sur la case du
         groupe choisi, combat confirmé par « GJK ». Mêmes règles qu'à l'écran : nombre de monstres, niveau maximal,
         pas tout en haut de la carte, case joignable à pied, groupe raté plusieurs fois laissé."""
+        # La nuit n'empêche plus de lancer un combat (01/11, utilisateur) : combattants, carte du combat et sorts d'après
+        # le serveur, la teinte ne change rien au jeu (avant l'aube, sol tactique pas reconnu par les 8 : 1,8 sort par
+        # tour, aucun refus). Plus de lecture des infobulles par carte (touche Z) pour la voir ; un combat joué sans
+        # voir arrête quand même la session (team/loop.py, CombatAI.blind_fight).
+        self.night = False
         map_id = net.snapshot()[0]
-        if self._night_map != map_id:
-            # Une lecture des infobulles par carte : la nuit ne se voit hors combat qu'à leur teinte (règle des combats
-            # de nuit, engage.combats_de_nuit).
-            self._night_map = map_id
-            frame = self._show_groups()
-            if read_scene(frame).phase is not Phase.OUT_OF_COMBAT:
-                return False
-            self.night = any(t.night for t in find_group_tooltips(frame))
-            if self.night and not self.settings.fight_at_night:
-                log.warning("Il fait nuit dans le jeu (infobulles teintées) : je ne lance pas de combat")
-                return False
         frame = self.game.look()
         if read_scene(frame).phase is not Phase.OUT_OF_COMBAT:
             return False

@@ -243,11 +243,12 @@ def test_session_stops_after_a_fight_where_the_night_tint_was_not_recognised():
     # passagère sur la carte) : pas d'arrêt.
     from test_team import Screen, member, team_bot
 
-    for blind, stops in ((3, True), (1, False)):
+    # 01/11 : combattants d'après le serveur, la teinte n'empêche pas de jouer : pas d'arrêt.
+    for blind, stops, told in ((3, True, False), (1, False, False), (4, False, True)):
         screen = Screen()
         members = [member(name, screen, load_frame("hors_combat")) for name in "ABCD"]
         for m in members[:blind]:
-            m.ai.unknown_tint = True
+            m.ai.unknown_tint, m.ai.told_fight = True, told
         bot = team_bot(*members)
         bot._fight_over()
         assert bool(bot._stop_reason) == stops
@@ -266,3 +267,20 @@ def test_no_fight_launched_at_night():
     day = Engager(FakeGame(load_frame("groupes_z_chevauchement")), EngageSettings())
     day.engage()
     assert not day.night
+
+
+def test_night_does_not_stop_fights_driven_by_the_server():
+    # 01/11, utilisateur : avec l'écoute du serveur, la nuit n'empêche plus de lancer un combat ; plus de touche Z par
+    # carte pour lire la teinte des infobulles.
+    import time
+
+    from bot.brain.engage import Engager, EngageSettings
+    from bot.connection.network import ClientFeed
+    from test_brain import FakeGame, presses
+
+    game = FakeGame(load_frame("nuit_groupes_z_trois_groupes"))
+    net = ClientFeed("Fourboun")
+    net.heard_at, net.map_id, net.map_at = time.monotonic(), 7354, 1.0
+    engager = Engager(game, EngageSettings())
+    assert not engager._engage_by_net(net)  # aucun groupe annoncé
+    assert not engager.night and presses(game) == [] and engager.none_found

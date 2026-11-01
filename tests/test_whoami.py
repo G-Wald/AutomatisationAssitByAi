@@ -122,7 +122,7 @@ def walk_setup(monkeypatch, before, after):
     cells = lambda cs: [Fighter(RED, *frame.grid.center(c), c) for c in cs]
     monkeypatch.setattr("bot.brain.combat.find_fighters", lambda f: cells(before if f is frame else after))
     ai = CombatAI(FakeGame(later), CombatSettings(), name="Walitcoin")
-    monkeypatch.setattr(ai, "_wait_arrival", lambda me, best, steps: (False, later))
+    monkeypatch.setattr(ai, "_wait_arrival", lambda me, best, steps, quick=False: (False, later))
     ai._my_turn = lambda frame, team: False  # pas de reclic
     return ai, frame, me, cells(before)
 
@@ -134,7 +134,7 @@ def test_arrival_seen_on_the_target_cell_proves_my_cell(monkeypatch):
     target = (me.cell[0] + 1, me.cell[1])
     ai = CombatAI(FakeGame(frame), CombatSettings(), name="Walitcoin")
     ai._me_cell = me.cell  # suivie, pas prouvée
-    monkeypatch.setattr(ai, "_wait_arrival", lambda me, best, steps: (True, frame))
+    monkeypatch.setattr(ai, "_wait_arrival", lambda me, best, steps, quick=False: (True, frame))
     assert ai._walk(frame, me, target, fighters, {target}, "destination") == 1
     assert ai._me_cell == target and ai.me_sure
 

@@ -187,6 +187,8 @@ human:                    # rythme des gestes, en secondes [min, max] tirées au
 
 reseau:                    # écoute passive du trafic du jeu (bot/connection/network.py, 26/10) : carte et case du
   ecoute: true             # personnage annoncées par le serveur. Il faut Npcap (npcap.com) ; sans lui, l'écran seul
+  journal: true            # chaque message du serveur, par personnage, dans logs/<session>/reseau_<nom>.txt (jamais
+                           # le chat) : pour comprendre un raté après coup
 
 logs:                      # journaux et captures dans logs/<date_heure>/
   keep_sessions: 20        # au démarrage, ne garder que les 20 dernières sessions (celle qui commence comprise) ;

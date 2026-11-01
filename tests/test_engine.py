@@ -891,3 +891,34 @@ def test_after_a_boost_cast_before_the_move_the_next_plan_may_move(monkeypatch):
     monkeypatch.setattr(ai, "_walk", lambda frame, me, best, fighters, zone, label, steps=None, retry=True: steps)
     ai.play_turn(RED, is_mine=lambda f: f is not end, me_cell=(8, 26), team_cells=lambda: dict(TOUR_1))
     assert asked[:3] == [True, True, False]  # après le bonus : libre d'aller ; après le pas : on lance d'ici
+
+
+DESINVOCATION = CombatSpell(7, "desinvocation", "Désinvocation", 6, (1, 6), per_target=1, damage=40, role="invocations")
+
+
+def test_desinvocation_only_hits_a_summon():
+    # 01/11 (l'utilisateur) : Désinvocation ne frappe que les invocations.
+    monster, summon = (4, 0), (0, 4)
+    assert not plan_turn((0, 0), 0, [monster], [], [DESINVOCATION], new_use(6), OPEN, Weights()).casts
+    plan = plan_turn((0, 0), 0, [monster, summon], [], [DESINVOCATION], new_use(6), OPEN, Weights(),
+                     summons=frozenset({summon}))
+    assert [(s.spell.spell_id, s.cell) for s in plan.casts] == [("desinvocation", summon)]
+
+
+def test_desinvocation_is_kept_for_when_no_other_spell_hits(monkeypatch):
+    # 01/11 (l'utilisateur) : tuer l'invocateur tue ses invocations ; Désinvocation seulement si rien d'autre ne touche.
+    from bot.perception.fighters import Fighter
+
+    ai = CombatAI(FakeGame(load_frame("combat_mon_tour")), CombatSettings())
+    frame = ai.game.look()
+    me = Fighter(RED, *frame.grid.center((10, 20)), (10, 20))
+    monster, summon = (14, 20), (10, 24)
+    enemies = [Fighter("blue", *frame.grid.center(c), c) for c in (monster, summon)]
+    monkeypatch.setattr(ai, "_summon_cells", lambda: frozenset({summon}))
+    ai._use.new_turn(10)
+    ai._spells = [MAGIQUE, DESINVOCATION]
+    plan = ai._plan(frame, me, enemies, [], 0)
+    assert [s.spell.spell_id for s in plan.casts] == ["fleche_magique"] * 2  # le monstre, pas l'invocation
+    ai._spells = [replace(MAGIQUE, spell_range=(1, 1)), DESINVOCATION]  # plus rien d'autre ne touche
+    plan = ai._plan(frame, me, enemies, [], 0)
+    assert [(s.spell.spell_id, s.cell) for s in plan.casts] == [("desinvocation", summon)]

@@ -10,8 +10,9 @@ et vide à l'intérieur (les cases de placement, colorées en entier, forment au
 """
 
 import math
-from collections.abc import Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
+from types import MappingProxyType
 
 import cv2
 import numpy as np
@@ -89,33 +90,71 @@ SPRITE_HALF_W, SPRITE_UP, SPRITE_DOWN = 0.55, 3.8, 0.35
 CELL_SPOTS = ((0, 0), (0, 0.5), (-0.7, 0), (0.7, 0), (0, -0.5), (0, 0.8), (0, -0.8))  # coins à 0,7 : hors du corps
 # d'un voisin de devant
 AWAY = 0.4  # en demi-hauteurs de case (~10 px) : écart minimal à un clic déjà fait sur la case (`away`)
+# Bloc du mode tactique : losange du dessus dessiné BLOCK_RISE demi-hauteurs plus haut que sa case, côtés jusqu'à elle
+# (01/11, capture 0010 du journal 071237 : 24 px pour une demi-hauteur de 25,7).
+BLOCK_RISE = 0.95
+# Un niveau de sol à l'écran, en demi-hauteurs de case : 20 unités du jeu pour 13,5 (01/11, carte 0,-23 : sommet de
+# niveau 9 dessiné 103 px au-dessus de sa case, 2 niveaux + la hauteur d'un bloc, demi-hauteur 25,7 px).
+LEVEL_HALF_HEIGHTS = 20 / 13.5
+
+
+def cell_point(grid: Grid, cell: Cell, lift: Mapping[Cell, float] = MappingProxyType({})) -> tuple[float, float]:
+    """Centre de la case à l'écran, relief compris (`lift` : hauteur en niveaux, MapData.lift)."""
+    x, y = grid.center(cell)
+    return x, y - lift.get(cell, 0.0) * LEVEL_HALF_HEIGHTS * grid.half_h
 
 
 def clear_point(grid: Grid, cell: Cell, fighters: list[Fighter], hidden: Sequence[Box] = (),
-                away: Sequence[tuple[float, float]] = ()) -> tuple[tuple[float, float], tuple[float, float]]:
+                away: Sequence[tuple[float, float]] = (), raised: Collection[Cell] = (),
+                lift: Mapping[Cell, float] = MappingProxyType({})) -> tuple[tuple[float, float], tuple[float, float]]:
     """Point (et demi-étendue du clic) pour viser la case `cell` sans toucher le corps d'un combattant : un clic sur
     un personnage le vise lui, pas la case (03/10 : cases en diagonale derrière un personnage difficiles à atteindre).
     Le centre de la case s'il est dégagé, sinon le bas, la gauche, la droite ou le haut du losange, puis ses pointes.
     `hidden` : rectangles de l'interface par-dessus la carte (portraits de la timeline), évités de même. `away` :
-    clics déjà faits sur cette case, à plus de AWAY demi-hauteurs de chacun si un endroit dégagé le permet."""
-    x, y = grid.center(cell)
+    clics déjà faits sur cette case, à plus de AWAY demi-hauteurs de chacun si un endroit dégagé le permet. `raised` :
+    blocs du mode tactique, dont le dessin surélevé couvre le bas des cases au-dessus (01/11 : clic sur le bord gauche
+    de (19, 23) tombé sur le bloc de (18, 24), « pas bougé »). `lift` : relief (cell_point) ; un bloc surélevé couvre
+    d'autant plus haut (01/11, 0,-23 : clic sur (13, 11), en pente, tombé sur le flanc du sommet de (13, 13))."""
+    x, y = cell_point(grid, cell, lift)
     hw, hh = grid.half_w, grid.half_h
+    blocks = [(*grid.center(b), lift.get(b, 0.0) * LEVEL_HALF_HEIGHTS) for b in raised
+              if b != cell and abs(b[0] - cell[0]) <= 1 and 0 < b[1] - cell[1] <= 8]
 
-    def covered(px: float, py: float, sx: float, sy: float) -> bool:
-        return any(f.cell != cell and abs(px - f.x) < SPRITE_HALF_W * hw
-                   and f.y - SPRITE_UP * hh <= py <= f.y + SPRITE_DOWN * hh for f in fighters) \
-            or any(x0 - sx <= px <= x1 + sx and y0 - sy <= py <= y1 + sy for x0, y0, x1, y1 in hidden)
+    def on_block(px: float, py: float, sx: float, sy: float) -> bool:
+        """Le point ou un coin de l'étendue du clic autour de lui sur le dessin d'un bloc."""
+        for qx, qy in ((px, py), (px - sx, py + sy), (px + sx, py + sy), (px - sx, py - sy), (px + sx, py - sy)):
+            for bx, by, up in blocks:
+                side = 1 - abs(qx - bx) / hw  # 1 au milieu du losange, 0 à ses pointes gauche et droite
+                if side >= 0 and by - (up + BLOCK_RISE + side) * hh <= qy <= by + side * hh:
+                    return True
+        return False
 
-    clear = []
+    def depth(px: float, py: float) -> float:
+        """Enfoncement du point dans le corps d'un combattant, depuis le haut de sa tête ; 0 hors des corps."""
+        return max((py - (f.y - SPRITE_UP * hh) for f in fighters if f.cell != cell
+                    and abs(px - f.x) < SPRITE_HALF_W * hw and f.y - SPRITE_UP * hh <= py <= f.y + SPRITE_DOWN * hh),
+                   default=0.0)
+
+    def blocked(px: float, py: float, sx: float, sy: float) -> bool:
+        return any(x0 - sx <= px <= x1 + sx and y0 - sy <= py <= y1 + sy for x0, y0, x1, y1 in hidden) \
+            or on_block(px, py, sx, sy)
+
+    spots = []
     for dx, dy in CELL_SPOTS:
         point = (x + dx * hw, y + dy * hh)
         # Pointes : losange étroit (7 px de demi-largeur à 0,86), clic serré.
         spread = grid.click_spread() if (dx, dy) == (0, 0) else (hw * 0.12, hh * 0.12) if abs(dy) < 0.8 \
             else (hw * 0.06, hh * 0.06)
-        if not covered(*point, *spread):
-            clear.append((point, spread))
+        if not blocked(*point, *spread):
+            spots.append((depth(*point), point, spread))
+    clear = [(point, spread) for sunk, point, spread in spots if sunk == 0]
     far = [c for c in clear if all(math.dist(c[0], a) > AWAY * hh for a in away)]
-    return (far or clear or [((x, y), grid.click_spread())])[0]
+    if far or clear:
+        return (far or clear)[0]
+    # Case entièrement cachée par des corps (01/11 : (15, 17) derrière trois personnages, clic au centre sur l'un
+    # d'eux) : le point le moins enfoncé dans un corps, près du haut des têtes, plus étroit que le cadre supposé.
+    return min(((sunk, point, spread) for sunk, point, spread in spots), key=lambda s: s[0],
+               default=(0.0, (x, y), grid.click_spread()))[1:]
 
 
 def _is_arc(blob: Blob, layout: Layout) -> bool:

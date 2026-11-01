@@ -240,7 +240,10 @@ MOTIFS: list[Motif] = [
        True),
     _m("moi_ambigu", r"cercles de ma couleur et rien ne dit lequel est moi", "combat", "« rien ne dit lequel est moi »",
        True),
-    _m("pas_bouge", r"^Mon personnage n'a pas bougé", "combat", "déplacement sans effet", True),
+    # 01/11 (l'utilisateur) : un clic recliqué n'est pas un raté ; seul le déplacement resté sans effet après en est un.
+    _m("pas_bouge", r"^Mon personnage n'a pas bougé(?! : je reclique)", "combat", "déplacement sans effet", True),
+    _m("reclic_deplacement", r"^Clic de déplacement pas pris|^Mon personnage n'a pas bougé : je reclique", "combat",
+       "clic de déplacement recliqué"),
     _m("bloque_deplacement", r"^Je ne peux pas bouger", "combat", "plus de déplacement (tacle, bloqué)", True),
     _m("plan_change", r"^Plan changé : ", "combat", "« Plan changé »"),
     _m("carte_relief", r"^Carte à relief", "combat", "carte à relief (ligne de vue imprévisible)", True),
