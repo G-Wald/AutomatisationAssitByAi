@@ -30,6 +30,7 @@ MENU_WAIT = 2.0
 MENU_LEFT, MENU_UP, MENU_RIGHT, MENU_DOWN = 120, 150, 400, 260  # px de référence autour du clic : où s'ouvre le menu  # s : menu de la ressource attendu à l'écran après le clic
 START_WAIT = 8.0  # s : récolte annoncée par le serveur après le clic sur l'action (le personnage marche jusqu'à elle)
 END_MARGIN = 2.0  # s après la durée annoncée : fin de la récolte (GDF état 3, ou quantité IQ)
+PODS_FULL = 0.9  # pods (part du maximum) au-delà desquels on ne récolte plus : la banque d'abord
 SKIP_FOR = 120.0  # s : ressource écartée après un échec (menu pas vu, récolte pas commencée)
 # Action du menu de la ressource : 27/10, « Couper » 0,76, « Faucher » 0,71-0,72 (police du jeu), sans menu 0,37-0,43.
 FOUND = 0.68
@@ -119,6 +120,12 @@ class Harvester:
             remember_key(map_id, net.map_key)
         return [r for r in resources_on_map(map_id, key) if self.wanted(r)]
 
+    def full(self) -> bool:
+        """Pods presque pleins d'après le serveur (Ow) : au-delà de PODS_FULL, plus de récolte (01/11 : Elseiso à 95 %
+        allait couper 10 arbres de plus ; surchargé, un personnage ne marche plus)."""
+        pods = getattr(self.game.net, "pods", None)
+        return bool(pods) and pods[0] >= PODS_FULL * pods[1]
+
     def available(self, targets: list[Resource]) -> list[Resource]:
         now = time.monotonic()
         objects = dict(self.game.net.objects)
@@ -137,6 +144,9 @@ class Harvester:
         log.info("Récolte : %d ressource(s) visée(s) sur la carte (%s)", len(targets), ", ".join(names) or "aucune")
         done = 0
         while done < most:
+            if self.full():
+                log.info("Pods presque pleins (%d/%d) : plus de récolte avant la banque", *self.game.net.pods)
+                break
             in_fight = getattr(self.game.net, "in_fight", None)
             if in_fight is not None and in_fight():
                 log.info("Combat pendant la récolte : je m'arrête là (le combat d'abord)")
@@ -208,6 +218,12 @@ class Harvester:
             log.info("%s : le clic sur la case %d a pris celle de la case %d (dessinée par-dessus)", resource.name,
                      resource.cell, cell)
             resource = Resource(cell, resource.name, resource.job, resource.action, resource.level)
+        if started < chosen and net.objects.get(resource.cell, STANDING) != STANDING:
+            # 01/11 (journal 155857) : un autre joueur l'a coupé juste avant (GA1;501 d'un autre, puis GDF état 2).
+            log.info("%s en case %d : pris par un autre joueur avant moi : écarté %.0f s", resource.name,
+                     resource.cell, SKIP_FOR)
+            self.skipped[resource.cell] = time.monotonic() + SKIP_FOR
+            return False
         if started < chosen:
             path = game.recorder.save(menu.image, "recolte_pas_annoncee", lossless=True)
             log.info("%s en case %d : « %s » cliqué en (%d, %d) (%.2f), récolte pas annoncée par le serveur (menu : %s) : "

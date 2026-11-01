@@ -131,7 +131,7 @@ def test_harvest_mode_harvests_each_map_once_then_stops_with_full_pods(monkeypat
     assert bot._harvest_here() and not bot._harvest_here()  # une fois par passage : la carte suivante ensuite
     game.net.map_id, game.net.pods = 7335, (1700, 1800)
     assert bot._harvest_here()
-    assert runs == [7334, 7335] and bot.harvested == 8 and "pods" in bot._stop_reason
+    assert runs == [7334] and bot.harvested == 4 and "pods" in bot._stop_reason  # pleins : plus de récolte
     assert bot.harvester.wanted(Resource(1, "Noyer", "Bûcheron", "Couper", 20))
     assert not bot.harvester.wanted(Resource(1, "Chêne", "Bûcheron", "Couper", 30))
     assert not bot.harvester.wanted(Resource(1, "Blé", "Paysan", "Faucher", 1))
@@ -145,3 +145,57 @@ def test_harvest_option_is_a_job_and_a_level():
     assert _harvest("Bûcheron:23") == ("Bûcheron", 23)
     with pytest.raises(argparse.ArgumentTypeError):
         _harvest("Bûcheron")
+
+
+def test_full_pods_send_the_harvester_to_the_bank_and_back(monkeypatch):
+    # 01/11 : Elseiso plein après 7 arbres ; banque d'Astrub (même passage au coffre que l'équipe), puis la zone.
+    from types import SimpleNamespace
+
+    from bot.brain.loop import Bot
+    from bot.config import load_settings
+    from bot.team import bank
+    from tests.test_brain import FakeGame
+    from tests.conftest import load_frame
+
+    game = FakeGame(load_frame("hors_combat"))
+    game.net = ClientFeed("Elseiso")
+    game.net.map_id, game.net.pods = 7334, (1063, 1120)
+    bot = Bot(game, load_settings(), engage=False, harvest=("Bûcheron", 23))
+    errands = []
+    bot.roamer = SimpleNamespace(start_errand=lambda goal, why: errands.append(goal), end_errand=lambda: errands.append("fin"),
+                                 errand=None, errand_reached=False)
+    monkeypatch.setattr(bot.harvester, "run", lambda map_id: 7)
+    assert bot._harvest_here() and errands == [bank.BANK_MAP] and not bot._stop_reason
+    visits = []
+    monkeypatch.setattr(bank.BankVisit, "run", lambda self: visits.append([m.name for m in self.members]) or ["Elseiso"])
+    bot._bank()
+    assert visits == [["Elseiso"]] and errands[-1] == "fin" and bot._harvested_map is None
+
+
+def test_another_players_harvest_is_not_mine():
+    feed = ClientFeed("Elseiso")
+    feed.my_id = 1439688
+    feed.feed("GDM|7334|0905131019|cle")
+    feed.feed("GA1;501;999999;446,9700")  # un autre joueur coupe le Frêne de la case 446
+    assert feed.harvests == {}
+    feed.feed("GA1;501;1439688;206,9700")
+    assert list(feed.harvests) == [206]
+
+
+def test_no_harvest_with_nearly_full_pods():
+    class Game:
+        net = ClientFeed("Elseiso")
+
+    Game.net.pods = (1063, 1120)
+    harvester = Harvester(Game(), lambda r: True)
+    harvester.targets = lambda map_id=None: [Resource(168, "Frêne", "Bûcheron", "Couper", 1)]
+    harvester.harvest = lambda resource: pytest.fail("pas de récolte, pods presque pleins")
+    assert harvester.full() and harvester.run(7334) == 0
+
+
+def test_harvest_announced_with_action_zero():
+    # 01/11 (journal 154855, Elseiso) : « GA0;501;1439688;197,9600 », pas reconnu, Frêne cru pas commencé.
+    feed = ClientFeed("Elseiso")
+    feed.feed("GDM|7334|0905131019|cle")
+    feed.feed("GA0;501;1439688;197,9600")
+    assert feed.harvests[197][1] == 9600

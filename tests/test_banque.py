@@ -74,7 +74,7 @@ def test_no_new_bank_trip_while_the_pods_are_those_left_after_the_bank():
     pesopepe.game.net.feed("Ow540|0|1800|0")  # 30 %
     errands = []
     bot = TeamBot.__new__(TeamBot)
-    bot._pods, bot.pods_full, bot.bank_auto = {}, 0.25, True
+    bot._pods, bot._pods_logged, bot.pods_full, bot.bank_auto = {}, {}, 0.25, True
     bot.roamer = ZoneRoamer.__new__(ZoneRoamer)
     bot.roamer.errand, bot.roamer.start_errand = None, lambda *args: errands.append(args)
     bot._bank_floor, bot._banked = {}, True  # sortie de la banque : pods du serveur pas encore annoncés
@@ -101,3 +101,22 @@ def test_position_given_by_the_game_is_reused_until_the_server_announces_another
     assert asker.ask() == (0, -16)  # rien tapé : pas de type_text sur ce jeu factice, la réponse vient de la mémoire
     game.net.feed("GDM|7412|0|cle", now=now)  # nouvelle carte : la réponse ne vaut plus
     assert asker._known() is None
+
+
+def test_pods_filling_slowly_still_send_the_team_to_the_bank():
+    # 01/11 (journal 144405) : +1 à 2 % par combat, jamais 5 % d'un tour à l'autre : la vérification ne venait jamais,
+    # Pesopepe et Waldarch finis surchargés (105 %, 103 %).
+    from bot.team.loop import TeamBot, ZoneRoamer
+
+    pesopepe = member("Pesopepe")
+    errands = []
+    bot = TeamBot.__new__(TeamBot)
+    bot._pods, bot._pods_logged, bot.pods_full, bot.bank_auto = {}, {}, 0.9, True
+    bot.roamer = ZoneRoamer.__new__(ZoneRoamer)
+    bot.roamer.errand, bot.roamer.start_errand = None, lambda *args: errands.append(args)
+    bot.roamer.start_errand = lambda goal, why: errands.append(goal) or setattr(bot.roamer, "errand", goal)
+    bot._bank_floor, bot._banked = {}, False
+    for carried in (1584, 1602, 1620, 1638):  # 88, 89, 90, 91 %
+        pesopepe.game.net.feed(f"Ow{carried}|0|1800|0")
+        bot._note_pods(pesopepe, None)
+    assert len(errands) == 1

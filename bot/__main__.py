@@ -388,7 +388,8 @@ def main() -> int:
             if listener is None:
                 log.error("--recolte : écoute du serveur impossible (Npcap), pas de récolte")
                 return 1
-            game.net = listener.follow(window.hwnd, character_name(window.title, title) or "")
+            # --title donne souvent le nom seul (« Elseiso ») : nom lu avant le titre du jeu.
+            game.net = listener.follow(window.hwnd, character_name(window.title, "Dofus Retro") or "")
         bot = Bot(game, settings, act=not args.observe,
                   engage=False if args.combat_only or goto or args.recolte else None,
                   travel=args.travel, start=args.position, region=WORLDS.get(args.monde), harvest=args.recolte)

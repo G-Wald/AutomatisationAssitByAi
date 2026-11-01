@@ -289,10 +289,13 @@ class ClientFeed:
                     values = entry.split(";")
                     if len(values) >= 2 and values[0].isdigit() and values[1].isdigit():
                         self.objects[int(values[0])] = int(values[1])
-            elif text.startswith(("GA1;501;", "GA;501;")):
+            elif text.startswith(("GA1;501;", "GA0;501;", "GA;501;")):  # 01/11 : « GA0;501 » vu aussi
                 parts = text.split(";")
                 target = parts[3].split(",") if len(parts) > 3 else []
-                if len(target) >= 2 and target[0].isdigit() and target[1].isdigit():
+                # Récolte d'un autre joueur sur la carte : pas la mienne (01/11, Elseiso : un Frêne pris par un autre
+                # compté récolté en 3,9 s, sans quantité). Sa ressource passe de toute façon à l'état 2 (GDF).
+                mine = self.my_id is None or not _is_int(parts[2]) or int(parts[2]) == self.my_id
+                if mine and len(target) >= 2 and target[0].isdigit() and target[1].isdigit():
                     self.harvests[int(target[0])] = (now, int(target[1]))
             elif text.startswith("IQ"):
                 values = text[2:].split("|")

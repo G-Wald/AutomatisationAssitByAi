@@ -384,6 +384,7 @@ class TeamBot:
         # Suiveurs partis vers le soleil en même temps que le principal (_dispatch) : capture de départ, heure du clic.
         self._dispatched: dict[str, tuple[Frame, float]] = {}
         self._pods: dict[str, float] = {}  # remplissage de la jauge des pods de chacun (0 à 1), au dernier tour des fenêtres
+        self._pods_logged: dict[str, float] = {}  # ... tel que noté au journal la dernière fois
         self._bank_floor: dict[str, float] = {}  # pods de chacun en sortant de la banque (BANK_FLOOR_MARGIN)
         self._banked = False  # passé à la banque pendant cette session : premiers pods lus ensuite = _bank_floor
         self._lost: set[str] = set()  # suiveurs qui n'ont pas suivi : pas de clic à l'aveugle tant qu'ils n'ont pas rejoint
@@ -690,22 +691,31 @@ class TeamBot:
         banque (allers-retours à venir : docs/rapports/plan_banque.md)."""
         fill = _told(member, "pods_ratio")
         fill = pods_fill(frame) if fill is None else fill
-        before = self._pods.get(member.name)
-        self._pods[member.name] = fill
-        if before is not None and abs(fill - before) < POD_LOG_STEP:
+        if fill is None:
             return
+        self._pods[member.name] = fill
+        # Journal : quand ils ont changé d'au moins POD_LOG_STEP depuis la dernière valeur notée. Le seuil de la banque,
+        # lui, est regardé à chaque tour (01/11, journal 144405 : +1 à 2 % par combat, jamais 5 % d'un tour à l'autre ;
+        # la vérification venait après ce seuil, Pesopepe et Waldarch finis surchargés, 105 % et 103 %).
+        logged = self._pods_logged.get(member.name)
+        changed = logged is None or abs(fill - logged) >= POD_LOG_STEP
         # Premiers pods lus après la banque, du serveur ou de la jauge (27/10 : « Ow » pas encore reçu dans la session,
         # Pesopepe relu à l'écran, plancher manqué, second passage aussitôt).
         floor = self._bank_floor.setdefault(member.name, fill) if self._banked else None
         if fill >= self.pods_full and floor is not None and fill < floor + BANK_FLOOR_MARGIN:
-            log.info("Pods de %s : %.0f %%, comme en sortant de la banque (équipement, objets hors ressources) : pas de "
-                     "nouveau passage", member.name, 100 * fill)
+            if changed:
+                log.info("Pods de %s : %.0f %%, comme en sortant de la banque (équipement, objets hors ressources) : pas "
+                         "de nouveau passage", member.name, 100 * fill)
         elif fill >= self.pods_full:
-            log.warning("Pods de %s : %.0f %% : il faut passer à la banque", member.name, 100 * fill)
-            if self.bank_auto and isinstance(self.roamer, ZoneRoamer) and self.roamer.errand is None:
+            going = self.bank_auto and isinstance(self.roamer, ZoneRoamer) and self.roamer.errand is None
+            if changed or going:
+                log.warning("Pods de %s : %.0f %% : il faut passer à la banque", member.name, 100 * fill)
+            if going:
                 self.roamer.start_errand(BANK_MAP, f"Pods de {member.name} pleins")
-        else:
+        elif changed:
             log.info("Pods de %s : %.0f %%", member.name, 100 * fill)
+        if changed:
+            self._pods_logged[member.name] = fill
 
     def _check_layout(self, member: Member, frame: Frame) -> None:
         if member.name in self._checked_layout:

@@ -76,6 +76,28 @@ arme). Les coffres de la banque ne sont pas vus.
 - Pile entière en arrière-plan (Ctrl impossible) : glisser LENT de la pile vers l'offre -> fenêtre de quantité
   [min] [max] [1] [✓] ; « max » puis ✓ = toute la pile (`EMKO+…|10`). Le double-clic n'en met qu'une.
 
+### 01/11 : tournée de récolte (mode récolte du bot solo)
+
+- Commande :
+  `python -m bot --title Elseiso --arriere-plan --lecture memoire --monde douze --combat-zone 3,-24 --recolte Bûcheron:23 --minutes 35`
+- Sur chaque carte de la zone :
+  - récolte des ressources du métier jusqu'au niveau donné (Frêne 1, Châtaignier 10, Noyer 20 pour Bûcheron 23) ;
+  - puis carte voisine de la zone, celle vue il y a le plus longtemps : même parcours que `--zone`, sans attaquer de
+    groupe.
+- Combats subis : joués par la boucle habituelle. La récolte s'arrête dès qu'un combat commence.
+- Pods :
+  - au-delà de 90 % (annoncés par le serveur), plus de récolte ;
+  - trajet jusqu'à la banque d'Astrub (4,-16), même passage au coffre que l'équipe (`BankVisit`), puis retour dans la
+    zone ;
+  - un passage raté : arrêt aux prochains pods pleins.
+- Forêt d'Astrub : 42 cartes, 5 à 18 arbres par carte (Frêne, Châtaignier, Noyer d'après la carte du monde).
+- Premiers essais :
+  - 7 arbres en 1 min 30, environ 13 s chacun, marche comprise ;
+  - Elseiso était déjà à 95 % de pods avec le butin des combats ;
+  - passage à la banque : 2 min 15 de trajet, pods de 100 % à 39 % en 7,8 s au coffre, retour dans la zone.
+- **Corrigé** : une récolte d'un autre joueur sur la carte (`GA1;501` d'un autre identifiant) était comptée comme la
+  nôtre. Seules nos récoltes comptent maintenant.
+
 ## Ce qui est établi pour Rétro
 
 1. **Métiers de récolte** : Bûcheron, Paysan, Mineur, Alchimiste, Pêcheur.

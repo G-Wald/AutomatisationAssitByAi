@@ -39,7 +39,6 @@ SETTLE_AFTER_READY = 5
 AFTER_READY_SECONDS = 15
 PLACEMENT_FIRST_TRY = 0.3  # placement : premier essai de lecture des cases, une fois le bandeau d'entrée parti
 PLACEMENT_GIVE_UP = 4.0  # au-delà, Prêt sans changer de case
-HARVEST_PODS_FULL = 0.9  # mode récolte : arrêt à ce remplissage des pods (Ow, annoncé par le serveur)
 
 
 class Bot:
@@ -88,8 +87,11 @@ class Bot:
 
             job, level = harvest
             self.harvester = Harvester(game, lambda r: r.job == job and r.level <= level, popups=self.popups)
+            if self.roamer is not None and hasattr(self.roamer, "leaving"):
+                self.roamer.leaving = "Carte récoltée"
         self._harvested_map: int | None = None  # dernière carte récoltée (une fois par passage)
         self.harvested = 0  # ressources récoltées depuis le lancement
+        self._bank_failed = False  # passage à la banque raté : pods pleins = fin de la session
         self.finished = False  # test de déplacement ou exploration terminés
         self._empty_searches = 0
         rest_settings = RestSettings.from_settings(settings)
@@ -181,14 +183,36 @@ class Bot:
         if net is None or net.map_id is None or net.map_id == self._harvested_map:
             return False
         self._harvested_map = net.map_id
-        done = self.harvester.run(net.map_id)
-        self.harvested += done
+        if not self.harvester.full():
+            self.harvested += self.harvester.run(net.map_id)
         pods = getattr(net, "pods", None)
         log.info("Récolte : %d ressource(s) depuis le lancement%s", self.harvested,
                  f", pods {pods[0]}/{pods[1]}" if pods else "")
-        if pods and pods[0] >= HARVEST_PODS_FULL * pods[1] and not self._stop_reason:
-            self._stop_reason = f"pods presque pleins ({pods[0]}/{pods[1]})"
+        if self.harvester.full() and not self._stop_reason:
+            if self._bank_failed or not hasattr(self.roamer, "start_errand"):
+                self._stop_reason = f"pods presque pleins ({pods[0]}/{pods[1]})"
+            else:
+                # 01/11 : Elseiso plein en 7 arbres (pods déjà pris par le butin des combats) ; banque d'Astrub, puis
+                # retour dans la zone (même course que l'équipe, team/loop.py).
+                from bot.team.bank import BANK_MAP
+
+                self.roamer.start_errand(BANK_MAP, f"Pods presque pleins ({pods[0]}/{pods[1]})")
         return True
+
+    def _bank(self) -> None:
+        """Arrivé à la banque (course du ZoneRoamer) : l'onglet ressources vidé dans le coffre (team/bank.py, comme
+        l'équipe), puis retour dans la zone. Échec : la session s'arrêtera aux prochains pods pleins."""
+        from types import SimpleNamespace
+
+        from bot.team.bank import BankVisit
+
+        name = getattr(self.game.net, "name", "") or "personnage"
+        done = BankVisit([SimpleNamespace(name=name, game=self.game)], self.travel_settings.hide_players_key).run()
+        if not done:
+            log.warning("Banque : ressources pas vidées, la récolte s'arrêtera aux prochains pods pleins")
+            self._bank_failed = True
+        self.roamer.end_errand()
+        self._harvested_map = None  # la carte de retour est récoltée de nouveau
 
     def _report(self, frame: Frame, scene: Scene) -> None:
         """Journalise chaque changement d'état, avec une capture annotée."""
@@ -245,7 +269,10 @@ class Bot:
                 if self.rester is not None:
                     self.rester.rest()
                 return
-            if self.harvester is not None and self._harvest_here():
+            if self.harvester is not None and getattr(self.roamer, "errand_reached", False):
+                self._bank()
+                return
+            if self.harvester is not None and getattr(self.roamer, "errand", None) is None and self._harvest_here():
                 return  # récolte de cette carte faite : carte suivante au tour de boucle d'après (combat subi ?)
             self.roamer.step()
             if self.roamer.done:

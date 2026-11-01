@@ -1577,6 +1577,7 @@ class ZoneRoamer:
         self.traveler = traveler
         self.world = traveler.world
         self.zone_name: str | None = None
+        self.leaving = "Plus de groupe ici"  # pourquoi on change de carte (journal) ; récolte : brain/loop.py
         self.came_from: str | None = None
         self.done = False
         self._warned = False
@@ -1762,7 +1763,7 @@ class ZoneRoamer:
             log.info("Aucune sortie vers une autre carte de la zone %s : je reste", self.zone_name)
             return
         side = choices[0]
-        log.info("Plus de groupe ici : carte du %s (%s,%s, zone %s)", side, *self.traveler.neighbour(side), self.zone_name)
+        log.info("%s : carte du %s (%s,%s, zone %s)", self.leaving, side, *self.traveler.neighbour(side), self.zone_name)
         if self.traveler.go(frame, label, side, exits) is not None:
             self.came_from = OPPOSITE[side]
 
