@@ -191,6 +191,40 @@ Farm de 50 minutes (logs/20261101_113029, forêt d'Astrub, 7 cartes) :
 - **PA** : avec l'écoute, les PA viennent du serveur (GTM, GA;102), et un sort n'est cru parti que sur ses PA
   dépensés annoncés après son clic. La baisse de PA du sort précédent ne peut plus être prise pour celle du suivant.
 
+### Farm d'une heure (journal 144405) et corrections qui ont suivi
+
+| | farm 50 min (matin) | farm 60 min |
+|---|---|---|
+| combats | 31 | 49 |
+| durée moyenne d'un combat (s) | 55 | 46 |
+| refus par tour | 0.08 | 0.03 |
+| déplacements sans bouger | 21 | 7 |
+| morts / erreurs | 0 / 0 | 0 / 0 |
+
+- **Fenêtres de résultat** :
+  - fermées par la nouvelle routine dans 46 combats sur 49, en 3,8 s en moyenne ;
+  - les 3 autres, toujours chez Eldieso (regardé avant l'ouverture de sa fenêtre), ont été fermées juste après par le
+    tour des fenêtres ;
+  - corrigé : une fois un bouton vu immobile, chaque fenêtre restante est regardée au moins une fois de plus ;
+  - les 8 fenêtres sont maintenant regardées en même temps (arrière-plan) : 2,6 s au lieu de 4,5 s entre le premier
+    et le dernier clic.
+- **Trames Ethernet complétées** :
+  - les petites trames ont des octets de remplissage, comptés comme données TCP depuis la déduplication ;
+  - le numéro attendu passait trop loin, et le début du segment suivant était jeté (11 messages coupés dans le farm) ;
+  - un « GA;129 » lu « ;129 » : les PM perdus de Pesopepe jamais comptés, deux clics de déplacement sans PM ;
+  - corrigé : longueur prise dans l'en-tête IP.
+- **Attente après une mort** : les 6 s ne valent plus si un déplacement a été annoncé depuis la mort (Pesopepe,
+  12 s perdues).
+- **Banque de l'équipe jamais déclenchée** :
+  - les pods ne sont regardés qu'au tour des fenêtres, et la vérification venait après un seuil de 5 % de
+    changement depuis le tour d'avant ;
+  - à +1 ou 2 % par combat, elle n'était jamais atteinte : Pesopepe à 106 %, Waldarch à 103 % en fin de farm ;
+  - corrigé : le seuil de la banque est regardé à chaque tour. Vérifié en jeu : départ aussitôt, 8 sur 8 au coffre.
+- **Zone perdue** :
+  - lancé avec `--zone` sans position, la course à la banque partie au premier tour faisait prendre la zone de la
+    banque (cité d'Astrub) pour la zone de combat au retour ;
+  - corrigé : la zone est retenue avant de partir.
+
 ## Trouvé pendant le comparatif
 - Branche : « Je ne vois pas d'ennemi » (16 fois, avec capture) pendant l'invisibilité : corrigé (plus de capture ni
   de second regard quand le serveur dit l'ennemi invisible).

@@ -528,3 +528,25 @@ def test_ethernet_padding_is_not_tcp_data():
         + bytes([0x50, 0x10]) + bytes(6)
     assert segment(bytes(14) + ip + tcp + bytes(6), 1) == (49701, 1000, b"")
     assert fresh_part(1000, 1000, b"GA;129;1;1,-3\x00") == (b"GA;129;1;1,-3\x00", 1014)
+
+
+def test_zone_is_kept_when_the_bank_errand_starts_before_the_first_step():
+    # 01/11 (journal 162522) : --zone sans position, pods pleins au premier tour ; au retour de la banque, la cité
+    # d'Astrub prise pour la zone de combat.
+    from types import SimpleNamespace
+
+    from conftest import load_frame
+    from test_travel import traveler as make_traveler
+
+    from bot.brain.travel import ZoneRoamer
+
+    traveler = make_traveler(load_frame("hors_combat"))
+    roamer = ZoneRoamer(traveler)
+    roamer.zone_name, roamer.meeting = None, None
+    from bot.brain.atlas import Atlas
+
+    traveler.atlas = Atlas.load()
+    traveler.region, traveler.coords = "Monde des Douze", (3, -26)  # forêt d'Astrub
+    traveler.look = lambda: (None, SimpleNamespace(zone_name=None))
+    roamer.start_errand((4, -16), "Pods pleins")
+    assert roamer.zone_name == "Forêt d'Astrub" and roamer._saved_meeting == (3, -26)

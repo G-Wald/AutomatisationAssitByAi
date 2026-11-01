@@ -97,6 +97,23 @@ arme). Les coffres de la banque ne sont pas vus.
   - passage à la banque : 2 min 15 de trajet, pods de 100 % à 39 % en 7,8 s au coffre, retour dans la zone.
 - **Corrigé** : une récolte d'un autre joueur sur la carte (`GA1;501` d'un autre identifiant) était comptée comme la
   nôtre. Seules nos récoltes comptent maintenant.
+- **Corrigé** : le serveur annonce aussi une récolte en `GA0;501`, qui n'était pas reconnue. Le bot croyait le clic
+  raté et partait vers un autre arbre pendant la coupe.
+- Pods : contrôlés avant chaque arbre. À 95 % de pods, Elseiso allait couper 10 arbres de plus ; il a fini à 1123
+  sur 1120, « trop chargé ». Au-delà, un personnage ne peut plus rejoindre de combat.
+- Résultat de la tournée de 26 minutes (journal 155857) :
+  - 74 arbres, 282 bois ;
+  - 2 passages à la banque (289 à 290 kamas chacun) ;
+  - 10 arbres écartés : injoignables, menu pas vu, ou pris par un autre joueur ;
+  - 0 combat.
+  - Sur les 3 sessions : 103 arbres (81 Frênes, 20 Châtaigniers, 2 Noyers), Bûcheron 23 -> 24.
+- La forêt d'Astrub est très fréquentée : souvent 3 arbres debout sur 14.
+- **Effet de bord** : les 7 autres personnages, restés inactifs, ont été déconnectés par le serveur au bout de
+  25 minutes (`M01`, 16:09) et retirés du groupe. La connexion automatique les reconnecte et reforme le groupe
+  (8 personnages en 14 s). Pendant une tournée solo, il faudra occuper les autres (ou les faire récolter aussi).
+- **Équipement Force / pods** (demande de l'utilisateur, pour récolter plus longtemps) : aucun des 8 n'a d'objet avec
+  de la Force (effet 118) ou des pods (effet 158), d'après leurs inventaires complets à la connexion. Les coffres de
+  la banque ne sont pas lus.
 
 ## Ce qui est établi pour Rétro
 

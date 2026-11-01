@@ -1643,6 +1643,15 @@ class ZoneRoamer:
         de la zone (gardé pour le retour)."""
         if self.errand is not None:
             return
+        if self.zone_name is None:
+            # 01/11 (journal 162522) : --zone sans position, pods pleins dès le premier tour, zone pas encore retenue ;
+            # au retour, celle de la banque (cité d'Astrub) est devenue la zone de combat. Retenue ici d'abord.
+            _, label = self.traveler.look()
+            self.zone_name = self._zone_here(label)
+            info = self.traveler.here()
+            if self.meeting is None and info is not None and info.zone == self.zone_name:
+                self.meeting = info.coords
+            log.info("Zone de combat retenue avant la course : %s", self.zone_name or "inconnue")
         log.info("%s : trajet jusqu'à %s,%s, sans combat en chemin", why, *goal)
         self.errand, self.errand_reached, self._errand_trip = goal, False, None
         self._saved_meeting, self.meeting = self.meeting, None
