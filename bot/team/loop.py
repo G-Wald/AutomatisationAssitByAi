@@ -139,12 +139,21 @@ LEADER_STUCK = 2
 # sur lui : 20/10, 22 reclics sur 29 partaient dès ce premier regard (immobilité comptée depuis le clic), dont 15 sur
 # des suiveurs qui arrivaient déjà (Pombro, Vertdepomme, Vieenjaune, les derniers cliqués).
 FOLLOWER_STILL = 1.5
+# Clic d'un suiveur sur le soleil sans déplacement annoncé par le serveur dans ce délai : pas pris (01/11 : le serveur
+# répond à un clic de déplacement en ~0,2 s ; hors combat, GA0;1 arrive aussi pour chaque suiveur).
+NET_SUN_SILENT = 1.0
 # Reclics d'un suiveur resté immobile sur la carte de départ ; au suivant (~9 s après son clic), il fait son propre
 # trajet au lieu d'attendre travel.walk_timeout (20 s).
 FOLLOWER_RECLICKS = 2
 MAX_POPUPS = 6  # regards d'affilée dans une même fenêtre du jeu : fermer résultat, niveau supérieur, et retenter
 RESULT = "résultat du combat"  # même fenêtre, même bouton « Fermer » dans chaque fenêtre du combat
 RESULT_LAG = 0.2  # elle s'ouvre partout en même temps, à un instant près
+# Fin du combat d'après le serveur (GE) : la carte est rechargée (GDK) ~3,5 s plus tard dans chaque fenêtre, et le
+# résultat ne s'ouvre qu'après (01/11, journal 113029 : « fini sans fenêtre de résultat » conclu 1 s après GE, 24
+# combats sur 31 ; fenêtres fermées ensuite une à une, le principal déjà reparti au combat suivant).
+END_LOAD_WAIT = 8.0  # s au plus après GE pour la carte rechargée chez tous les combattants
+RESULT_OPEN_WAIT = 4.0  # s au plus, carte rechargée, pour voir chaque fenêtre de résultat s'ouvrir et la fermer
+RESULT_CLICK_EFFECT = 0.6  # s après un clic sur « Fermer » avant de la revoir (encore là : reclic)
 UNKNOWN_TINT_STOP = 3  # personnages au sol tactique pas reconnu dans un combat : arrêt (pas une fiche passagère)
 # Placement de toute l'équipe (team.place, team/placement.py). Une passe : un clic dans la fenêtre de chacun de ceux
 # qui bougent, puis une lecture des cases (PLACE_SETTLE après le premier clic, encore PLACE_RECHECK plus tard si un
@@ -225,6 +234,17 @@ def _standing(frame: Frame, placement: Placement) -> list[Fighter]:
 
 def _same_turn(a: Portrait | None, b: Portrait | None) -> bool:
     return (a is None and b is None) or same_portrait(a, b)
+
+
+def _live_net(member: Member):
+    """L'écoute du serveur de ce personnage, si elle est vivante ; None sinon."""
+    net = getattr(member.game, "net", None)
+    return net if net is not None and net.alive() else None
+
+
+def _net_moved(net) -> float:
+    """Dernier déplacement ou changement de carte de ce personnage annoncé par le serveur (time.monotonic())."""
+    return max(getattr(net, "moved_at", 0.0), getattr(net, "map_at", 0.0))
 
 
 def _same_button(seen, known, tolerance: float) -> bool:
@@ -430,6 +450,8 @@ class TeamBot:
         self._errors: list[float] = []  # heures des erreurs rattrapées hors combat
         self._overtime_warned = False
         self._result_unseen = False  # dernier combat fini sans fenêtre de résultat vue
+        self._told_end = False  # dernier combat fini d'après le serveur (_close_told_results)
+        self._departure_map: int | None = None  # carte quittée par le principal d'après le serveur (_dispatch)
         self._result_check_at: float | None = None  # ... et rien fermé chez le principal : nouveau regard à cette heure
         self._leader_closed = False  # le dernier tour des fenêtres a fermé une fenêtre chez le principal
         control = getattr(self.leader.game, "control", None)
@@ -854,17 +876,24 @@ class TeamBot:
         self._dispatch_to = (self._departure[0] + delta[0], self._departure[1] + delta[1]) \
             if self._departure is not None and delta else None
         names, again = [], []
-        # Carte de départ du principal, relevée avant que la suivante soit annoncée (01/11, journal 113029 : arrivé
-        # pendant ce tour des suiveurs, 3 d'entre eux comparés à sa nouvelle carte, crus ailleurs, rejoints à pied).
-        leader_net = getattr(self.leader.game, "net", None)
-        leader_map = leader_net.map_id if leader_net is not None and leader_net.alive() else None
+        # Carte de départ du principal d'après le serveur, relevée au premier clic de ce passage, avant que la suivante
+        # soit annoncée (01/11, journal 113029 : arrivé pendant ce tour des suiveurs, 3 d'entre eux comparés à sa
+        # nouvelle carte, crus ailleurs, rejoints à pied). Chaque suiveur est comparé à ce numéro de carte.
+        if not self._dispatched:
+            leader_net = _live_net(self.leader)
+            self._departure_map = leader_net.map_id if leader_net is not None else None
+        leader_map = self._departure_map
         for member in random.sample(self.followers, len(self.followers)):
             if member.name in self._lost:
                 continue  # pas sur la carte du principal : il ne le suit pas à l'aveugle
             now = member.game.look(park=False)
             sent = self._dispatched.get(member.name)
             if sent is not None:
-                if _gap(_scene(now), _scene(sent[0])) > SCENE_CHANGED:
+                net = _live_net(member)
+                if net is not None and getattr(net, "my_id", None) is not None:
+                    if _net_moved(net) >= sent[1]:
+                        continue  # en marche ou arrivé d'après le serveur : pas de nouveau clic
+                elif _gap(_scene(now), _scene(sent[0])) > SCENE_CHANGED:
                     continue  # parti (ou en train de changer de carte) : pas de nouveau clic
                 if not self._clear_for_click(member, now):
                     continue  # fenêtre fermée : il sera recliqué pendant l'attente des suiveurs
@@ -1089,6 +1118,13 @@ class TeamBot:
                     # 20/10, Vertdepomme : un Échap a ouvert le Menu principal, six reclics sont tombés dedans (~25 s).
                     log.info("%s : %s pendant l'attente des suiveurs, fermée avant tout reclic", name, popup)
                     walk.previous = walk.motion = walk.still_since = None  # décor caché : regards à refaire
+                    continue
+                net = _live_net(member)
+                if net is not None and getattr(net, "my_id", None) is not None and \
+                        time.monotonic() - walk.clicked >= NET_SUN_SILENT and _net_moved(net) < walk.clicked:
+                    # Aucun déplacement annoncé par le serveur depuis le clic sur le soleil : pas pris, recliqué sans
+                    # attendre de le voir immobile (les déplacements hors combat sont annoncés, GA0;1).
+                    self._still_follower(walk, crossing, pending)
                     continue
                 view = _scene(frame)
                 changed = _gap(view, walk.departure) > SCENE_CHANGED
@@ -1450,6 +1486,7 @@ class TeamBot:
             fighters = [host] + [m for m in self.members if m is not host
                                  and read_scene(m.game.look(park=False)).phase is not Phase.OUT_OF_COMBAT]
             log.info("Combat déjà commencé : %s", ", ".join(m.name for m in fighters))
+        self._told_end = False
         end = self._turns(fighters) if fighters else None
         dead = [m.name for m in fighters if _died(m)]
         if dead:
@@ -1464,8 +1501,10 @@ class TeamBot:
                            [(m.name, m.ai.fight_report()) for m in fighters])
         if self.max_fights and self.fights >= self.max_fights:
             self._stop_reason = f"{self.fights} combat(s), le maximum demandé"
-        self._result_unseen = end is None and bool(fighters)
-        if end is not None:
+        self._result_unseen = end is None and bool(fighters) and not self._told_end
+        if self._told_end:
+            self._close_told_results(fighters)
+        elif end is not None:
             self._close_results(*end, fighters)
         self._in_fight = False
 
@@ -1894,12 +1933,13 @@ class TeamBot:
                         out_since = None
                         watcher.game.sleep(self.poll)
                         continue
-                    if watcher.popups.describe(frame) is not None:
-                        return watcher, frame  # fini d'après le jeu, fenêtre de résultat vue
+                    # Fini d'après le jeu : les fenêtres de résultat s'ouvrent une fois la carte rechargée (GDK) dans
+                    # chaque fenêtre ; elles sont fermées d'après le serveur (_close_told_results).
                     if out_since is None:
                         out_since = time.monotonic()
-                    elif time.monotonic() - out_since >= FIGHT_END_CONFIRM:
-                        return None  # fini d'après le jeu, sans fenêtre de résultat
+                    if self._end_loaded(fighters) or time.monotonic() - out_since >= END_LOAD_WAIT:
+                        self._told_end = True
+                        return None
                     watcher.game.sleep(self.poll)
                     continue
                 # Sans écoute de ce combat (bot relancé en plein combat) : l'écran décide.
@@ -2263,6 +2303,65 @@ class TeamBot:
                     continue
             member.game.click(seen.close_point, seen.close_spread)
             member.popups.closed_elsewhere(RESULT)
+
+    @staticmethod
+    def _end_loaded(fighters: list[Member]) -> bool:
+        """Carte rechargée (GDK) après la fin du combat dans chaque fenêtre qui écoute le serveur : les fenêtres de
+        résultat s'ouvrent maintenant."""
+        for member in fighters:
+            net = getattr(member.game, "net", None)
+            fight = getattr(net, "fight", None) if net is not None else None
+            if net is None or not net.alive() or fight is None:
+                continue
+            if not fight.ended_at or net.loaded_at < fight.ended_at:
+                return False
+        return True
+
+    def _close_told_results(self, fighters: list[Member]) -> None:
+        """Fin du combat d'après le serveur, carte rechargée : une fenêtre de résultat s'ouvre dans chaque fenêtre du
+        combat. Toutes regardées à tour de rôle (suiveurs d'abord, le principal reste devant), chacune fermée dès que son
+        bouton « Fermer » est vu immobile sur deux regards, puis revue : encore là, recliquée. Le serveur ne dit rien
+        de la fermeture (fenêtre du jeu seulement) : seul l'écran la confirme. Pas vue en RESULT_OPEN_WAIT s : le tour
+        des fenêtres s'en charge."""
+        left = sorted(fighters, key=lambda m: m is self.leader)
+        last: dict[str, object] = {}  # dernier bouton « Fermer » vu, pour le juger immobile
+        clicked: dict[str, float] = {}
+        closed, reclicks = [], 0
+        start = time.monotonic()
+        deadline = start + RESULT_OPEN_WAIT
+        while left and time.monotonic() < deadline:
+            for member in list(left):
+                name = member.name
+                if name in clicked and time.monotonic() - clicked[name] < RESULT_CLICK_EFFECT:
+                    continue
+                frame = member.game.look(park=False)
+                seen = find_known_popup(frame, member.popups.specs)
+                if seen is None:
+                    if name in clicked:
+                        closed.append(name)
+                        left.remove(member)
+                    continue  # pas encore ouverte
+                if seen.spec.name != RESULT:
+                    # « Informations » (niveau supérieur) par-dessus : le « Fermer » du résultat ne répond pas avant.
+                    member.popups.handle(frame, self._since_combat())
+                    last.pop(name, None)
+                    continue
+                if seen.close_point is None or last.get(name) is None or \
+                        not _same_button(seen, last[name], frame.layout.length(3)):
+                    last[name] = seen if seen.close_point is not None else None
+                    continue  # en train de s'ouvrir : revue au tour suivant
+                if name in clicked:
+                    reclicks += 1
+                    log.info("%s : « %s » encore ouverte après le clic, je reclique", name, RESULT)
+                member.game.click(seen.close_point, seen.close_spread)
+                member.popups.closed_elsewhere(RESULT)
+                clicked[name] = time.monotonic()  # bouton gardé (last) : encore là au regard suivant, reclic aussitôt
+            if left:
+                self.leader.game.sleep(0.05)
+        log.info("Fenêtre « %s » fermée chez %d/%d en %.1f s (fin d'après le jeu)%s", RESULT, len(closed),
+                 len(fighters), time.monotonic() - start, f", {reclicks} reclic(s)" if reclicks else "")
+        if left:
+            log.info("Pas vue fermée chez %s : le tour des fenêtres s'en charge", ", ".join(m.name for m in left))
 
     def _fight_over(self) -> None:
         log.info("Combat terminé")

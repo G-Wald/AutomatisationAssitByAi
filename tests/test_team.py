@@ -1285,6 +1285,46 @@ def test_result_window_closed_in_every_fight_window_where_it_is_seen():
 
 
 
+def test_fight_end_told_waits_for_the_map_reloaded_in_every_window():
+    # 01/11 (journal 113029) : GE 3,5 s avant GDK ; les fenêtres de résultat ne s'ouvrent qu'après.
+    from bot.connection.network import ClientFeed
+    screen = Screen()
+    a, b = member("A", screen, load_frame("hors_combat")), member("B", screen, load_frame("hors_combat"))
+    for m in (a, b):
+        m.game.net = ClientFeed(m.name)
+        m.game.net.feed("GJK2|0|1|0|30000|4")
+        m.game.net.feed("GE1|0|1|...")
+    assert not TeamBot._end_loaded([a, b])
+    a.game.net.feed("GDK")
+    assert not TeamBot._end_loaded([a, b])  # B pas encore rechargé
+    b.game.net.feed("GDK")
+    assert TeamBot._end_loaded([a, b])
+
+
+def test_told_results_closed_in_every_window_once_open_and_still(monkeypatch):
+    monkeypatch.setattr("bot.team.loop.RESULT_CLICK_EFFECT", 0)
+    screen = Screen()
+    result, out = load_frame("coeur_43pv"), load_frame("hors_combat")
+    # B : encore fermée au premier regard (elle s'ouvre), puis ouverte, immobile, puis fermée.
+    leader, follower = member("A", screen, result, result, out), member("B", screen, out, result, result, out)
+    bot = team_bot(leader, follower)
+    bot._close_told_results([leader, follower])
+    clicks = events(screen, "click")
+    assert [e[0] for e in clicks] == ["A", "B"]  # chacun cliqué une fois, dès son bouton vu immobile
+    assert clicks[0][2] == clicks[1][2]
+
+
+def test_told_result_still_open_after_the_click_is_clicked_again(monkeypatch):
+    monkeypatch.setattr("bot.team.loop.RESULT_CLICK_EFFECT", 0)
+    screen = Screen()
+    result, out = load_frame("coeur_43pv"), load_frame("hors_combat")
+    leader = member("A", screen, result, result, result, out)
+    bot = team_bot(leader)
+    monkeypatch.setattr(leader.popups, "closed_elsewhere", lambda name: None)
+    bot._close_told_results([leader])
+    assert len(events(screen, "click")) == 2  # clic pas pris : recliqué, puis vue fermée
+
+
 def test_result_window_not_clicked_blind_while_it_still_opens():
     # 25/10 (journal 181212, combat 17) : fenêtre encore en train de s'ouvrir, « Fermer » cru sur un objet de la barre
     # de raccourcis, cliqué à l'aveugle dans les 8 fenêtres : Elseiso a bu une potion de rappel. La seconde capture ne
@@ -1628,6 +1668,55 @@ def test_leader_retry_reclicks_only_the_followers_still_on_the_departure():
     assert set(bot._dispatched) == {"B", "C"} and bot._dispatched["B"][0] is foret  # départ : la première capture
 
 
+def _heard(name: str, map_id: int, my_id: int | None = 1):
+    from bot.connection.network import ClientFeed
+
+    net = ClientFeed(name)
+    net.heard_at, net.map_id, net.my_id = time.monotonic(), map_id, my_id
+    return net
+
+
+def test_followers_judged_by_the_server_against_the_leaders_departure_map():
+    # 01/11, utilisateur : les suiveurs d'après le réseau. Carte de départ du principal relevée au premier clic du
+    # passage ; arrivé ailleurs entre deux essais, ses suiveurs restés au départ sont recliqués, pas crus perdus.
+    screen = Screen()
+    foret = load_frame("hors_combat_foret")
+    a, b = member("A", screen, foret), member("B", screen, foret)
+    a.game.net, b.game.net = _heard("A", 1906), _heard("B", 1906)
+    bot = team_bot(a, b, engage=False)
+    bot._dispatch("droite", (27, 9), foret, 0)
+    a.game.net.map_id = 1911  # le principal annoncé sur la carte suivante
+    bot._dispatch("droite", (27, 9), foret, 1)
+    assert [e[0] for e in events(screen, "click")] == ["B", "B"] and not bot._lost
+
+
+def test_follower_walking_by_the_server_is_not_clicked_again():
+    screen = Screen()
+    foret = load_frame("hors_combat_foret")
+    a, b = member("A", screen, foret), member("B", screen, foret)  # même décor : l'écran le croirait immobile
+    a.game.net, b.game.net = _heard("A", 1906), _heard("B", 1906)
+    bot = team_bot(a, b, engage=False)
+    bot._dispatch("droite", (27, 9), foret, 0)
+    b.game.net.feed("GA0;1;1;aaKdb4ccvdcXcfcbhj")  # son déplacement annoncé
+    bot._dispatch("droite", (27, 9), foret, 1)
+    assert [e[0] for e in events(screen, "click")] == ["B"]
+
+
+def test_follower_sun_click_unanswered_by_the_server_is_clicked_again(monkeypatch):
+    monkeypatch.setattr("bot.team.loop.NET_SUN_SILENT", 0)
+    monkeypatch.setattr("bot.team.loop.RECLICK_EVERY", 99)  # l'écran seul ne le recliquerait pas encore
+    screen = Screen()
+    champs, foret = load_frame("hors_combat"), load_frame("hors_combat_foret")
+    a = member("A", screen, foret)
+    b = member("B", screen, champs)
+    b.game.net = _heard("B", 1906)
+    bot = team_bot(a, b, engage=False)
+    bot._wait_followers([(b, champs, time.monotonic())], Crossing("droite", (24, 12), read_map_label(champs),
+                                                                   read_map_label(foret)))
+    assert len([e for e in events(screen, "click") if e[0] == "B"]) == 2  # FOLLOWER_RECLICKS, puis son trajet
+    assert "B" in bot._lost
+
+
 def test_followers_click_in_a_random_order_with_the_capture_taken_before_their_click(monkeypatch):
     # 20/10 : toujours les mêmes derniers cliqués (Pombro, Vertdepomme, Vieenjaune), donc les derniers arrivés. Ordre
     # tiré au hasard à chaque carte. Capture de départ : celle d'avant le clic, sans en reprendre une après.
@@ -1899,10 +1988,11 @@ def test_out_of_combat_screen_does_not_end_a_fight_the_server_says_is_on(monkeyp
     a = member("A", screen, out)
     bot = team_bot(a)
     bot.my_team = RED
-    told = iter([False, False, False, True, True])
+    told = iter([False, False, False, True])
     monkeypatch.setattr(TeamBot, "_fight_told", staticmethod(lambda fighters, began: next(told)))
     assert bot._turns([a]) is None
     assert next(told, "fini") == "fini"  # rendu seulement une fois la fin dite par le serveur
+    assert bot._told_end  # fenêtres de résultat fermées d'après le serveur (_close_told_results)
 
 
 def test_join_refusal_from_the_server_is_written_in_the_log():

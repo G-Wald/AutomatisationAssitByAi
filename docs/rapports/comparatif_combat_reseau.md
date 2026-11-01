@@ -168,6 +168,29 @@ Farm de 50 minutes (logs/20261101_113029, forêt d'Astrub, 7 cartes) :
   - Voir le relief en jeu sur 0,-23.
   - Accélérer la fermeture des fenêtres « résultat du combat » : environ 1,4 s par fenêtre, l'une après l'autre.
 
+## Fin de combat et suiveurs d'après le serveur (01/11, après-midi)
+
+- **Fenêtres de résultat** : le serveur annonce la fin du combat (GE). La carte est rechargée environ 3,5 s plus tard
+  (GDK, mesuré dans les 8 fenêtres du journal 113029), et la fenêtre de résultat ne s'ouvre qu'après.
+  - Avant, le bot concluait « fini sans fenêtre de résultat » 1 s après GE, pour 24 combats sur 31. Le principal
+    repartait au combat suivant pendant que les suiveurs fermaient leur fenêtre une par une (environ 1,7 s chacun).
+  - Une fenêtre en train de s'ouvrir était même prise pour une fenêtre inconnue et fermée avec Échap.
+  - Maintenant, le bot attend GDK dans chaque fenêtre (8 s au plus). Il regarde ensuite toutes les fenêtres à tour de
+    rôle et clique « Fermer » dès que le bouton est immobile sur deux regards. Il revoit chaque fenêtre après le
+    clic, et reclique si elle est encore là. Pas vue en 4 s : le tour des fenêtres s'en charge, comme avant.
+  - Le serveur ne dit rien de la fermeture : c'est une fenêtre du jeu seulement, et l'écoute n'entend que le serveur.
+    Seul l'écran confirme la fermeture.
+- **Suiveurs** :
+  - La carte de départ du principal est relevée d'après le serveur au premier clic du passage, et chaque suiveur est
+    comparé à ce numéro de carte.
+  - Un suiveur dont le déplacement est annoncé (GA0;1) ou la carte changée n'est plus recliqué. Avant, le bot
+    jugeait au décor.
+  - Clic sur le soleil sans déplacement annoncé en 1 s : pas pris, recliqué aussitôt, sans attendre de le voir
+    immobile.
+  - L'arrivée était déjà jugée par le serveur (GDM dans la fenêtre du suiveur).
+- **PA** : avec l'écoute, les PA viennent du serveur (GTM, GA;102), et un sort n'est cru parti que sur ses PA
+  dépensés annoncés après son clic. La baisse de PA du sort précédent ne peut plus être prise pour celle du suivant.
+
 ## Trouvé pendant le comparatif
 - Branche : « Je ne vois pas d'ennemi » (16 fois, avec capture) pendant l'invisibilité : corrigé (plus de capture ni
   de second regard quand le serveur dit l'ennemi invisible).
