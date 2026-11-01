@@ -1019,3 +1019,22 @@ def test_map_coords_from_the_client_language_only_for_outdoor_maps_of_the_region
     assert client_coords(500, douze, maps) is None  # intérieur
     assert client_coords(9000, douze, maps) is None and client_coords(9000, incarnam, maps) == (1, 1)  # autre continent
     assert client_coords(1856, None, maps) is None and client_coords(4242, douze, maps) is None
+
+
+def test_zone_mode_takes_another_exit_after_a_failed_one():
+    # 01/11 (journal 181347) : soleil de droite de -2,-28 caché sous un Frêne ; passage officiel, jamais noté bloqué,
+    # repris 40 fois. Le côté raté est écarté un moment : une autre sortie de la zone.
+    maps = {(0, 0): "Forêt", (1, 0): "Forêt", (0, 1): "Forêt"}
+    sim = SimTraveler(maps, (0, 0))
+    tried = []
+    real_go = sim.go
+
+    def go(frame, label, side, exits=None):
+        tried.append(side)
+        return None if len(tried) == 1 else real_go(frame, label, side, exits)  # le premier passage rate
+
+    sim.go = go
+    roamer = ZoneRoamer(sim)
+    roamer.step()
+    roamer.step()
+    assert len(tried) == 2 and tried[1] != tried[0] and sim.pos != (0, 0)

@@ -1578,6 +1578,7 @@ class ZoneRoamer:
         self.world = traveler.world
         self.zone_name: str | None = None
         self.leaving = "Plus de groupe ici"  # pourquoi on change de carte (journal) ; récolte : brain/loop.py
+        self._failed_sides: dict[tuple[str | None, str], float] = {}  # (carte, côté) raté -> écarté jusqu'à
         self.came_from: str | None = None
         self.done = False
         self._warned = False
@@ -1754,7 +1755,8 @@ class ZoneRoamer:
             # Zone décrite dans les références : une carte voisine inconnue d'elles n'est pas dans la zone.
             out_of_zone = dest_zone != self.zone_name if described else (dest_zone is not None and dest_zone != self.zone_name)
             excluded = (self.world.destination(key, side) == BLOCKED or out_of_zone
-                        or bool(self.traveler.forbidden_side(side)))
+                        or bool(self.traveler.forbidden_side(side))
+                        or time.monotonic() < self._failed_sides.get((key, side), 0.0))
             return (excluded, side == self.came_from, self.world.last_seen(dest_key))
 
         choices = sorted((s for s in exits if not rank(s)[0]), key=rank)
@@ -1775,8 +1777,16 @@ class ZoneRoamer:
         log.info("%s : carte du %s (%s,%s, zone %s)", self.leaving, side, *self.traveler.neighbour(side), self.zone_name)
         if self.traveler.go(frame, label, side, exits) is not None:
             self.came_from = OPPOSITE[side]
+        else:
+            # 01/11 (journal 181347) : soleil du côté droit de -2,-28 caché sous un Frêne (le clic ouvre son menu),
+            # passage officiel donc jamais noté bloqué : repris 40 fois, l'équipe bloquée 2 min deux fois. Côté écarté
+            # FAILED_SIDE_FOR s : une autre sortie de la zone d'abord.
+            self._failed_sides[(key, side)] = time.monotonic() + FAILED_SIDE_FOR
+            log.info("Sortie du %s ratée : je prends une autre sortie de la zone pendant %.0f min", side,
+                     FAILED_SIDE_FOR / 60)
 
 
+FAILED_SIDE_FOR = 600.0  # s : côté d'une carte écarté du mode zone après un passage raté (ZoneRoamer.step)
 # Itinéraire (Journey._cost) : passage jamais pris, et entrée dans une autre zone que celles du départ et de l'arrivée.
 UNCONFIRMED_COST, ZONE_COST = 2.0, 2.0
 # Référence complétée (data/references, tools/reference_complete.py : sorties StarLoco contrôlées sur les cartes

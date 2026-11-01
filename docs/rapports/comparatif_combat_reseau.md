@@ -238,6 +238,21 @@ Farm de 50 minutes (logs/20261101_113029, forêt d'Astrub, 7 cartes) :
   - En cité d'Astrub (21 ratés sur 29), la cause reste à voir sur des captures.
 - Fenêtres de résultat : 8 sur 8 à chaque combat, en 3,3 s en moyenne depuis la carte rechargée.
 
+### Farm de 40 minutes (journal 181347)
+
+- 30 combats, 0 mort, 0 erreur ; 1,62 sort par tour.
+- **Prêt** : 240 appuis, tous confirmés par le serveur, 0 reclic.
+- **Fenêtres de résultat** : 30 fois 8 sur 8, en 3,0 s en moyenne.
+- **Écoute** : 68 767 messages, 35 paquets renvoyés écartés, 0 message au début anormal.
+- **Attaques** : 4 ratées sur 33 (12 %), contre 20 % à l'essai d'avant, avec la visée à 18 px d'abord.
+  - Les ratés restants : un petit Champ Champ caché par un buisson, et un groupe absent du point visé (parti ?).
+- **Passage raté repris 40 fois** :
+  - le soleil de droite de -2,-28, case (27,15), est caché sous un Frêne, et le clic ouvre son menu « Couper » ;
+  - le passage est officiel, donc jamais noté bloqué : le mode zone le reprenait à chaque fois, et l'équipe est
+    restée bloquée 2 minutes, deux fois ;
+  - corrigé : un côté raté est écarté 10 minutes, une autre sortie de la zone d'abord ;
+  - à faire : viser un soleil qu'un objet du décor recouvre (cases connues par la carte du client).
+
 ## Trouvé pendant le comparatif
 - Branche : « Je ne vois pas d'ennemi » (16 fois, avec capture) pendant l'invisibilité : corrigé (plus de capture ni
   de second regard quand le serveur dit l'ennemi invisible).
