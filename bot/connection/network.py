@@ -1088,7 +1088,12 @@ def segment(raw: bytes, link: int) -> tuple[int, int, bytes] | None:
     if len(raw) < tcp + 20:
         return None
     dport, seq = struct.unpack("!HI", raw[tcp + 2:tcp + 8])
-    return dport, seq, raw[tcp + (raw[tcp + 12] >> 4) * 4:]
+    # Longueur du paquet d'après l'en-tête IP : une petite trame Ethernet est complétée jusqu'à 60 octets (01/11,
+    # journal 144405 : ce remplissage compté comme données, le numéro TCP attendu passait trop loin, et fresh_part
+    # jetait le début du segment suivant, « GA;129 » lu « ;129 », PM perdus jamais comptés).
+    total = struct.unpack("!H", raw[off + 2:off + 4])[0]
+    end = off + total if total else len(raw)
+    return dport, seq, raw[tcp + (raw[tcp + 12] >> 4) * 4:end]
 
 
 def payloads(raw: bytes, link: int) -> tuple[int, bytes] | None:

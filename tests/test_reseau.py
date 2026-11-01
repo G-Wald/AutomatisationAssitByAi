@@ -516,3 +516,15 @@ def test_a_retransmitted_tcp_segment_is_read_once():
     assert fresh_part(1010, 1020, b"GTF\x00") == (b"GTF\x00", 1024)  # trou (segment perdu) : lu quand même
     assert fresh_part(1024, 3_000_000_000, b"GDK\x00") == (b"GDK\x00", 3_000_000_004)  # nouvelle connexion
     assert fresh_part((1 << 32) - 2, (1 << 32) - 2, b"ABCD") == (b"ABCD", 2)  # numéro qui reboucle
+
+
+def test_ethernet_padding_is_not_tcp_data():
+    # 01/11 (journal 144405) : accusé de réception sans données, trame complétée à 60 octets ; ce remplissage compté
+    # comme données faisait jeter le début du segment suivant (« GA;129 » lu « ;129 »).
+    from bot.connection.network import fresh_part, segment
+
+    ip = bytes([0x45, 0, 0, 40, 0, 0, 0, 0, 64, 6, 0, 0, 34, 253, 140, 241, 192, 168, 1, 71])  # 20 + 20 octets
+    tcp = (443).to_bytes(2, "big") + (49701).to_bytes(2, "big") + (1000).to_bytes(4, "big") + bytes(4) \
+        + bytes([0x50, 0x10]) + bytes(6)
+    assert segment(bytes(14) + ip + tcp + bytes(6), 1) == (49701, 1000, b"")
+    assert fresh_part(1000, 1000, b"GA;129;1;1,-3\x00") == (b"GA;129;1;1,-3\x00", 1014)

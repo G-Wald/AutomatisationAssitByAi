@@ -2843,7 +2843,10 @@ class CombatAI:
             # Chemin annoncé par le serveur (GA0;1, sa dernière case) dès le départ ; la marche dure per_cell_moved s
             # par case : attendue, sans chercher mon cercle à l'écran.
             # Une mort avec mon dernier sort (pas encore de sort : -inf, aucune).
-            killed = self._served_at > 0 and getattr(net, "death_at", 0.0) >= self._served_at
+            # Un déplacement annoncé depuis la mort : son animation est finie (01/11, journal 144405 : Pesopepe, 6 s
+            # attendues deux fois pour un clic suivant un autre déplacement).
+            death = getattr(net, "death_at", 0.0)
+            killed = self._served_at > 0 and death >= self._served_at and getattr(net, "moved_at", 0.0) < death
             timeout = DEATH_MOVE_WAIT if killed else NET_MOVE_SILENT if quick else ARRIVAL_CHECKS * ARRIVAL_EVERY
             moved = net.wait_for(("moved_at", "tackled_at"), self._walk_clicked_at, timeout)
             if moved is not None and net.tackled_at >= self._walk_clicked_at:

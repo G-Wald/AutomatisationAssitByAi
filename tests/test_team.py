@@ -2114,3 +2114,22 @@ def test_a_result_window_left_open_is_closed_before_the_follower_clicks_the_sun(
     bot = team_bot(a, b, engage=False)
     bot._dispatch("droite", (27, 9), foret, 0)
     assert len(handled) == 1 and len(events(screen, "click")) == 1 and not bot._lost
+
+
+def test_told_result_seen_late_is_looked_at_again_after_the_deadline(monkeypatch):
+    # 01/11 (journal 144405) : Eldieso regardé avant l'ouverture de sa fenêtre, délai passé avant son tour suivant.
+    monkeypatch.setattr("bot.team.loop.RESULT_OPEN_WAIT", 1.0)
+    screen = Screen()
+    result, out = load_frame("coeur_43pv"), load_frame("hors_combat")
+    late, leader = member("A", screen, out, result), member("B", screen, result)
+
+    def slow_look(original):
+        def look(*args, **kwargs):
+            time.sleep(1.1)  # le délai passe pendant le premier tour
+            return original(*args, **kwargs)
+        return look
+
+    late.game.look = slow_look(late.game.look)
+    bot = team_bot(leader, late)
+    bot._close_told_results([late, leader])
+    assert sorted(e[0] for e in events(screen, "click")) == ["A", "B"]

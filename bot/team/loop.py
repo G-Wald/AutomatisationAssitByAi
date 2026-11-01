@@ -2352,7 +2352,12 @@ class TeamBot:
         tolerance = 3  # px de référence
         start = time.monotonic()
         deadline = start + RESULT_OPEN_WAIT
-        while left and time.monotonic() < deadline:
+        # 01/11 (journal 144405) : Eldieso regardé en premier, fenêtre pas encore ouverte, délai passé avant son tour
+        # suivant. Une fois un bouton vu immobile, chaque fenêtre restante est regardée au moins une fois de plus.
+        rounds_after = 0  # tours entiers commencés une fois `place` connue
+        while left and (time.monotonic() < deadline or
+                        (place is not None and rounds_after < 1 and time.monotonic() < deadline + RESULT_OPEN_WAIT)):
+            known = place is not None
             for member, frame, seen in _popup_views(left):
                 if seen is None:
                     continue  # pas encore ouverte
@@ -2374,6 +2379,7 @@ class TeamBot:
                 member.game.click(seen.close_point, seen.close_spread)
                 member.popups.closed_elsewhere(RESULT)
                 left.remove(member)
+            rounds_after += known
             if left:
                 self.leader.game.sleep(0.05)
         log.info("Fenêtre « %s » : « Fermer » cliqué chez %d/%d en %.1f s (fin d'après le jeu)", RESULT,

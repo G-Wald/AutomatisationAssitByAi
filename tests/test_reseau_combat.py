@@ -408,6 +408,10 @@ def test_after_a_kill_the_move_is_awaited_longer_without_quick_reclick(caplog):
     ai._walk_clicked_at = time.monotonic()
     ai._wait_arrival(me, (15, 19), 1, quick=True)
     assert calls == [combat.DEATH_MOVE_WAIT]
+    # 01/11 (journal 144405, Pesopepe) : un déplacement annoncé depuis la mort, l'animation est finie : attente courte.
+    feed.moved_at = time.monotonic()
+    ai._wait_arrival(me, (15, 19), 1, quick=True)
+    assert calls[-1] == combat.NET_MOVE_SILENT
 
 
 def test_a_critical_failure_gives_no_range_bonus():
