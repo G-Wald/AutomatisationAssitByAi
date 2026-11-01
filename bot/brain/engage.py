@@ -67,10 +67,11 @@ ATTACK_ENTRY, ATTACK_SPREAD = "menu_attaquer.png", (22, 5)
 # Groupe dont le 1er point visé est à moins de TOP_GROUP_BAND px de référence du haut de la carte : épée du combat
 # coupée par le bord ou sous le nom de la carte (95 px), pas attaqué (Engager._not_at_the_top).
 TOP_GROUP_BAND = 150
-# Clic sur un groupe annoncé par le serveur (_engage_by_net) : au-dessus du centre de sa case de 0, puis 18, puis 36 px
+# Clic sur un groupe annoncé par le serveur (_engage_by_net) : au-dessus du centre de sa case de 18, puis 36, puis 0 px
 # de référence selon les ratés (26/10, Porkass : 6 clics sur 9 au centre de la case sans combat, le corps d'un gros
-# monstre est dessiné au-dessus de sa case).
-NET_AIM_UP = (0, 18, 36)
+# monstre est dessiné au-dessus de sa case ; 01/11, journal 174517 : 2 captures du raté, le point visé au centre aux
+# pieds du monstre, sur l'herbe, menu de Flash ; son corps commence au-dessus).
+NET_AIM_UP = (18, 36, 0)
 # Ratés d'un groupe oubliés après ce délai (s) : 31/10, donjon Bouftou, le groupe d'une salle réapparaît avec le même
 # numéro (-1) après avoir été pris par d'autres joueurs ; 3 ratés l'écartaient pour toujours, l'équipe 15 min bloquée.
 NET_MISS_FORGET = 90.0

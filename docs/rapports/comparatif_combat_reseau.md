@@ -225,6 +225,19 @@ Farm de 50 minutes (logs/20261101_113029, forêt d'Astrub, 7 cartes) :
     banque (cité d'Astrub) pour la zone de combat au retour ;
   - corrigé : la zone est retenue avant de partir.
 
+### Essai du soir (journal 174517) : Prêt, attaques ratées, état de l'écoute
+
+- Trajet de l'équipe de 1,-17 à 3,-26 (15 cartes) en 3 min, puis 16 combats en 20 min, 0 mort, 0 erreur.
+- **Prêt confirmé par le serveur** : 128 appuis, tous annoncés (`GR1`), 0 reclic nécessaire, 0 appui évité.
+- **Écoute** : 44 019 messages, 6 paquets renvoyés écartés (1446 octets), 0 message au début anormal (correctif des
+  trames complétées confirmé).
+- **Attaques ratées** (menu de Flash) : 4 sur 20.
+  - Les 3 captures montrent le point visé au centre de la case, aux pieds du monstre, sur l'herbe, avec le corps
+    au-dessus.
+  - Hauteurs de visée maintenant 18, 36 puis 0 px (au lieu de 0, 18, 36) : pas encore essayé en jeu.
+  - En cité d'Astrub (21 ratés sur 29), la cause reste à voir sur des captures.
+- Fenêtres de résultat : 8 sur 8 à chaque combat, en 3,3 s en moyenne depuis la carte rechargée.
+
 ## Trouvé pendant le comparatif
 - Branche : « Je ne vois pas d'ennemi » (16 fois, avec capture) pendant l'invisibilité : corrigé (plus de capture ni
   de second regard quand le serveur dit l'ennemi invisible).
