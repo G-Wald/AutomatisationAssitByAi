@@ -253,6 +253,16 @@ Farm de 50 minutes (logs/20261101_113029, forêt d'Astrub, 7 cartes) :
   - corrigé : un côté raté est écarté 10 minutes, une autre sortie de la zone d'abord ;
   - à faire : viser un soleil qu'un objet du décor recouvre (cases connues par la carte du client).
 
+### Farm de vérification de 30 minutes (journal 190416)
+
+- 25 combats en 30 min, banque comprise (8 sur 8 au coffre, 3 min 20 aller-retour), 0 mort, 0 erreur.
+- **Soleil caché sous l'arbre** (-2,-28) : raté une fois, côté écarté, une autre sortie prise ; 0 blocage (2 de 2 min
+  au farm d'avant), 18 avertissements au lieu de 67.
+- **Attaques** : 1 ratée sur 27 (4 %).
+- **Prêt** : 200 appuis, tous confirmés par le serveur.
+- **Fenêtres de résultat** : 25 fois 8 sur 8, en 3,1 s.
+- **Écoute** : 64 766 messages, 17 paquets renvoyés écartés, 0 message au début anormal.
+
 ## Trouvé pendant le comparatif
 - Branche : « Je ne vois pas d'ennemi » (16 fois, avec capture) pendant l'invisibilité : corrigé (plus de capture ni
   de second regard quand le serveur dit l'ennemi invisible).
