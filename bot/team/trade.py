@@ -251,9 +251,11 @@ class Trader:
         game.sleep(MENU_WAIT)
         frame = game.look(park=False)
         length = frame.layout.length
-        x0, y0, x1, y1 = frame.layout.map_box
-        box = (max(x0, round(portrait[0] + length(MENU_BOX[0]))), max(y0, round(portrait[1] + length(MENU_BOX[1]))),
-               min(x1, round(portrait[0] + length(MENU_BOX[2]))), min(y1, round(portrait[1] + length(MENU_BOX[3]))))
+        # Bornes de la fenêtre, pas de la carte : 05/11, le menu de la 8e miniature (Elseiso) descend sous la carte,
+        # « Echange » à y=848 hors de la zone lue (coupée à « Message privé ») ; échange jamais demandé.
+        height, width = frame.image.shape[:2]
+        box = (max(0, round(portrait[0] + length(MENU_BOX[0]))), max(0, round(portrait[1] + length(MENU_BOX[1]))),
+               min(width, round(portrait[0] + length(MENU_BOX[2]))), min(height, round(portrait[1] + length(MENU_BOX[3]))))
         where = _exchange_line(frame, box)
         if where is None:
             menu, where = max(best_text(frame, "Echange", dark=True, box=box),

@@ -187,3 +187,22 @@ def test_resources_left_come_from_the_server_bag():
     giver_net.feed("ECK1")
     giver_net.feed("EMKO+170|134")  # tous offerts
     assert not trader._resources_left()  # le marteau équipé n'est pas une ressource
+
+
+def test_exchange_line_of_the_last_miniature_below_the_map_is_found(monkeypatch):
+    # 05/11 (capture d'Eldieso) : le menu de la 8e miniature (Elseiso) descend sous la carte, « Echange » à y=848 ;
+    # la zone lue coupée au bas de la carte ne l'avait pas, l'échange n'était jamais demandé.
+    from types import SimpleNamespace
+
+    from bot.team import trade
+    from conftest import load_frame
+
+    frame = load_frame("menu_miniature_8_sous_la_carte")
+    clicked = []
+    game = SimpleNamespace(look=lambda park=False: frame, click=lambda point, spread=None: clicked.append(point),
+                           sleep=lambda s: None)
+    trader = trade.Trader.__new__(trade.Trader)
+    trader.giver = SimpleNamespace(game=game)
+    monkeypatch.setattr(trade, "close_portrait_menu", lambda g: True)
+    assert trader._ask(7)
+    assert 1650 <= clicked[-1][0] <= 1780 and 835 <= clicked[-1][1] <= 865  # la ligne « Echange »

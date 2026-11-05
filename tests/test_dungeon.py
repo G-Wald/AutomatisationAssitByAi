@@ -448,3 +448,21 @@ def test_waves_fight_one_after_the_other_each_launched_by_its_strongest(monkeypa
     monkeypatch.setattr(farm, "_levels", lambda: levels)
     assert farm._fight_in_waves(3) == 2
     assert fought == [("A", ["A", "B"]), ("C", ["C", "D", "E"])] and bot.fighting_only is None
+
+
+def test_member_in_front_of_an_outside_npc_located_by_the_map_label_without_the_server_map(monkeypatch):
+    # 05/11 : fenêtres déjà connectées, pas de changement de carte : carte du serveur inconnue, les 8 crus ailleurs.
+    from types import SimpleNamespace
+
+    from bot.connection.network import ClientFeed
+    from bot.perception import maplabel
+
+    spec = load_dungeons()["champs"]
+    screen = Screen()
+    hero = member("A", screen, load_frame(OUTSIDE))
+    hero.game.net = ClientFeed("A")
+    hero.game.net.heard_at = __import__("time").monotonic()
+    monkeypatch.setattr(maplabel, "read_map_label", lambda frame: SimpleNamespace(coords=(7, -25)))
+    assert DungeonEntry([hero], spec).locate(hero) == "pnj"
+    monkeypatch.setattr(maplabel, "read_map_label", lambda frame: SimpleNamespace(coords=(4, -16)))
+    assert DungeonEntry([hero], spec).locate(hero) is None

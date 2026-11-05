@@ -600,3 +600,20 @@ Restent ouvertes :
   alors que les deux étaient en 7,-25 d'après le serveur. Cause pas encore vue.
 - Le bot s'est arrêté avant l'entrée, comme prévu : rien consommé, personne entré.
 - État des sacs à la fin : chacun a sa Clef des Champs, sauf Elseiso ; Eldieso en a 2.
+
+### 05/11, soir : premier passage complet du donjon des Champs, à 8 (journal 200925)
+
+- **Échange vers Elseiso** : le menu de la 8e miniature descend sous la carte, et « Echange » (y=848) était hors de
+  la zone lue, limitée à la carte. Zone limitée à la fenêtre : échange conclu.
+- **Sac mal compté** : la clé prise au coffre pendant l'observation (processus séparé) n'avait pas été entendue par le
+  bot ; la clé reçue ensuite s'était empilée dessus (`OQ36102380|2`, sans modèle). Ajoutée au sac mémorisé de Walitcoin
+  d'après ces messages du serveur.
+- **Situer l'équipe** : fenêtres déjà connectées, aucune carte annoncée ; les coordonnées lues à l'écran (7,-25)
+  situent chacun devant Mawy.
+- **Le passage** : entrée à 8 en 22 s (« Donner la clef et rentrer »), puis 7 salles.
+  - Salle 3, en 3 vagues : Waldarch et Elseiso, puis Fourboun, Enu-six et Eldieso, puis Fourbodeux, Walitcoin et
+    Pesopepe.
+  - Salle 5, en 2 vagues de 4.
+  - Boss battu.
+  - Sortie par la case (27,17) de la salle de fin : les 8 dehors (carte 7452).
+- 10 combats en 17 min 40, 0 mort, 0 erreur, 0 déplacement sans bouger.

@@ -135,6 +135,14 @@ class DungeonEntry:
         if self.spec.npc_map is not None and here is not None:
             # 30/10 : carte annoncée par le serveur, plutôt que le décor (pas de décor de référence pour Bouftou).
             return "pnj" if here == self.spec.npc_map else None
+        if self.spec.npc_map is not None:
+            # 05/11 : fenêtres déjà connectées au lancement, aucun changement de carte depuis : carte du serveur
+            # inconnue, les 8 crus « ailleurs ». Le PNJ se tient dehors (Altaïr, Mawy) : coordonnées lues à l'écran.
+            from bot.perception.maplabel import read_map_label
+
+            label = read_map_label(member.game.look(park=False))
+            if label is not None and label.coords == self.spec.outside:
+                return "pnj"
         scene = _scene(member.game.look(park=False))
         gaps = {step: _gap(scene, ref) for step, ref in self._places().items()}
         step = min(gaps, key=gaps.get, default=None)
