@@ -378,7 +378,7 @@ class Trader:
     def offer_item(self, template: int, count: int) -> bool:
         """Pose exactement `count` objets du modèle `template` (clés de donjon, 30/10) : onglet ressources, type
         « Clefs » dans la liste des types du sac de l'échange, une unité d'abord, vérifiée chez le receveur (EmKO :
-        uid -> modèle), puis le reste par la fenêtre de quantité ; vérifié encore (quantité offerte = `count`). False au
+        uid -> modèle), puis le reste un double-clic par unité (05/11) ; vérifié encore (quantité offerte = `count`). False au
         moindre écart : l'appelant annule l'échange (cancel), rien ne change de main. La liste des types est remise sur
         « Tous types » dans tous les cas."""
         game, net = self.giver.game, self.giver.game.net
@@ -410,9 +410,13 @@ class Trader:
                 log.warning("Échange %s -> %s : objet %s posé au lieu de %d (place de la pile ?) : annulé",
                             self.giver.name, self.taker.name, model, template)
                 return False
-            if count > 1 and self._put(count - 1, start) is None:
-                log.warning("Échange %s -> %s : le reste (%d) pas posé", self.giver.name, self.taker.name, count - 1)
-                return False
+            # 05/11 (journal 203000) : le reste par la fenêtre de quantité (glisser) ne s'ouvrait pas, l'échange
+            # restait en suspens et les 6 suivants ratés derrière. Un double-clic par unité, chacun vu par le serveur.
+            for placed in range(1, count):
+                if self._put(None, start) is None:
+                    log.warning("Échange %s -> %s : le reste pas posé (%d sur %d)", self.giver.name, self.taker.name,
+                                placed, count)
+                    return False
             offered = self._received().get(uid, (template, 0))[1]
             if offered != count:
                 log.warning("Échange %s -> %s : %d objet(s) %d offerts au lieu de %d : annulé", self.giver.name,
