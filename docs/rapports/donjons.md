@@ -547,3 +547,42 @@ Restent ouvertes :
 3. Imthebest remplacé, ou gardé (échanges pour ses clés et ses ressources, jamais seul en salle 3) ?
 4. Pods maximum de chacun.
 5. Accord pour **télécharger les images** des clés proposées en 3.5, ou préférence pour les dessins locaux (2.5).
+
+## 05/11 : donjon des Champs, premier essai (session d'une heure)
+
+### Observé en jeu (Fourboun, `tools/observer_pnj.py`, rien consommé)
+
+- Mawy Ingalsse (modèle 780) se tient **dehors**, en 7,-25 (carte 7453), case 187, soit (26,12).
+  - Clic gauche, menu « Parler », question 3178.
+  - Réponses proposées : « Donner la clef et rentrer » (2802) et « Utiliser le trousseau de clefs. » (6615).
+  - La bulle a été refermée sans répondre.
+- La porte en (18,12) mène à l'atelier (carte 7613) d'Emia Elliesol (558) : ce n'est pas l'entrée.
+  - On en sort par la case 367, soit (9,25).
+- Sacs, d'après la connexion :
+  - Fourboun a 1 Clef des Champs, et chacun des 8 a un trousseau.
+  - Les **coffres** contiennent des Clefs des Champs chez au moins 7 personnages : le serveur liste leur pile.
+
+### Ajouté
+
+- `config/donjons_entree.yaml` : entrée `champs`, d'après ce qui a été observé. La sortie se fait par une case de la
+  salle de fin (`sortie_case`, case 260 de 9786, d'après les données StarLoco locales : **à vérifier en jeu**).
+- **Combats en vagues** (demande de l'utilisateur : à 8, le bot passe les salles à peu de places, et les plus hauts
+  niveaux vont en plus petit nombre) :
+  - places de chaque salle d'après la référence du client : salle 3 à 3, salle 5 à 4 ;
+  - vagues de tailles aussi égales que possible, les plus forts dans les plus petites. Salle 3 : Waldarch et Elseiso,
+    puis Fourboun, Eldieso et Fourbodeux, puis Walitcoin, Enu-six et Pesopepe ;
+  - chaque vague lance le combat par son plus haut niveau, et seuls ses membres le rejoignent ;
+  - la vague suivante attend la réapparition du groupe (3 min au plus) ;
+  - pas encore essayé en jeu.
+- **Corrigé** : le trajet de l'équipe vers la banque ou le donjon (`team_trip`) ne faisait pas suivre les suiveurs.
+  Le principal est arrivé seul à la banque, « pas entré dans la banque » pour les 7 autres, et le trajet a été cru
+  réussi. Vérifié en jeu au second essai : toute l'équipe suit.
+
+### Ce qui bloque encore : les clés des coffres
+
+- 7 coffres ouverts sur 7, mais « la pile de clés n'a pas quitté le coffre d'après le serveur » chez chacun : le
+  glisser du coffre vers le sac ne prend pas. La fermeture passe ensuite par Échap, qui ouvre le Menu principal.
+- Eldieso : la bulle du banquier s'est refermée sans ouvrir le coffre (127 kamas par consultation : assez de kamas ?).
+- Le bot s'est donc arrêté avant l'entrée, comme prévu (1 clé pour 8 personnages) : rien n'a été consommé.
+- À faire : observer le glisser du coffre (captures avant/après, messages du serveur), sans la souris de l'utilisateur
+  sur une fenêtre du jeu (elle casse les glisser en arrière-plan, 30/10).

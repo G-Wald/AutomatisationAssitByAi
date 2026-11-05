@@ -469,6 +469,7 @@ class TeamBot:
         self._overtime_warned = False
         self._result_unseen = False  # dernier combat fini sans fenêtre de résultat vue
         self._told_end = False  # dernier combat fini d'après le serveur (_close_told_results)
+        self.fighting_only: set[str] | None = None  # combat en vagues (donjon) : seuls ces personnages le rejoignent
         self._ready_pressed: dict[str, float] = {}  # heure du dernier appui sur Prêt de chacun (_confirm_ready)
         self._departure_map: int | None = None  # carte quittée par le principal d'après le serveur (_dispatch)
         self._result_check_at: float | None = None  # ... et rien fermé chez le principal : nouveau regard à cette heure
@@ -1512,6 +1513,7 @@ class TeamBot:
                 self._stop_reason = f"personne n'a rejoint le combat de {host.name}"
         else:
             fighters = [host] + [m for m in self.members if m is not host
+                                 and (self.fighting_only is None or m.name in self.fighting_only)
                                  and read_scene(m.game.look(park=False)).phase is not Phase.OUT_OF_COMBAT]
             log.info("Combat déjà commencé : %s", ", ".join(m.name for m in fighters))
         self._told_end = False
@@ -1546,7 +1548,9 @@ class TeamBot:
         self.joiner.host_id = getattr(getattr(host.game, "net", None), "my_id", None)  # son épée, d'après le serveur
         # 21/10 : épées déjà là avant son clic d'attaque (sa capture d'avant ce clic) : d'autres combats, écartés.
         self.joiner.ignore_swords_before(getattr(host.game, "map_click_frame", None), hint)
-        others = [m for m in self.members if m is not host]
+        # Donjon, salle à peu de places (05/11, team/dungeon.py, combats en vagues) : seuls ceux de la vague rejoignent.
+        others = [m for m in self.members if m is not host and (self.fighting_only is None
+                                                                or m.name in self.fighting_only)]
         self._send_help(host, others)
         # Tous rejoignent d'abord, l'un après l'autre sans s'attendre (cases tirées au hasard par le jeu).
         asked = [m for m in others if self.joiner.ask(m, hint)]

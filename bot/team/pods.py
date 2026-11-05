@@ -113,7 +113,13 @@ def team_trip(bot, goal: tuple[int, int], why: str) -> bool:
     saved = bot.roamer, bot.engager, bot.travel_settings, bot.finished
     settings = replace(bot.travel_settings, mode="aller", destination=goal, start=None)
     log.info("%s : trajet de l'équipe jusqu'à %s,%s", why, *goal)
-    bot.travel_settings, bot.roamer, bot.engager, bot.finished = settings, make_roamer(bot.leader.game, settings), None, False
+    roamer = make_roamer(bot.leader.game, settings)
+    if roamer is not None and hasattr(bot, "_dispatch"):
+        # 05/11 (journal 192048) : nouveau voyageur sans ces branchements, les suiveurs ne cliquaient plus les soleils ;
+        # le principal est arrivé seul à la banque, « pas entré dans la banque » pour les 7 autres (restés en route).
+        roamer.traveler.on_crossed = bot._crossed
+        roamer.traveler.on_click = bot._dispatch
+    bot.travel_settings, bot.roamer, bot.engager, bot.finished = settings, roamer, None, False
     step = getattr(bot, "safe_step", bot.step)
     end = time.monotonic() + TRIP_TIMEOUT
     try:

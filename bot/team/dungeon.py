@@ -49,6 +49,12 @@ BUTTONS = {"gauche": "left", "droit": "right"}
 PLACES_DIR = Path(__file__).resolve().parents[1] / "perception" / "assets" / "donjons"  # décors de référence
 PLACES = {"entree": "dehors, devant l'entrée", "dalle": "salle des dalles", "pnj": "salle du PNJ"}  # étapes situables
 SAME_ROOM_WAIT = 5.0  # s : toute l'équipe annoncée sur la carte du principal après une salle gagnée
+# Salles à peu de places (05/11, donjon des Champs : salle 3 à 3 joueurs, salle 5 à 4 ; utilisateur : « le bot doit se
+# débrouiller pour passer les salles où il y a moins de place, les plus haut level sont plus forts donc peuvent être
+# moins par salle ») : l'équipe combat par vagues, le groupe de la salle réapparaissant après chaque victoire.
+ROOMS_FILE = ROOT / "data" / "donjons.json"  # référence du client : places de chaque salle (placement p1 : joueurs)
+RESPAWN_WAIT = 180.0  # s au plus : le groupe de la salle réapparu, pour la vague suivante
+WAVE_RETRY = 3.0  # s entre deux recherches du groupe pendant l'attente de sa réapparition
 SAME_PLACE = 12.0  # écart de décor (_gap de travel.py) sous lequel c'est la même salle (même : < 3, autre : > 30)
 
 
@@ -71,6 +77,7 @@ class DungeonSpec:
     reply_id: int | None = None  # numéro de la réponse « clé » (DQ du serveur) : proposée seulement à qui a la clé
     keyring: str | None = None  # réponse du trousseau de clefs (31/10 : entrée sans clé), et son numéro
     keyring_id: int | None = None
+    exit_cell: Cell | None = None  # sortie par une case de la salle de fin (05/11, donjon des Champs), sans PNJ
 
 
 def load_dungeons(path: Path = DUNGEONS_FILE) -> dict[str, DungeonSpec]:
@@ -80,7 +87,7 @@ def load_dungeons(path: Path = DUNGEONS_FILE) -> dict[str, DungeonSpec]:
                              cell(d.get("dalle")), cell(d.get("soleil")), cell(d["pnj"]), str(d["reponse"]),
                              cell(d.get("pnj_fin")), d.get("reponse_fin"), BUTTONS[d.get("clic_fin", "droit")],
                              d.get("salles"), d.get("pnj_carte"), d.get("reponse_id"), d.get("trousseau"),
-                             d.get("trousseau_id"))
+                             d.get("trousseau_id"), cell(d.get("sortie_case")))
             for key, d in data.items()}
 
 
@@ -225,6 +232,13 @@ class DungeonEntry:
     def leave(self) -> bool:
         """Salle de fin : chacun parle au PNJ et choisit la sortie. True si toute l'équipe est dehors."""
         spec = self.spec
+        if spec.exit_cell is not None:
+            # 05/11, donjon des Champs : dans la salle de fin, une case qui ramène dehors (pas de PNJ).
+            if self._all_take(self.members, spec.exit_cell, "la sortie"):
+                log.info("Donjon : toute l'équipe est sortie de %s", spec.name)
+                return True
+            tell_user(f"{spec.name} : un ou plusieurs personnages pas sortis du donjon (case de sortie) : bot arrêté.")
+            return False
         if spec.exit_npc is None or not spec.exit_reply:
             log.warning("Donjon : %s : sortie pas décrite (pnj_fin, reponse_fin)", spec.name)
             return False
@@ -250,11 +264,16 @@ class DungeonEntry:
         un second clic pour qui n'est pas passé (case cachée par un autre personnage : un autre endroit du soleil).
         Tous les retardataires sont retentés et nommés (19/10 : seul Pesopepe signalé, Pombro aussi resté dehors)."""
         log.info("Donjon : %s prend %s (case %d,%d)", ", ".join(m.name for m in members), what, *cell)
+        # 05/11 : changement de carte compté depuis ce clic (_changed : sinon depuis la dernière bulle, ou 0 : n'importe
+        # quelle carte d'avant comptait comme une arrivée).
+        for member in members:
+            self._opened_at[member.name] = time.monotonic()
         before = {m.name: self._click_sun(m, cell, 0) for m in members}
         late = [m for m in members if not self._changed(m, before[m.name])]
         stuck = []
         for member in late:
             log.info("Donjon : %s n'est pas passé, je reclique sur %s", member.name, what)
+            self._opened_at[member.name] = time.monotonic()
             frame = self._click_sun(member, cell, 1)
             if not self._changed(member, frame):
                 path = member.game.recorder.save(member.game.look(park=False).image, "donjon_pas_passe", lossless=True)
@@ -426,6 +445,38 @@ class BankTrip:
         return pods.team_trip(self.bot, self.spec.outside, "Retour au donjon")
 
 
+def room_places(dungeon: str, map_id: int | None, path: Path = ROOMS_FILE) -> int | None:
+    """Places des joueurs dans la salle `map_id` du donjon au nom exact `dungeon` (data/donjons.json, placement p1) ;
+    None si la salle ou le donjon n'y sont pas."""
+    import json
+
+    try:
+        rows = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    for row in rows:
+        if row.get("nom") == dungeon:
+            for room in row.get("salles") or []:
+                if room.get("carte") == map_id and room.get("placement"):
+                    return int(room["placement"][0])
+    return None
+
+
+def plan_waves(levels: dict[str, int], places: int) -> list[list[str]]:
+    """Vagues pour une salle de `places` places : le moins de vagues possible, de tailles aussi égales que possible ;
+    les plus hauts niveaux dans les plus petites (05/11, utilisateur : « les plus haut level sont plus forts donc
+    peuvent être moins par salle »). Noms du plus haut niveau au plus bas dans chaque vague."""
+    names = sorted(levels, key=lambda n: (-levels[n], n))
+    count = -(-len(names) // max(1, places))
+    small, extra = divmod(len(names), count)
+    sizes = [small] * (count - extra) + [small + 1] * extra  # les petites d'abord : les plus forts
+    waves, start = [], 0
+    for size in sizes:
+        waves.append(names[start:start + size])
+        start += size
+    return waves
+
+
 def pods_threshold() -> float:
     from bot.team.loop import POD_FULL  # import local : loop importe ce module
 
@@ -552,6 +603,84 @@ class DungeonFarm:
                 return behind
             time.sleep(0.3)
 
+    def _small_room(self, waved: set[int]) -> int | None:
+        """Places de la salle où est le principal si elles manquent pour toute l'équipe (salle pas encore faite en
+        vagues), hors combat, toute l'équipe sur cette carte d'après le serveur ; None sinon (combat normal)."""
+        bot = self.bot
+        net = getattr(bot.leader.game, "net", None)
+        room = net.map_id if net is not None and net.alive() else None
+        if room is None or room in waved or bot._round_due:
+            return None
+        places = room_places(self.spec.name, room)
+        if places is None or places >= len(bot.members):
+            return None
+        if read_scene(bot.leader.game.look(park=False)).phase is not Phase.OUT_OF_COMBAT:
+            return None
+        if any(getattr(getattr(m.game, "net", None), "map_id", room) != room for m in bot.members):
+            return None  # pas encore toute l'équipe ici (téléportations pas toutes annoncées)
+        waved.add(room)
+        return places
+
+    def _levels(self) -> dict[str, int]:
+        """Niveau de chacun d'après le serveur (PM+ du groupe, 01/11) ; inconnu : 0 (dans la dernière vague)."""
+        known: dict[str, int] = {}
+        for member in self.bot.members:
+            known.update(getattr(getattr(member.game, "net", None), "group_levels", None) or {})
+        return {m.name: int(known.get(m.name, 0)) for m in self.bot.members}
+
+    def _fight_in_waves(self, places: int) -> int | None:
+        """Salle à `places` places, moins que l'équipe : une vague après l'autre (plan_waves), chacune lance le combat
+        par son plus haut niveau et seuls ses membres le rejoignent ; la victoire les téléporte dans la salle
+        suivante, le groupe réapparaît pour la vague d'après. Nombre de combats faits ; None si une vague n'a pas pu
+        combattre (la suite de l'équipe reste dans cette salle : dit à l'utilisateur)."""
+        bot = self.bot
+        waves = plan_waves(self._levels(), places)
+        log.info("Donjon : salle à %d places pour %d personnages : %d vagues, les plus hauts niveaux en plus petit "
+                 "nombre (%s)", places, len(bot.members), len(waves), " / ".join(", ".join(w) for w in waves))
+        by_name = {m.name: m for m in bot.members}
+        for index, wave in enumerate(waves, 1):
+            if not self._wave_fight([by_name[n] for n in wave], index, len(waves)):
+                tell_user(f"{self.spec.name} : la vague {index} ({', '.join(wave)}) n'a pas pu combattre : je m'arrête, "
+                          "une partie de l'équipe est déjà dans la salle suivante.")
+                return None
+        log.info("Donjon : salle faite en %d vagues", len(waves))
+        return len(waves)
+
+    def _wave_fight(self, wave: list, index: int, count: int) -> bool:
+        """Une vague : son plus haut niveau attaque le groupe de la salle (attendu RESPAWN_WAIT s au plus, le temps qu'il
+        réapparaisse après la vague d'avant), les autres de la vague le rejoignent, personne d'autre."""
+        from bot.brain.engage import Engager
+
+        bot = self.bot
+        host = wave[0]
+        engager = Engager(host.game, bot.engager.settings)
+        for name in ("probe_key", "probe_first", "miss_forget"):  # pas walk_area : celle du principal
+            if hasattr(bot.engager, name):
+                setattr(engager, name, getattr(bot.engager, name))
+        log.info("Donjon : vague %d/%d : %s lance le combat, %s le rejoignent", index, count, host.name,
+                 ", ".join(m.name for m in wave[1:]) or "personne")
+        bot.fighting_only = {m.name for m in wave}
+        try:
+            deadline = time.monotonic() + RESPAWN_WAIT
+            while time.monotonic() < deadline:
+                if bot._round_due:
+                    bot.step()  # fenêtres de résultat de la vague d'avant
+                    continue
+                if engager.engage():
+                    begun = host.game.wait_until(lambda f: read_scene(f).phase is not Phase.OUT_OF_COMBAT, 6.0,
+                                                 park=False)
+                    if begun is None:
+                        continue  # pas de combat finalement : nouvelle recherche
+                    bot._fight(host)
+                    while bot._round_due:
+                        bot.step()
+                    return True
+                host.game.sleep(WAVE_RETRY)  # groupe pas (encore) réapparu
+            log.warning("Donjon : vague %d/%d : pas de groupe à attaquer en %.0f s", index, count, RESPAWN_WAIT)
+            return False
+        finally:
+            bot.fighting_only = None
+
     def _fight_rooms(self, first: int = 1) -> bool:
         """Les combats de chaque salle, de la salle `first` à la dernière (spec.rooms) ; le PNJ de fin n'est cherché
         qu'après (utilisateur, 18/10 : retenir le nombre de salles). Salle 2, ce jour-là : un Petit Tournesol au bord,
@@ -569,7 +698,15 @@ class DungeonFarm:
         rooms = self.spec.rooms
         fights, won = bot.fights, 0
         step = getattr(bot, "safe_step", bot.step)  # erreurs rattrapées comme dans TeamBot.run (21/10)
+        waved: set[int] = set()  # salles déjà faites en vagues (une fois chacune)
         while not bot.finished:
+            places = self._small_room(waved)
+            if places is not None:
+                done = self._fight_in_waves(places)
+                if done is None:
+                    return False
+                fights += done - 1  # une seule salle, quel que soit le nombre de vagues
+                continue
             step()
             if bot.fights - fights > won:
                 won = bot.fights - fights

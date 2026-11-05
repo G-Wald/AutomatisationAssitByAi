@@ -44,3 +44,23 @@ bouftou:
   pnj_fin: [17, 17]
   reponse_fin: Accepter la récompense
   clic_fin: gauche
+
+# Donjon des Champs (05/11, observé au réseau avec Fourboun, rien consommé) : Mawy Ingalsse (modèle 780) se tient dehors,
+# en 7,-25 (carte 7453), case 187 ; clic gauche, menu « Parler », une question (DQ3178) et deux réponses :
+# « Donner la clef et rentrer » (2802, à qui a la Clef des Champs) et « Utiliser le trousseau de clefs. » (6615). La porte
+# en (18,12) mène à un atelier (carte 7613, Emia Elliesol) : pas l'entrée du donjon.
+# Salles (référence du client, data/donjons.json) : 9768 à 9774 (7 combats, Tournesol Affamé dans la 7e), puis 9786,
+# salle de fin. Salle 3 : 3 places de joueurs, salle 5 : 4 (client, MA p1) : une équipe de 8 ne peut pas tout combattre.
+# Sortie (données StarLoco locales, à vérifier en jeu) : case 260 de 9786, soit (27,17).
+champs:
+  nom: Donjon des champs  # nom exact du donjon (table DU), comme dans config/donjons_cles.yaml
+  monde: douze
+  carte: [7, -25]
+  pnj: [26, 12]
+  pnj_carte: 7453
+  reponse: Donner la clef et rentrer
+  reponse_id: 2802
+  trousseau: Utiliser le trousseau de clefs
+  trousseau_id: 6615
+  salles: 7
+  sortie_case: [27, 17]

@@ -376,3 +376,75 @@ def test_a_member_left_in_another_room_is_found_by_the_server():
     assert farm._left_behind(wait=0) == ["Walitcoin"]
     team[2].game.net.feed("GDM|2082|0706131721|aa")
     assert farm._left_behind(wait=0) == []
+
+
+def test_champs_dungeon_entry_as_observed_and_exit_by_a_cell():
+    # 05/11 (observé au réseau avec Fourboun) : Mawy dehors en 7,-25, case 187 ; réponses 2802 et 6615. Sortie : une
+    # case de la salle de fin, sans PNJ.
+    spec = load_dungeons()["champs"]
+    assert spec.outside == (7, -25) and spec.npc == (26, 12) and spec.npc_map == 7453
+    assert spec.reply_id == 2802 and spec.keyring_id == 6615 and spec.rooms == 7 and spec.exit_cell == (27, 17)
+    screen = Screen()
+    room, outside = load_frame(PLATES), load_frame(OUTSIDE)
+    team = [member("A", screen, room, outside), member("B", screen, room, outside)]
+    assert DungeonEntry(team, spec).leave()
+    assert len(events(screen, "click")) == 2  # chacun sur la case de sortie, pas de bulle
+
+
+def test_room_places_and_waves_strongest_in_the_smallest():
+    # 05/11, utilisateur : à 8, le bot passe les salles à peu de places ; « les plus haut level sont plus forts donc
+    # peuvent être moins par salle ».
+    from bot.team.dungeon import plan_waves, room_places
+
+    assert [room_places("Donjon des champs", m) for m in (9768, 9770, 9772)] == [9, 3, 4]
+    assert room_places("Donjon des champs", 1) is None and room_places("Inconnu", 9770) is None
+    levels = {"A": 50, "B": 48, "C": 45, "D": 39, "E": 36, "F": 31, "G": 30, "H": 30}
+    assert plan_waves(levels, 3) == [["A", "B"], ["C", "D", "E"], ["F", "G", "H"]]
+    assert plan_waves(levels, 4) == [["A", "B", "C", "D"], ["E", "F", "G", "H"]]
+    assert plan_waves(levels, 9) == [list("ABCDEFGH")]
+
+
+def test_only_the_wave_joins_the_fight(monkeypatch):
+    # Combat en vagues : seuls les membres de la vague rejoignent (TeamBot.fighting_only).
+    from tests.test_team import team_bot
+
+    screen = Screen()
+    frame = load_frame("preparation")
+    a, b, c = (member(n, screen, frame) for n in "ABC")
+    bot = team_bot(a, b, c)
+    asked = []
+    bot.joiner.ask = lambda m, hint: asked.append(m.name) or True
+    bot.joiner.wait_placement = lambda m, deadline: True
+    bot._wait_combat = lambda host: True
+    bot.fighting_only = {"A", "B"}
+    assert bot._placement(a) == [a, b] and asked == ["B"]
+
+
+def test_waves_fight_one_after_the_other_each_launched_by_its_strongest(monkeypatch):
+    from types import SimpleNamespace
+
+    from bot.team import dungeon
+    from bot.team.dungeon import DungeonFarm
+
+    screen = Screen()
+    placement = load_frame("preparation")
+    members = [member(n, screen, placement) for n in ("A", "B", "C", "D", "E")]
+    levels = {"A": 50, "B": 48, "C": 45, "D": 39, "E": 36}
+
+    class FakeEngager:
+        def __init__(self, game, settings):
+            self.game = game
+
+        def engage(self):
+            return True
+
+    monkeypatch.setattr("bot.brain.engage.Engager", FakeEngager)
+    fought = []
+    bot = SimpleNamespace(members=members, engager=SimpleNamespace(settings=None), _round_due=False, step=lambda: None,
+                          fighting_only=None)
+    bot._fight = lambda host: fought.append((host.name, sorted(bot.fighting_only)))
+    farm = DungeonFarm.__new__(DungeonFarm)
+    farm.bot, farm.spec = bot, SimpleNamespace(name="Donjon des champs")
+    monkeypatch.setattr(farm, "_levels", lambda: levels)
+    assert farm._fight_in_waves(3) == 2
+    assert fought == [("A", ["A", "B"]), ("C", ["C", "D", "E"])] and bot.fighting_only is None
