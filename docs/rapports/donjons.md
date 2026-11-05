@@ -617,3 +617,21 @@ Restent ouvertes :
   - Boss battu.
   - Sortie par la case (27,17) de la salle de fin : les 8 dehors (carte 7452).
 - 10 combats en 17 min 40, 0 mort, 0 erreur, 0 déplacement sans bouger.
+
+### 05/11, nuit : session de 3 passages (journaux 205041 à 214119)
+
+- **Passage 1 coupé par F12** pendant la salle 5 (vague 1). Relancé tout de suite (choix de l'utilisateur).
+  - Les cartes de l'équipe n'étaient pas encore annoncées : Fourboun et Waldarch ont fait seuls la salle 6 et le boss
+    (sortis à 23 % et 40 % de vie, sans mort).
+  - Correction : pas d'attaque sans toute l'équipe sur la carte du principal (`_all_here`).
+  - `donjon.reprise=meme_salle` sert à reprendre une équipe réunie.
+  - Reprise à la main en trois étapes : vague 2 en salle 5, puis les 6 en salle 6 et au boss, puis retour des 8 en
+    7,-25.
+- **Passage 2** : à 8, 10 combats en 15 min 50, 0 mort (salle 3 en 3 vagues, salle 5 en 2).
+- **Passage 3 pas lancé à la suite** : la sortie par la case (27,17) dépose l'équipe en 7,-26 (carte 7452), pas devant
+  Mawy en 7,-25 ; « ni devant l'entrée ni dans les premières salles ». Correction : avant un nouveau passage, quand la
+  sortie est une case, l'équipe retourne devant l'entrée (`DungeonFarm._back_to_entrance`, `team_trip`).
+  - Pas encore vu en jeu, car le passage 3 a été lancé après un `--aller 7,-25`.
+- **Passage 3** : à 8, 10 combats en 14 min 40, 0 mort. Pesopepe est passé niveau 31 et Fourbodeux niveau 37.
+- **Clés** : 3 par personnage au départ, toutes utilisées. Il en reste 36 au coffre de Fourboun. Pas besoin de farm de
+  clés dans les Champs pour ces 3 passages.

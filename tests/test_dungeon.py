@@ -510,3 +510,24 @@ def test_members_without_an_announced_map_after_a_small_room_are_left_behind(mon
     farm.bot, farm.spec = bot, SimpleNamespace(name="Donjon des champs")
     room, behind = farm._split_team()
     assert room == 9772 and [m.name for m in behind] == list("EFGH")
+
+
+def test_team_dropped_next_to_the_entrance_by_the_exit_cell_walks_back_before_the_next_pass(monkeypatch):
+    # 05/11 (journal 212413) : sortie des Champs par la case (27,17), équipe déposée en 7,-26 ; passage suivant pas fait
+    # (« ni devant l'entrée ni dans les premières salles »). Bouftou : sortie par le PNJ, déjà devant lui.
+    from types import SimpleNamespace
+
+    from bot.team import pods
+    from bot.team.dungeon import DungeonFarm
+
+    trips = []
+    monkeypatch.setattr(pods, "team_trip", lambda bot, goal, why: trips.append(goal) or True)
+    for name, expected in (("champs", [(7, -25), (7, -25)]), ("bouftou", [])):
+        trips.clear()
+        farm = DungeonFarm(SimpleNamespace(members=[], leader=None, _settings={}), load_dungeons()[name], 3)
+        monkeypatch.setattr(farm, "_close_windows", lambda: None)
+        monkeypatch.setattr(farm, "_pods_ready", lambda: True)
+        monkeypatch.setattr(farm, "_fight_rooms", lambda first=1: True)
+        monkeypatch.setattr(farm.entry, "enter", lambda *args: True)
+        monkeypatch.setattr(farm.entry, "leave", lambda: True)
+        assert farm.run() == 3 and trips == expected, name

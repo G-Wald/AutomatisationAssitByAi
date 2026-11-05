@@ -537,6 +537,8 @@ class DungeonFarm:
                 log.info("Donjon : l'équipe déjà dans les salles, je reprends aux combats")
             elif not self._pods_ready():  # équipe dehors : pods vus avant d'entrer (team/pods.py)
                 break
+            elif run > 1 and not self._back_to_entrance():
+                break
             elif not (self.entry.enter(start, only) if run == 1 else self.entry.enter()):
                 break
             if not self._fight_rooms(room if run == 1 and start == "salles" else 1):
@@ -548,6 +550,16 @@ class DungeonFarm:
             log.info("Donjon : passage %d/%d terminé", run, self.runs)
         log.info("Donjon : %d passage(s) complet(s) sur %d", done, self.runs)
         return done
+
+    def _back_to_entrance(self) -> bool:
+        """Sortie par une case (donjon des Champs) : l'équipe est déposée sur une carte voisine (05/11, journal 212413 :
+        7,-26 au lieu de 7,-25, « ni devant l'entrée ni dans les premières salles », passage 3 pas fait) ; ramenée devant
+        le PNJ de l'entrée avant le passage suivant. Sortie par le PNJ de fin : déjà devant lui."""
+        if self.spec.exit_cell is None:
+            return True
+        from bot.team import pods
+
+        return pods.team_trip(self.bot, self.spec.outside, "Retour à l'entrée du donjon")
 
     def _pods_ready(self) -> bool:
         """Équipe dehors, avant un passage (31/10, utilisateur) : surcharge rééquilibrée entre nos personnages, puis
