@@ -39,6 +39,7 @@ OCR_MAX_SIDE = 1400  # px : côté de l'image lue par l'OCR au plus (au-delà, W
 MENU_BOX = (-520, -340, 10, 480)  # menu du portrait : à sa gauche ; remonté pour les portraits du bas (30/10 :
 # titre d'Elseiso, 8e portrait, hors de la zone lue avec -40)
 YES = (1122, 426)  # « Oui » de « X te propose de faire un échange. Acceptes-tu ? »
+YES_WAIT, YES_FOUND, YES_TRIES = 3.0, 0.6, 2  # fenêtre de la demande attendue ; lue à 0,91 (« Oui » 0,92) le 05/11
 RESOURCES_TAB = (1421, 186)  # onglet ressources du sac, fenêtre d'échange
 FIRST_STACK = (1355, 288)  # première pile du sac
 OFFER_SLOT = (1517, 586)  # case vide de mon offre où lâcher une pile (la 2e : la 1re prend l'unité posée d'abord)
@@ -314,15 +315,26 @@ class Trader:
         return request is not None and request[3] >= since
 
     def _accept_request(self, since: float) -> bool:
+        """« Oui » du receveur, cliqué une fois la fenêtre de la demande dessinée (05/11, Waldarch : clic parti à
+        l'annonce du serveur, avant la fenêtre, perdu ; la demande restée ouverte) ; recliqué une fois si l'échange
+        ne s'ouvre pas."""
+        from bot.team.bank import best_text
+
         game = self.taker.game
-        frame = game.look(park=False)
-        game.click(frame.layout.point(*YES), (8, 3))
-        if not self._wait(lambda: self._opened(self.taker, since) and self._opened(self.giver, since)):
-            log.info("Échange %s -> %s : pas ouvert (« Oui » pas pris ?)", self.giver.name, self.taker.name)
-            self.cancel()
-            return False
-        log.info("Échange ouvert : %s -> %s", self.giver.name, self.taker.name)
-        return True
+        for attempt in range(YES_TRIES):
+            shown = game.wait_until(lambda f: best_text(f, "te propose de faire un", dark=True)[0] >= YES_FOUND,
+                                    YES_WAIT, park=False)
+            frame = shown or game.look(park=False)
+            score, where = best_text(frame, "Oui", dark=False)
+            point = where if shown is not None and score >= YES_FOUND else frame.layout.point(*YES)
+            game.click(point, (8, 3))
+            if self._wait(lambda: self._opened(self.taker, since) and self._opened(self.giver, since)):
+                log.info("Échange ouvert : %s -> %s", self.giver.name, self.taker.name)
+                return True
+            log.info("Échange %s -> %s : pas ouvert après « Oui » (essai %d/%d)", self.giver.name, self.taker.name,
+                     attempt + 1, YES_TRIES)
+        self.cancel()
+        return False
 
     @staticmethod
     def _opened(member, since: float) -> bool:
