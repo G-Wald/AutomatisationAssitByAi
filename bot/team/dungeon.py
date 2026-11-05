@@ -629,6 +629,61 @@ class DungeonFarm:
         waved.add(room)
         return places
 
+    def _split_team(self) -> tuple[int, list] | None:
+        """Équipe sur deux salles du donjon d'après le serveur, hors combat : (salle d'avant, ceux qui y sont) ; None si
+        toute l'équipe est sur la carte du principal, ou si ce n'est pas ce cas-là (carte inconnue, autre carte que
+        les salles du donjon)."""
+        bot = self.bot
+        if bot._round_due or read_scene(bot.leader.game.look(park=False)).phase is not Phase.OUT_OF_COMBAT:
+            return None
+        maps = {m.name: getattr(getattr(m.game, "net", None), "map_id", None) for m in bot.members}
+        rooms = self._room_order()
+        here = maps.get(bot.leader.name)
+        if None in maps.values() and here in rooms and rooms.index(here) > 0:
+            # 05/11 : relancé au milieu d'une salle en vagues, ceux restés derrière n'ont pas changé de carte depuis :
+            # pas de carte annoncée. Salle d'avant celle du principal trop petite pour l'équipe : ils y sont restés.
+            before = rooms[rooms.index(here) - 1]
+            places = room_places(self.spec.name, before)
+            if places is not None and places < len(bot.members):
+                unknown = [n for n, m in maps.items() if m is None]
+                log.info("Donjon : carte de %s pas annoncée ; salle d'avant à %d places : restés en salle %d",
+                         ", ".join(unknown), places, before)
+                maps = {n: (before if m is None else m) for n, m in maps.items()}
+        if None in maps.values() or len(set(maps.values())) < 2:
+            return None
+        known = [r for r in set(maps.values()) if r in rooms]
+        if len(known) != len(set(maps.values())):
+            return None
+        first = min(known, key=rooms.index)
+        return first, [m for m in bot.members if maps[m.name] == first]
+
+    def _room_order(self) -> list[int]:
+        """Cartes des salles du donjon dans l'ordre (data/donjons.json) ; vide sans la référence."""
+        import json
+
+        try:
+            rows = json.loads(ROOMS_FILE.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return []
+        row = next((r for r in rows if r.get("nom") == self.spec.name), None)
+        return [room.get("carte") for room in (row or {}).get("salles") or []]
+
+    def _catch_up(self, members: list, places: int) -> int | None:
+        """Ceux restés dans une salle la font, en vagues de `places` au plus ; nombre de combats, None si une vague
+        n'a pas pu combattre."""
+        names = {m.name for m in members}
+        levels = {name: level for name, level in self._levels().items() if name in names}
+        waves = plan_waves(levels, places)
+        log.info("Donjon : %s restés dans la salle d'avant : %d vague(s) (%s)", ", ".join(sorted(names)), len(waves),
+                 " / ".join(", ".join(w) for w in waves))
+        by_name = {m.name: m for m in self.bot.members}
+        for index, wave in enumerate(waves, 1):
+            if not self._wave_fight([by_name[n] for n in wave], index, len(waves)):
+                tell_user(f"{self.spec.name} : {', '.join(wave)} n'ont pas pu combattre dans la salle d'avant : je "
+                          "m'arrête.")
+                return None
+        return len(waves)
+
     def _levels(self) -> dict[str, int]:
         """Niveau de chacun d'après le serveur (PM+ du groupe, 01/11) ; inconnu : 0 (dans la dernière vague)."""
         known: dict[str, int] = {}
@@ -714,6 +769,17 @@ class DungeonFarm:
                 if done is None:
                     return False
                 fights += done - 1  # une seule salle, quel que soit le nombre de vagues
+                continue
+            behind = self._split_team()
+            if behind is not None:
+                # Reprise au milieu d'une salle en vagues (05/11 : bot arrêté par F12 pendant la vague 1 de la salle
+                # 5, relancé) : ceux restés dans la salle d'avant la font, en vagues si elle manque de places, puis
+                # rejoignent les autres ; cette salle-là ne compte pas une seconde fois.
+                room, members = behind
+                places = room_places(self.spec.name, room) or len(members)
+                if self._catch_up(members, places) is None:
+                    return False
+                fights = bot.fights - won
                 continue
             step()
             if bot.fights - fights > won:

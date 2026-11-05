@@ -466,3 +466,47 @@ def test_member_in_front_of_an_outside_npc_located_by_the_map_label_without_the_
     assert DungeonEntry([hero], spec).locate(hero) == "pnj"
     monkeypatch.setattr(maplabel, "read_map_label", lambda frame: SimpleNamespace(coords=(4, -16)))
     assert DungeonEntry([hero], spec).locate(hero) is None
+
+
+def test_members_left_in_the_previous_room_are_found_and_catch_up(monkeypatch):
+    # 05/11 : bot arrêté (F12) pendant la vague 1 de la salle 5, relancé : la vague 2 encore en salle 5 (9772), les
+    # autres en salle 6 (9773). Ceux d'avant font leur salle (en vagues de 4 au plus), puis rejoignent.
+    from types import SimpleNamespace
+
+    from bot.team.dungeon import DungeonFarm
+
+    screen = Screen()
+    out = load_frame("hors_combat")
+    members = [member(n, screen, out) for n in "ABCDEFGH"]
+    for m in members:
+        m.game.net = SimpleNamespace(map_id=9773 if m.name in "ABCD" else 9772)
+    bot = SimpleNamespace(members=members, leader=members[0], _round_due=False)
+    farm = DungeonFarm.__new__(DungeonFarm)
+    farm.bot, farm.spec = bot, SimpleNamespace(name="Donjon des champs")
+    room, behind = farm._split_team()
+    assert room == 9772 and [m.name for m in behind] == list("EFGH")
+    fought = []
+    monkeypatch.setattr(farm, "_levels", lambda: {n: 50 - i for i, n in enumerate("ABCDEFGH")})
+    monkeypatch.setattr(farm, "_wave_fight", lambda wave, i, n: fought.append([m.name for m in wave]) or True)
+    assert farm._catch_up(behind, 4) == 1 and fought == [list("EFGH")]
+    for m in members:
+        m.game.net.map_id = 9773
+    assert farm._split_team() is None
+
+
+def test_members_without_an_announced_map_after_a_small_room_are_left_behind(monkeypatch):
+    # 05/11 : relancé, la vague 2 sans carte annoncée (pas de changement de carte depuis), le principal en salle 6.
+    from types import SimpleNamespace
+
+    from bot.team.dungeon import DungeonFarm
+
+    screen = Screen()
+    out = load_frame("hors_combat")
+    members = [member(n, screen, out) for n in "ABCDEFGH"]
+    for m in members:
+        m.game.net = SimpleNamespace(map_id=9773 if m.name in "ABCD" else None)
+    bot = SimpleNamespace(members=members, leader=members[0], _round_due=False)
+    farm = DungeonFarm.__new__(DungeonFarm)
+    farm.bot, farm.spec = bot, SimpleNamespace(name="Donjon des champs")
+    room, behind = farm._split_team()
+    assert room == 9772 and [m.name for m in behind] == list("EFGH")
