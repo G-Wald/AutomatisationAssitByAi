@@ -503,6 +503,10 @@ class DungeonFarm:
         # Trousseau de clefs (une fois par semaine) : seulement si donjon.trousseau l'autorise (31/10, utilisateur).
         donjon = (getattr(bot, "_settings", None) or {}).get("donjon") or {}
         self.entry.keyring = str(donjon.get("trousseau", "non")).strip().lower() in ("oui", "true", "1", "yes")
+        # Reprise dans une salle (05/11) : donjon.reprise=meme_salle certifie l'équipe lancée réunie dans une même salle,
+        # cartes pas encore annoncées par le serveur (pas de changement de carte depuis le lancement) ; sans, pas
+        # d'attaque sans les cartes de toute l'équipe (_all_here).
+        self.trust_together = str(donjon.get("reprise", "")).strip().lower() == "meme_salle"
         # Répartition des clés au début du farm (team/keys.py, donjon.cles ; 30/10, demande de l'utilisateur).
         self.keys = KeyManager(bot.members, getattr(bot, "_settings", None) or {},
                                getattr(travel, "hide_players_key", "e"), trip=BankTrip(bot, spec))
@@ -657,6 +661,20 @@ class DungeonFarm:
         first = min(known, key=rooms.index)
         return first, [m for m in bot.members if maps[m.name] == first]
 
+    def _all_here(self) -> bool:
+        """Avant une attaque dans une salle (hors combat, fenêtres fermées) : toute l'équipe annoncée par le serveur sur
+        la carte du principal. True pendant un combat ou le tour des fenêtres (rien à vérifier), ou sans écoute."""
+        bot = self.bot
+        if bot._round_due or read_scene(bot.leader.game.look(park=False)).phase is not Phase.OUT_OF_COMBAT:
+            return True
+        nets = [getattr(m.game, "net", None) for m in bot.members]
+        if any(net is None for net in nets):
+            return True  # sans écoute : comme avant (décor, épée)
+        maps = {getattr(net, "map_id", None) for net in nets}
+        if maps == {None} and getattr(self, "trust_together", False):
+            return True  # réunie d'après celui qui a relancé (donjon.reprise=meme_salle)
+        return None not in maps and len(maps) == 1
+
     def _room_order(self) -> list[int]:
         """Cartes des salles du donjon dans l'ordre (data/donjons.json) ; vide sans la référence."""
         import json
@@ -784,6 +802,14 @@ class DungeonFarm:
                     return False
                 fights = bot.fights - won
                 continue
+            if not self._all_here():
+                # 05/11 (journal 210407) : relancé dans les salles, aucune carte annoncée ; le principal a attaqué, seul
+                # Waldarch l'a rejoint (les autres sans la carte ni l'épée), puis le boss à deux. Plus d'attaque tant
+                # que le serveur n'a pas dit toute l'équipe dans la salle du principal.
+                tell_user(f"{self.spec.name} : je ne sais pas si toute l'équipe est dans la salle du principal (cartes "
+                          "pas annoncées par le serveur) : je m'arrête plutôt que d'attaquer sans elle.")
+                log.warning("Donjon : cartes de l'équipe pas annoncées : pas d'attaque, arrêt")
+                return False
             step()
             if bot.fights - fights > won:
                 won = bot.fights - fights
