@@ -586,3 +586,17 @@ Restent ouvertes :
 - Le bot s'est donc arrêté avant l'entrée, comme prévu (1 clé pour 8 personnages) : rien n'a été consommé.
 - À faire : observer le glisser du coffre (captures avant/après, messages du serveur), sans la souris de l'utilisateur
   sur une fenêtre du jeu (elle casse les glisser en arrière-plan, 30/10).
+
+### 05/11, suite : les clés des coffres (observé avec `tools/observer_coffre.py`)
+
+- Coffre de Walitcoin, filtré sur « Clefs » : 11 piles de clés, et la Clef des Champs à la place prévue (rang 9 dans
+  l'ordre d'arrivée des messages du serveur). Le rang était donc juste.
+- **Le glisser n'attrapait pas la pile** : aucune fenêtre de quantité, rien du serveur. En plus, le point de lâcher
+  (`BAG_DROP`) tombait sur un objet du sac plein, pas sur une case vide.
+- **Un vrai double-clic sur la pile en fait passer une dans le sac**, confirmé par le serveur (`EsKO+pile|reste`,
+  `OAKO…~1fcf~1`). `take_from_chest` reprend maintenant une clé par double-clic, chacune vérifiée au serveur.
+- Essai complet : Eldieso a repris 7 clés de son coffre (7 -> 0), puis 5 échanges sur 6 ont réussi.
+- **Échange Eldieso -> Elseiso raté** : le menu de la miniature d'Elseiso n'avait ni « Défier » ni « Échanger »,
+  alors que les deux étaient en 7,-25 d'après le serveur. Cause pas encore vue.
+- Le bot s'est arrêté avant l'entrée, comme prévu : rien consommé, personne entré.
+- État des sacs à la fin : chacun a sa Clef des Champs, sauf Elseiso ; Eldieso en a 2.

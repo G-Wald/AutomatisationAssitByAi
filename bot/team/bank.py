@@ -177,6 +177,8 @@ def take_from_chest(member, template: int, count: int, rank_of=None) -> int:
     exchange, _ = net.trade()
     keys = set(key_names()) or {template}
     same_type = [u for u, (model, quantity) in exchange.storage.items() if model in keys and quantity > 0]
+    # Rang de la pile dans la grille filtrée sur « Clefs » : son rang parmi les piles de clés, dans l'ordre d'arrivée
+    # (05/11, coffre de Walitcoin : 11 piles de clés, la Clef des Champs au rang 9, vue à cette place).
     rank = rank_of(same_type, uid) if rank_of is not None else (same_type.index(uid) if uid in same_type else 0)
     wanted = min(count, stored)
     layout = game.look(park=False).layout
@@ -187,36 +189,28 @@ def take_from_chest(member, template: int, count: int, rank_of=None) -> int:
         return 0
     taken = 0
     try:
-        held = net.held(template) or 0
-        since = time.monotonic()
+        # 05/11 (tools/observer_coffre.py, Walitcoin) : le glisser de la pile vers le sac ne l'attrapait pas (7 coffres
+        # sur 7, et le point de lâcher tombait sur un objet du sac plein) ; un vrai double-clic sur la pile en fait
+        # passer UNE dans le sac, annoncé par le serveur (EsKO+pile|reste, OAKO de l'objet). Une clé par double-clic.
         start = layout.point(*grid_point(CHEST_FIRST_STACK, rank, CHEST_STEP, CHEST_COLUMNS))
-        if not slow_drag(game, start, layout.point(*BAG_DROP)):
-            log.warning("%s : glisser impossible au premier plan : clés laissées au coffre", member.name)
-            return 0
-        game.sleep(0.6)
-        if not _chest_moved(net, uid, stored, since, 0.6):  # pile d'un seul objet : pas de fenêtre de quantité
-            _, ok, _ = quantity_points(layout, layout.point(*BAG_DROP))  # à côté du point de lâcher (30/10)
-            for _ in range(4):  # nombre en surbrillance : effacé puis tapé
-                game.press("backspace")
-            game.type_text(str(wanted))
-            game.sleep(0.3)
-            game.click(ok, (3, 3))
-        if not _chest_moved(net, uid, stored, since, CHEST_WAIT):
-            after, _ = net.trade()
-            other = [u for u, value in (after.storage.items() if after is not None else ())
-                     if exchange.storage.get(u) != value]
-            log.warning("%s : la pile de clés n'a pas quitté le coffre d'après le serveur%s : Échap", member.name,
-                        f" (une autre pile a bougé : {other}, place de la pile à calibrer)" if other else "")
-            close_unexpected(game, f"Clés, {member.name}")  # menu d'abord sans Échap, puis le coffre (01/11)
-            return 0
-        _wait_until(lambda: (net.held(template) or 0) > held, CHEST_WAIT)
+        for _ in range(wanted):
+            before = dict(chest_stacks(net, template)).get(uid, 0)
+            if before <= 0:
+                break
+            since = time.monotonic()
+            game.double_click(start, (3, 3))
+            if not _chest_moved(net, uid, before, since, CHEST_WAIT):
+                log.warning("%s : la pile de clés n'a pas quitté le coffre d'après le serveur (double-clic)%s",
+                            member.name, f" après {taken} reprise(s)" if taken else "")
+                break
+            taken += 1
+            game.sleep(0.4)
         left = dict(chest_stacks(net, template)).get(uid, 0)
-        taken = min(stored - left, max(0, (net.held(template) or 0) - held))
         if taken != wanted:
-            log.warning("%s : %d repris du coffre au lieu de %d (coffre %d -> %d) : vérifie la fenêtre de quantité",
-                        member.name, taken, wanted, stored, left)
+            log.warning("%s : %d repris du coffre au lieu de %d (coffre %d -> %d)", member.name, taken, wanted, stored,
+                        left)
         else:
-            log.info("%s : %d repris du coffre (sac : %d)", member.name, taken, net.held(template) or 0)
+            log.info("%s : %d repris du coffre (coffre %d -> %d)", member.name, taken, stored, left)
         return taken
     finally:
         if not choose_type(game, layout, ALL_TYPES, CHEST_FILTER, CHEST_LIST):

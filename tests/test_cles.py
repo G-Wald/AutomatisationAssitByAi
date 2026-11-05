@@ -2,6 +2,7 @@
 passage aux coffres (mode sacs + banque), passages ramenés à ceux que les clés permettent. Sans le jeu : faux
 personnages, faux échanges, faux trajets."""
 
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -245,6 +246,7 @@ class FakeGame:
             self.typed = None
 
     def double_click(self, point, spread=None):
+        time.sleep(0.02)  # la réponse du serveur arrive après le geste (horloge de Windows à ~15 ms près)
         self.on_ok(None)
 
     def type_text(self, text):
@@ -311,9 +313,13 @@ def test_keys_are_taken_back_from_the_chest(no_list):
     net.feed("ELO11655e57~2161~5~~;O244eb62~6f1~7f~~")  # 5 clés (uid 291855959), 127 objets 1777
     assert chest_stacks(net, KEY) == [(0x11655e57, 5)]
 
+    # 05/11 (observé avec Walitcoin) : un double-clic sur la pile en fait passer une dans le sac.
+    taken = [0]
+
     def on_ok(count):
-        net.feed(f"EsKO+291855959|{5 - count}|8545|")
-        net.feed(f"OAKOb0~2161~{count}~~;")
+        taken[0] += count or 1
+        net.feed(f"EsKO+291855959|{5 - taken[0]}|8545|")
+        net.feed(f"OAKOb0~2161~{taken[0]}~~;")
 
     member = SimpleNamespace(name="Fourboun", game=FakeGame(net, BAG_DROP, on_ok))
     assert take_from_chest(member, KEY, 3) == 3
