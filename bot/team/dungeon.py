@@ -762,6 +762,9 @@ class DungeonFarm:
         fights, won = bot.fights, 0
         step = getattr(bot, "safe_step", bot.step)  # erreurs rattrapées comme dans TeamBot.run (21/10)
         waved: set[int] = set()  # salles déjà faites en vagues (une fois chacune)
+        # Équipe sur deux salles à la reprise (05/11) : réunie par _split_team / _catch_up, pas par la vérification de
+        # la boucle d'équipe (« pas sur la carte du principal ... je m'arrête »).
+        bot._together_checked = True
         while not bot.finished:
             places = self._small_room(waved)
             if places is not None:
