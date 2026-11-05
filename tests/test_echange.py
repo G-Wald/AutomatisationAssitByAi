@@ -206,3 +206,22 @@ def test_exchange_line_of_the_last_miniature_below_the_map_is_found(monkeypatch)
     monkeypatch.setattr(trade, "close_portrait_menu", lambda g: True)
     assert trader._ask(7)
     assert 1650 <= clicked[-1][0] <= 1780 and 835 <= clicked[-1][1] <= 865  # la ligne « Echange »
+
+
+def test_exchange_line_of_the_7th_miniature_is_not_the_private_message_line(monkeypatch):
+    # 05/11 (capture de Fourboun) : cadre lu doublé à 1720 px, l'OCR de Windows réduisait l'image, « Échange » lu sur la
+    # ligne « Message privé » (y=753 au lieu de 783) ; « Message privé à Waldarch » ouvert à la place de l'échange.
+    from types import SimpleNamespace
+
+    from bot.team import trade
+    from conftest import load_frame
+
+    frame = load_frame("menu_miniature_7_waldarch")
+    clicked = []
+    game = SimpleNamespace(look=lambda park=False: frame, click=lambda point, spread=None: clicked.append(point),
+                           sleep=lambda s: None)
+    trader = trade.Trader.__new__(trade.Trader)
+    trader.giver = SimpleNamespace(game=game)
+    monkeypatch.setattr(trade, "close_portrait_menu", lambda g: True)
+    assert trader._ask(6)
+    assert 770 <= clicked[-1][1] <= 796  # « Echange » (783), pas « Message privé » (747)

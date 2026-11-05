@@ -34,6 +34,8 @@ PORTRAIT = (1887, 167)  # premier portrait du cadre déplié
 PORTRAIT_STEP = 54.4
 PORTRAITS = 8
 LIFE_BAR = (1897, 152, 1907, 182)  # barre de vie rouge à droite du premier portrait : cadre déplié
+PRIVATE_FOUND = 0.6  # titre « Message privé » et bouton « Annuler » de sa fenêtre (05/11 : 0,72 et 0,87)
+OCR_MAX_SIDE = 1400  # px : côté de l'image lue par l'OCR au plus (au-delà, Windows la réduit, positions fausses)
 MENU_BOX = (-520, -340, 10, 480)  # menu du portrait : à sa gauche ; remonté pour les portraits du bas (30/10 :
 # titre d'Elseiso, 8e portrait, hors de la zone lue avec -40)
 YES = (1122, 426)  # « Oui » de « X te propose de faire un échange. Acceptes-tu ? »
@@ -92,6 +94,23 @@ def close_portrait_menu(game) -> bool:
     return close_any_menu(game, "Menu d'une miniature du groupe")
 
 
+def close_wrong_window(game, name: str) -> bool:
+    """Après un clic sur « Echange » sans demande annoncée par le serveur : la fenêtre « Message privé à ... » ouverte
+    à la place (05/11 : ligne du dessus cliquée, fenêtre restée ouverte, tous les échanges suivants ratés derrière) est
+    fermée par son « Annuler » (rien n'est envoyé : message vide). True si elle l'était."""
+    from bot.team.bank import best_text
+
+    frame = game.look(park=False)
+    title, _ = best_text(frame, "Message privé", dark=False)
+    cancel, where = best_text(frame, "Annuler", dark=False)
+    if title < PRIVATE_FOUND or cancel < PRIVATE_FOUND:
+        return False
+    log.warning("%s : fenêtre « Message privé » ouverte au lieu d'un échange : je la ferme (Annuler)", name)
+    game.click(where, (6, 3))
+    game.sleep(0.8)
+    return True
+
+
 def _exchange_line(frame, box):
     """Point de la ligne « Echange » du menu d'une miniature, lu par l'OCR de Windows ; None sans elle (sa propre
     miniature, quelqu'un sur une autre carte) ou sans OCR."""
@@ -100,11 +119,15 @@ def _exchange_line(frame, box):
     from bot.perception.chat import ocr_boxes
 
     x0, y0, x1, y1 = box
-    lines = ocr_boxes(cv2.resize(frame.image[y0:y1, x0:x1], None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC))
+    # 05/11 : cadre jusqu'au bas de la fenêtre, 860 px de haut, doublé à 1720 : l'OCR de Windows réduit l'image lui-même
+    # et rend des positions décalées (« Échange » lu à y=753, la ligne « Message privé », au lieu de 785) ; « Message
+    # privé à Waldarch » ouvert, l'échange jamais demandé. Agrandi tant que l'image reste sous OCR_MAX_SIDE px.
+    scale = max(1.0, min(2.0, OCR_MAX_SIDE / max(1, y1 - y0, x1 - x0)))
+    lines = ocr_boxes(cv2.resize(frame.image[y0:y1, x0:x1], None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC))
     log.debug("Menu de la miniature lu : %s", " | ".join(text for text, _ in lines or []) or "rien")
     for text, (bx0, by0, bx1, by1) in lines or []:
         if "echange" in text.lower().replace("é", "e"):
-            return x0 + (bx0 + bx1) / 4, y0 + (by0 + by1) / 4
+            return x0 + (bx0 + bx1) / (2 * scale), y0 + (by0 + by1) / (2 * scale)
     return None
 
 
@@ -184,6 +207,7 @@ class Trader:
                 if who is None:
                     log.info("Échange %s : demande par la miniature %d pas annoncée par le serveur", self.giver.name,
                              index + 1)
+                    close_wrong_window(game, self.giver.name)
                     continue
                 self.portraits[(self.giver.name, who.name)] = index
                 self._check_slot(index, who)
