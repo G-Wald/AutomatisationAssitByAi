@@ -65,6 +65,8 @@ MENU_FOUND = 0.66  # « Echange » : 0,68 le 30/10
 RESERVE = 0.02  # part des pods max gardée libre chez le principal
 OPEN_SETTLE = 1.5  # s : fenêtre d'échange dessinée (sac compris) après ECK1
 SERVER_WAIT = 3.0  # s : réponse du serveur (ERK, ECK, EMK...)
+OFFER_SETTLE = 0.4  # s : quantité offerte relue après ce délai, jusqu'à ce qu'elle ne change plus (06/11)
+OFFER_LOOKS = 4
 ACCEPT_DELAY = 4.0  # s après le dernier changement d'une offre : « Accepter » de nouveau cliquable
 ACCEPT_TRIES = 2
 CONCLUDE_WAIT = 6.0  # s : échange conclu après les deux « Accepter »
@@ -448,12 +450,16 @@ class Trader:
                 return False
             # 05/11 (journal 203000) : le reste par la fenêtre de quantité (glisser) ne s'ouvrait pas, l'échange
             # restait en suspens et les 6 suivants ratés derrière. Un double-clic par unité, chacun vu par le serveur.
-            for placed in range(1, count):
+            # 06/11 (journal 200051) : un double-clic en a posé 2, annoncées l'une après l'autre ; le suivant, fait
+            # dès la première annonce, en a fait 3 au lieu de 2 (annulé). Quantité offerte relue une fois stable,
+            # seulement ce qui manque.
+            offered = self._settled_offer(uid, template)
+            while offered < count:
                 if self._put(None, start) is None:
                     log.warning("Échange %s -> %s : le reste pas posé (%d sur %d)", self.giver.name, self.taker.name,
-                                placed, count)
+                                offered, count)
                     return False
-            offered = self._received().get(uid, (template, 0))[1]
+                offered = self._settled_offer(uid, template)
             if offered != count:
                 log.warning("Échange %s -> %s : %d objet(s) %d offerts au lieu de %d : annulé", self.giver.name,
                             self.taker.name, offered, template, count)
@@ -500,6 +506,18 @@ class Trader:
     def _received(self) -> dict[int, tuple[int, int]]:
         exchange, _ = self.taker.game.net.trade()
         return dict(exchange.theirs) if exchange is not None and not exchange.closed_at else {}
+
+    def _settled_offer(self, uid: int, template: int) -> int:
+        """Quantité de la pile `uid` vue par le receveur, relue jusqu'à ce qu'elle ne bouge plus (OFFER_SETTLE s
+        d'écart, OFFER_LOOKS lectures au plus)."""
+        offered = self._received().get(uid, (template, 0))[1]
+        for _ in range(OFFER_LOOKS):
+            self.giver.game.sleep(OFFER_SETTLE)
+            now = self._received().get(uid, (template, 0))[1]
+            if now == offered:
+                break
+            offered = now
+        return offered
 
     def _put(self, count: int | None, start: tuple[float, float] = FIRST_STACK) -> int | None:
         """Glisse la pile de `start` (repère de référence ; défaut : la première) dans l'offre : `count` unités de plus

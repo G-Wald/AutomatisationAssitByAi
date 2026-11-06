@@ -710,3 +710,21 @@ def test_window_dropped_during_the_others_login_is_reconnected(titles, monkeypat
     names = connect_windows(ConnectionSettings(), ["Gela-[A13]", "Brawli-[Gal]"], lambda w: games[w.hwnd], gela)
     assert sorted(names) == ["Brawli-[Gal]", "Gela-[A13]"] and launches == []
     assert peso.window.title.startswith("Brawli-[Gal]")
+
+
+def test_play_click_not_taken_keeps_the_character_chosen_in_this_window(titles):
+    # 06/11 (journal 194826) : « Jouer » pas pris chez Waldarch ; en cascade, la liste des voulus ne donnait plus que
+    # ceux qui manquent hors de son propre choix : vide, fenêtre fermée (« aucun de  sur ce compte »).
+    plays = []
+
+    def react(game, point, button):
+        if game.screen == "connexion_choix_personnage" and inside(point, (1180, 780, 1300, 825)):
+            plays.append(point)
+            if len(plays) == 2:  # le premier « Jouer » se perd
+                game.window.title = "Gela-[A13] - Dofus Retro v1.49.6"
+                game.screen = "hors_combat"
+
+    game = ScreenGame("connexion_choix_personnage", react)
+    login = Login(game, ConnectionSettings(), lambda: [n for n in ["Gela-[A13]"] if n != login.chosen],
+                  only_wanted=True)
+    assert login.run() == "Gela-[A13]" and len(plays) == 2

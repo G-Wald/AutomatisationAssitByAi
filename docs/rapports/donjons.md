@@ -666,3 +666,30 @@ Restent ouvertes :
   - Exemple :
     `--donjon champs --passages 10 --set donjon.cles=sac_banque --set donjon.cles_manquantes=farm --minutes 240`.
   - Pas encore vu en jeu.
+
+### 06/11, soir : essai en jeu de la boucle (session d'une heure, journaux 194826 et 200051)
+
+- **Farm des clés** (10 min, `donjon.cles=sac`, sacs vides) : l'équipe est partie tout de suite farmer la zone des
+  Champs. 8 combats, 0 mort. Elle s'est arrêtée à la fin des 10 minutes, après la fin du dernier combat. Aucune clé
+  n'est tombée (environ 0,5 %), donc pas de passage. La mécanique est validée.
+- **Waldarch pas connecté** : son premier clic sur « Jouer » s'est perdu. En cascade, la liste des personnages voulus
+  ne comptait plus le choix fait par sa propre fenêtre : elle était vide, et la fenêtre a été crue inutile puis fermée
+  (« aucun de  sur ce compte »). Corrigé dans `login._character`, testé. Au lancement suivant, les 8 étaient en jeu.
+- **Boucle** (`sac_banque` + `cles_manquantes=farm`, 2 passages demandés, `--minutes 45`) :
+  - Coffre : trajet de l'équipe jusqu'à la banque, Fourboun a repris 16 clés (coffre 36 -> 20), retour devant
+    l'entrée. Validé.
+  - Échanges : 5 sur 7 du premier coup. Les 2 autres ont été annulés avec 3 clés posées au lieu de 2 : un double-clic
+    en avait posé 2, annoncées en deux messages, et le clic suivant partait dès la première annonce.
+    - Correction : la quantité offerte est relue une fois stable, et le bot ne pose que ce qui manque. Testé : le test
+      échoue sans la correction.
+    - Les échanges ratés sont aussi retentés une fois.
+    - En jeu, c'est le farm des clés qui a refait la répartition : 16 clés pour 8, assez tout de suite. Les 2 échanges
+      ont réussi au deuxième essai.
+  - Pause « BLOQUÉ » de 2 min juste après l'entrée : les 5 minutes d'échanges ne comptaient pas comme un progrès.
+    Corrigé : la répartition des clés, l'entrée et la sortie du donjon sont notées comme des progrès.
+  - Passage : 11 combats, 0 mort, 19 min (pause comprise).
+  - Limite de temps : « plus le temps pour un passage de plus (19 min estimées, 16 min restantes) ». L'équipe s'est
+    arrêtée dehors, pas au milieu du donjon. Validé.
+- Pas encore vu en jeu : le retour à l'entrée depuis 7,-26 au passage suivant (l'équipe était déjà devant l'entrée au
+  départ), ni les deux corrections d'échange.
+- État à la fin : les 8 sont en 7,-26 avec 1 clé chacun ; il reste 20 clés au coffre de Fourboun.

@@ -191,6 +191,12 @@ class KeyManager:
         by_name = {m.name: m for m in self.members}
         failed = [(giver, taker, count) for giver, taker, count in plan.moves
                   if self.blocked or not self.trade(by_name[giver], by_name[taker], template, count)]
+        if failed and not self.blocked:
+            # 06/11 (journal 200051) : 2 échanges sur 7 annulés (une clé de trop posée), 0 passage pour 14 clés
+            # réparties : chaque échange raté retenté une fois, les autres faits.
+            log.info("Clés de %s : %d échange(s) raté(s), retentés une fois", dungeon, len(failed))
+            failed = [(giver, taker, count) for giver, taker, count in failed
+                      if self.blocked or not self.trade(by_name[giver], by_name[taker], template, count)]
         for giver, taker, count in failed:
             log.warning("Clés de %s : échange %s -> %s (%d) pas fait", dungeon, giver, taker, count)
         final = self.count(template)

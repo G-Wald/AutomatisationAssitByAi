@@ -580,6 +580,7 @@ class DungeonFarm:
                                 self.runs, passes)
                     self.runs = passes
                 self._keys_left = passes
+                self._progress("clés réparties")
         done = 0
         bot = self.bot
         deadline = getattr(bot, "deadline", None)
@@ -590,6 +591,7 @@ class DungeonFarm:
                 self._keys_left = self._refill(deadline)
                 if self._keys_left <= 0:
                     break
+                self._progress("clés refaites")
             resuming = run == 1 and start == "salles"  # reprise dans les salles : l'équipe y est, à finir
             if deadline is not None and not resuming and time.monotonic() + estimate > deadline:
                 # 06/11 : --minutes n'arrête plus l'équipe au milieu d'un passage (dans les salles, clé donnée) ; pas de
@@ -674,10 +676,22 @@ class DungeonFarm:
             return False
         elif not (self.entry.enter(start, only) if run == 1 else self.entry.enter()):
             return False
+        else:
+            self._progress("équipe entrée dans le donjon")
         if not self._fight_rooms(room if run == 1 and start == "salles" else 1):
             return False
         self._close_windows()
-        return self.entry.leave()
+        if not self.entry.leave():
+            return False
+        self._progress("équipe sortie du donjon")
+        return True
+
+    def _progress(self, what: str) -> None:
+        """Progrès noté pour la surveillance de l'équipe (TeamBot._progress) : 06/11 (journal 200051), 5 min
+        d'échanges de clés sans progrès noté, pause « BLOQUÉ » de 2 min juste après l'entrée."""
+        note = getattr(self.bot, "_progress", None)
+        if callable(note):
+            note(what)
 
     def _back_to_entrance(self) -> bool:
         """Toute l'équipe sûrement dehors, loin du PNJ de l'entrée (DungeonEntry.away) : ramenée devant lui par le trajet

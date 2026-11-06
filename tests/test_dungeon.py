@@ -637,3 +637,20 @@ def test_team_zone_farm_until_enough_then_the_previous_mode_comes_back(monkeypat
     assert not team_zone_farm(bot, (7, -25), lambda: False, 0, "Clés")  # durée écoulée
     bot.engager = None
     assert not team_zone_farm(bot, (7, -25), lambda: True, 60, "Clés")  # combats désactivés : pas de farm
+
+
+def test_entry_and_exit_count_as_progress_for_the_watchdog(monkeypatch):
+    # 06/11 (journal 200051) : 5 min d'échanges de clés sans progrès noté, pause « BLOQUÉ » de 2 min juste après l'entrée.
+    from types import SimpleNamespace
+
+    from bot.team.dungeon import DungeonFarm
+
+    notes = []
+    bot = SimpleNamespace(members=[], leader=None, _settings={}, _progress=notes.append)
+    farm = DungeonFarm(bot, load_dungeons()["champs"], 1)
+    monkeypatch.setattr(farm, "_close_windows", lambda: None)
+    monkeypatch.setattr(farm, "_pods_ready", lambda: True)
+    monkeypatch.setattr(farm, "_fight_rooms", lambda first=1: True)
+    monkeypatch.setattr(farm.entry, "enter", lambda *args: True)
+    monkeypatch.setattr(farm.entry, "leave", lambda: True)
+    assert farm.run() == 1 and notes == ["équipe entrée dans le donjon", "équipe sortie du donjon"]

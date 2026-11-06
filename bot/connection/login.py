@@ -170,6 +170,11 @@ class Login:
 
     def _character(self, frame: Frame, view: LoginView) -> None:
         wanted = self.wanted
+        if self.chosen and self.chosen not in wanted:
+            # 06/11 (journal 194826) : « Jouer » pas pris, écran des personnages toujours là ; en cascade, la liste ne
+            # donne plus que ceux qui manquent hors de cette fenêtre (son choix compté) : vide, fenêtre de Waldarch
+            # crue inutile et fermée. Son propre choix reste le sien.
+            wanted = [self.chosen] + wanted
         found = find_character(frame, view, wanted) if wanted else None
         if found is not None:
             slot, self.chosen = found

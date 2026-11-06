@@ -98,7 +98,24 @@ def test_a_failed_trade_is_counted_from_the_server():
     members = team(4, 0, 0)
     keys_manager, trades = manager(members, fail={("Fourboun", "Eldieso")})
     assert keys_manager.prepare("Donjon d'Incarnam", 1, KEY) == 0  # Eldieso n'a toujours pas de clé
-    assert len(trades) == 2 and members[2].game.net.count == 1
+    assert trades == [("Fourboun", "Eldieso", 1), ("Fourboun", "Enu-six", 1), ("Fourboun", "Eldieso", 1)]  # retenté
+    assert members[2].game.net.count == 1
+
+
+def test_a_failed_trade_is_retried_once_after_the_others():
+    # 06/11 (journal 200051) : 2 échanges sur 7 annulés (une clé de trop posée) : 0 passage pour 16 clés.
+    members = team(4, 0, 0)
+    fails = {("Fourboun", "Eldieso")}
+    keys_manager, trades = manager(members, fail=fails)
+    real = keys_manager.trade
+
+    def once(giver, taker, template, count):
+        ok = real(giver, taker, template, count)
+        fails.clear()  # le second essai passe
+        return ok
+
+    keys_manager.trade = once
+    assert keys_manager.prepare("Donjon d'Incarnam", 1, KEY) == 1 and len(trades) == 3
 
 
 class Trip:
@@ -391,3 +408,37 @@ def test_missing_keys_are_told_to_the_user(caplog):
     caplog.clear()
     keys_manager, trades = manager(team(3, 0, 0))
     assert keys_manager.prepare("Donjon d'Incarnam", 1, KEY) == 1 and "À l'utilisateur" not in caplog.text
+
+
+def test_offer_item_waits_for_a_double_click_announced_twice(no_list):
+    # 06/11 (journal 200051) : un double-clic en a posé 2, annoncées l'une après l'autre ; le double-clic suivant, fait
+    # dès la première annonce, en a fait 3 au lieu de 2. Ce qui manque est relu une fois l'offre stable.
+    trader, taker_net = trade_pair(KEY)
+    game = trader.giver.game
+    first = {"done": False}
+    plain = game.on_ok
+
+    def twice(count):
+        plain(count)
+        if not first["done"]:
+            first["done"] = True
+            game.late = lambda: plain(None)  # seconde unité annoncée un peu après
+
+    game.on_ok = twice
+    game.late = None
+
+    def sleep(seconds):
+        if game.late is not None:
+            late, game.late = game.late, None
+            late()
+
+    game.sleep = sleep
+    click = game.double_click
+
+    def double_click(point, spread=None):
+        sleep(0)  # annonce en retard arrivée avant ce clic
+        click(point, spread)
+
+    game.double_click = double_click
+    assert trader.offer_item(KEY, 2)
+    assert taker_net.trade()[0].theirs == {170: (KEY, 2)}
