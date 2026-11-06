@@ -54,6 +54,7 @@ SAME_ROOM_WAIT = 5.0  # s : toute l'équipe annoncée sur la carte du principal 
 # moins par salle ») : l'équipe combat par vagues, le groupe de la salle réapparaissant après chaque victoire.
 ROOMS_FILE = ROOT / "data" / "donjons.json"  # référence du client : places de chaque salle (placement p1 : joueurs)
 RESPAWN_WAIT = 180.0  # s au plus : le groupe de la salle réapparu, pour la vague suivante
+PASS_ESTIMATE = 18 * 60.0  # s : premier passage d'une session (Champs à 8 : 15 à 18 min, 05/11)
 WAVE_RETRY = 3.0  # s entre deux recherches du groupe pendant l'attente de sa réapparition
 SAME_PLACE = 12.0  # écart de décor (_gap de travel.py) sous lequel c'est la même salle (même : < 3, autre : > 30)
 
@@ -147,6 +148,23 @@ class DungeonEntry:
         gaps = {step: _gap(scene, ref) for step, ref in self._places().items()}
         step = min(gaps, key=gaps.get, default=None)
         return step if step is not None and gaps[step] < SAME_PLACE else None
+
+    def away(self, member: Member) -> bool:
+        """Sûrement hors du donjon et loin du PNJ de l'entrée : carte annoncée par le serveur qui n'est ni celle du PNJ
+        ni une salle du donjon (data/donjons.json), ou, carte pas encore annoncée, coordonnées lues à l'écran autres que
+        celles de l'entrée (les salles des Champs portent celles de l'entrée, 7,-25). False si ce n'est pas sûr (sans
+        carte du PNJ : donjon d'Incarnam, situé par le décor ; salles du donjon inconnues)."""
+        rooms = room_maps(self.spec.name)
+        if self.spec.npc_map is None or not rooms:
+            return False
+        net = getattr(member.game, "net", None)
+        here = net.map_id if net is not None and net.alive() else None
+        if here is not None:
+            return here != self.spec.npc_map and here not in rooms
+        from bot.perception.maplabel import read_map_label
+
+        label = read_map_label(member.game.look(park=False))
+        return label is not None and label.coords is not None and tuple(label.coords) != tuple(self.spec.outside)
 
     def _places(self) -> dict[str, np.ndarray]:
         if self._place_scenes is None:
@@ -453,6 +471,19 @@ class BankTrip:
         return pods.team_trip(self.bot, self.spec.outside, "Retour au donjon")
 
 
+def room_maps(dungeon: str, path: Path = ROOMS_FILE) -> set[int]:
+    """Cartes des salles du donjon au nom exact `dungeon` (data/donjons.json), salle de fin comprise ; vide s'il n'y
+    est pas."""
+    import json
+
+    try:
+        rows = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return set()
+    return {room["carte"] for row in rows if row.get("nom") == dungeon for room in row.get("salles") or []
+            if room.get("carte") is not None}
+
+
 def room_places(dungeon: str, map_id: int | None, path: Path = ROOMS_FILE) -> int | None:
     """Places des joueurs dans la salle `map_id` du donjon au nom exact `dungeon` (data/donjons.json, placement p1) ;
     None si la salle ou le donjon n'y sont pas."""
@@ -530,35 +561,60 @@ class DungeonFarm:
                                 self.runs, passes)
                     self.runs = passes
         done = 0
+        bot = self.bot
+        deadline = getattr(bot, "deadline", None)
+        estimate = PASS_ESTIMATE
         for run in range(1, self.runs + 1):
+            resuming = run == 1 and start == "salles"  # reprise dans les salles : l'équipe y est, à finir
+            if deadline is not None and not resuming and time.monotonic() + estimate > deadline:
+                # 06/11 : --minutes n'arrête plus l'équipe au milieu d'un passage (dans les salles, clé donnée) ; pas de
+                # nouveau passage sans le temps de le finir (durée du précédent, PASS_ESTIMATE pour le premier).
+                log.info("Donjon : plus le temps pour un passage de plus (%.0f min estimées, %.0f min restantes)",
+                         estimate / 60, max(0.0, deadline - time.monotonic()) / 60)
+                break
             log.info("Donjon : passage %d/%d", run, self.runs)
-            self._close_windows()
-            if run == 1 and start == "salles":
-                log.info("Donjon : l'équipe déjà dans les salles, je reprends aux combats")
-            elif not self._pods_ready():  # équipe dehors : pods vus avant d'entrer (team/pods.py)
-                break
-            elif run > 1 and not self._back_to_entrance():
-                break
-            elif not (self.entry.enter(start, only) if run == 1 else self.entry.enter()):
-                break
-            if not self._fight_rooms(room if run == 1 and start == "salles" else 1):
-                break
-            self._close_windows()
-            if not self.entry.leave():
-                break
+            started = time.monotonic()
+            if deadline is not None:
+                bot.deadline = None  # rendue à la fin du passage (finally)
+            try:
+                if not self._one_pass(run, start, only, room):
+                    break
+            finally:
+                if deadline is not None:
+                    bot.deadline = deadline
             done += 1
-            log.info("Donjon : passage %d/%d terminé", run, self.runs)
+            estimate = time.monotonic() - started
+            log.info("Donjon : passage %d/%d terminé en %.0f min", run, self.runs, estimate / 60)
         log.info("Donjon : %d passage(s) complet(s) sur %d", done, self.runs)
         return done
 
+    def _one_pass(self, run: int, start: str | None, only: set[str] | None, room: int) -> bool:
+        """Un passage : entrée (ou reprise), salles, sortie. False dès qu'une étape échoue."""
+        self._close_windows()
+        if run == 1 and start == "salles":
+            log.info("Donjon : l'équipe déjà dans les salles, je reprends aux combats")
+        elif not self._pods_ready():  # équipe dehors : pods vus avant d'entrer (team/pods.py)
+            return False
+        elif (run > 1 or start is None) and not self._back_to_entrance():
+            return False
+        elif not (self.entry.enter(start, only) if run == 1 else self.entry.enter()):
+            return False
+        if not self._fight_rooms(room if run == 1 and start == "salles" else 1):
+            return False
+        self._close_windows()
+        return self.entry.leave()
+
     def _back_to_entrance(self) -> bool:
-        """Sortie par une case (donjon des Champs) : l'équipe est déposée sur une carte voisine (05/11, journal 212413 :
-        7,-26 au lieu de 7,-25, « ni devant l'entrée ni dans les premières salles », passage 3 pas fait) ; ramenée devant
-        le PNJ de l'entrée avant le passage suivant. Sortie par le PNJ de fin : déjà devant lui."""
-        if self.spec.exit_cell is None:
+        """Toute l'équipe sûrement dehors, loin du PNJ de l'entrée (DungeonEntry.away) : ramenée devant lui par le trajet
+        d'équipe. 05/11 (journal 212413) : la sortie des Champs par une case dépose l'équipe en 7,-26, pas devant Mawy
+        en 7,-25 ; « ni devant l'entrée ni dans les premières salles », passage suivant pas fait. De même au lancement,
+        l'équipe laissée là. Sinon (devant le PNJ, dans les salles, ou pas sûr) : rien, l'entrée situe chacun."""
+        members = self.bot.members
+        if not members or not all(self.entry.away(m) for m in members):
             return True
         from bot.team import pods
 
+        log.info("Donjon : toute l'équipe dehors, loin de l'entrée : je la ramène en %s,%s", *self.spec.outside)
         return pods.team_trip(self.bot, self.spec.outside, "Retour à l'entrée du donjon")
 
     def _pods_ready(self) -> bool:

@@ -512,22 +512,64 @@ def test_members_without_an_announced_map_after_a_small_room_are_left_behind(mon
     assert room == 9772 and [m.name for m in behind] == list("EFGH")
 
 
-def test_team_dropped_next_to_the_entrance_by_the_exit_cell_walks_back_before_the_next_pass(monkeypatch):
-    # 05/11 (journal 212413) : sortie des Champs par la case (27,17), équipe déposée en 7,-26 ; passage suivant pas fait
-    # (« ni devant l'entrée ni dans les premières salles »). Bouftou : sortie par le PNJ, déjà devant lui.
+def test_team_away_from_the_entrance_walks_back_before_each_pass(monkeypatch):
+    # 05/11 (journal 212413) : sortie des Champs par la case (27,17), équipe déposée en 7,-26 (7452) ; passage suivant
+    # pas fait (« ni devant l'entrée ni dans les premières salles »). Ramenée devant Mawy avant chaque passage, le
+    # premier compris ; jamais depuis une salle du donjon ni quand elle est devant le PNJ.
+    import time
     from types import SimpleNamespace
 
+    from bot.connection.network import ClientFeed
     from bot.team import pods
     from bot.team.dungeon import DungeonFarm
 
     trips = []
     monkeypatch.setattr(pods, "team_trip", lambda bot, goal, why: trips.append(goal) or True)
-    for name, expected in (("champs", [(7, -25), (7, -25)]), ("bouftou", [])):
+
+    def team(*maps):
+        members = []
+        for index, room in enumerate(maps):
+            net = ClientFeed(f"P{index}")
+            net.feed(f"GDM|{room}|0706131721|aa")
+            net.heard_at = time.monotonic()
+            members.append(SimpleNamespace(name=f"P{index}", game=SimpleNamespace(net=net)))
+        return members
+
+    for maps, expected in (((7452, 7452), [(7, -25)] * 3), ((7453, 7453), []), ((7452, 7453), []),
+                           ((7452, 9770), [])):
         trips.clear()
-        farm = DungeonFarm(SimpleNamespace(members=[], leader=None, _settings={}), load_dungeons()[name], 3)
+        members = team(*maps)
+        farm = DungeonFarm(SimpleNamespace(members=members, leader=members[0], _settings={}),
+                           load_dungeons()["champs"], 3)
         monkeypatch.setattr(farm, "_close_windows", lambda: None)
         monkeypatch.setattr(farm, "_pods_ready", lambda: True)
         monkeypatch.setattr(farm, "_fight_rooms", lambda first=1: True)
         monkeypatch.setattr(farm.entry, "enter", lambda *args: True)
         monkeypatch.setattr(farm.entry, "leave", lambda: True)
-        assert farm.run() == 3 and trips == expected, name
+        assert farm.run() == 3 and trips == expected, maps
+    assert not DungeonFarm(SimpleNamespace(members=team(7452), leader=None, _settings={}),
+                           load_dungeons()["incarnam"], 1).entry.away(team(7452)[0])  # pas de carte du PNJ : pas sûr
+
+
+def test_session_time_limit_never_cuts_a_pass(monkeypatch):
+    # 06/11 : --minutes arrêtait l'équipe au milieu du donjon (clé donnée, salles à moitié faites). Un passage n'est
+    # commencé que s'il a le temps de finir ; pendant le passage, la limite de la session est suspendue.
+    import time
+    from types import SimpleNamespace
+
+    from bot.team.dungeon import PASS_ESTIMATE, DungeonFarm
+
+    def farm_with(deadline, start=None):
+        bot = SimpleNamespace(members=[], leader=None, _settings={}, deadline=deadline)
+        farm = DungeonFarm(bot, load_dungeons()["champs"], 3)
+        seen = []
+        monkeypatch.setattr(farm, "_one_pass", lambda run, *args: seen.append(bot.deadline) or True)
+        return farm, bot, seen
+
+    farm, bot, seen = farm_with(time.monotonic() + PASS_ESTIMATE / 2)
+    assert farm.run() == 0 and seen == []  # pas le temps d'un passage
+    farm, bot, seen = farm_with(time.monotonic() + PASS_ESTIMATE / 2)
+    assert farm.run("salles") == 3 and seen == [None] * 3  # reprise : finie, puis passages bien plus courts qu'estimé
+    deadline = time.monotonic() + 3 * PASS_ESTIMATE
+    farm, bot, seen = farm_with(deadline)
+    assert farm.run() == 3 and seen == [None] * 3 and bot.deadline == deadline  # limite rendue après chaque passage

@@ -635,3 +635,21 @@ Restent ouvertes :
 - **Passage 3** : à 8, 10 combats en 14 min 40, 0 mort. Pesopepe est passé niveau 31 et Fourbodeux niveau 37.
 - **Clés** : 3 par personnage au départ, toutes utilisées. Il en reste 36 au coffre de Fourboun. Pas besoin de farm de
   clés dans les Champs pour ces 3 passages.
+
+### 06/11 : donjon en boucle (sans essai en jeu)
+
+- **Retour à l'entrée avant chaque passage**, le premier compris. Il se fait quand toute l'équipe est sûrement dehors et
+  loin du PNJ (`DungeonEntry.away`).
+  - « Sûrement dehors » : la carte annoncée par le serveur n'est ni celle du PNJ ni une salle du donjon
+    (`data/donjons.json`). Si la carte n'est pas encore annoncée, ce sont les coordonnées lues à l'écran qui comptent,
+    quand elles diffèrent de celles de l'entrée.
+  - Jamais depuis une salle. Jamais pour un donjon sans carte de PNJ (Incarnam).
+  - Ce test remplace celui d'hier, qui se basait sur la sortie par une case.
+- **`--minutes` ne coupe plus un passage.** Un passage ne commence que s'il a le temps de finir, estimé d'après la durée
+  du passage précédent (18 min pour le premier). Pendant le passage, la limite de la session est suspendue. Une reprise
+  dans les salles se finit toujours.
+- **Clés** : le mode `donjon.cles=sac_banque` existe déjà. Au début du farm, ceux qui manquent de clés vont à leur
+  coffre, puis les clés sont réparties.
+- **À décider : clés quand le coffre est vide.** La Clef des Champs tombe à environ 0,5 % sur les monstres des Champs
+  (client et web, `config/donjons.yaml`). Elle se fabrique aussi au métier de Bricoleur, avec 3 Pétales de Tournesol
+  Sauvage et 3 Fleurs de Pissenlit Diabolique.
