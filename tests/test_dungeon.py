@@ -673,3 +673,24 @@ def test_zone_farm_never_stops_with_a_fight_announced(monkeypatch):
     bot.step = lambda: steps.append(1)
     bot.fight_pending = lambda: fights.pop(0)
     assert not team_zone_farm(bot, (7, -25), lambda: False, 0, "Clés") and len(steps) == 3
+
+
+def test_a_member_the_server_sees_still_is_clicked_again_at_once(monkeypatch):
+    # 06/11 (journal 210755) : 3 sur 8 pas passés par la sortie, recliqués seulement 12 s après chacun (46 s).
+    import time
+    from types import SimpleNamespace
+
+    monkeypatch.setattr("bot.team.dungeon.NET_SILENT", 0.0)  # le jeu factice n'attend pas pour de vrai
+
+    def net(moved):
+        return SimpleNamespace(alive=lambda: True, my_id=1, moved_at=moved, map_at=0.0,
+                               wait_new_map=lambda since, wait: 1)
+
+    spec = load_dungeons()["champs"]
+    screen = Screen()
+    room, outside = load_frame(PLATES), load_frame(OUTSIDE)
+    team = [member("A", screen, room, outside), member("B", screen, room, outside)]
+    team[0].game.net = net(time.monotonic() + 3600)  # déplacement annoncé : clic pris
+    team[1].game.net = net(0.0)  # rien d'annoncé : reclic tout de suite
+    assert DungeonEntry(team, spec).leave()
+    assert len(events(screen, "click")) == 3

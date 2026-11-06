@@ -36,6 +36,7 @@ from bot.team.member import Member
 log = logging.getLogger(__name__)
 
 DUNGEONS_FILE = ROOT / "config" / "donjons_entree.yaml"  # donjons.yaml : recherche du 12/10 (candidats, sources)
+NET_SILENT = 1.5  # s : clic sur une case sans déplacement annoncé par le serveur : pas pris (06/11)
 CHANGE_WAIT = 12.0  # s : clic sur un soleil -> autre décor (marche jusqu'au soleil comprise)
 SETTLE = 1.0  # s : nouveau décor affiché, le temps qu'il finisse de se dessiner
 PLATE_WALK = 5.0  # s : marche jusqu'à la dalle, et la pierre qui se déplace
@@ -298,9 +299,20 @@ class DungeonEntry:
         log.info("Donjon : %s prend %s (case %d,%d)", ", ".join(m.name for m in members), what, *cell)
         # 05/11 : changement de carte compté depuis ce clic (_changed : sinon depuis la dernière bulle, ou 0 : n'importe
         # quelle carte d'avant comptait comme une arrivée).
+        before = {}
         for member in members:
             self._opened_at[member.name] = time.monotonic()
-        before = {m.name: self._click_sun(m, cell, 0) for m in members}
+            before[member.name] = self._click_sun(member, cell, 0)
+        # 06/11 (journal 210755) : 3 personnages sur 8 pas passés par la sortie, recliqués seulement après 12 s
+        # d'attente chacun (46 s). Comme les soleils des cartes (team/loop.py, NET_SUN_SILENT) : aucun déplacement
+        # annoncé par le serveur peu après le clic, il n'a pas été pris ; recliqué tout de suite, à un autre endroit.
+        if members:
+            members[-1].game.sleep(max(0.0, NET_SILENT - (time.monotonic() - self._opened_at[members[-1].name])))
+        for member in members:
+            if self._silent(member):
+                log.info("Donjon : %s ne bouge pas d'après le serveur, je reclique sur %s", member.name, what)
+                self._opened_at[member.name] = time.monotonic()
+                before[member.name] = self._click_sun(member, cell, 1)
         late = [m for m in members if not self._changed(m, before[m.name])]
         stuck = []
         for member in late:
@@ -433,6 +445,16 @@ class DungeonEntry:
             return
         with member.game.holding(self.hide_key):
             member.game.click(point, spread, button=button)
+
+    def _silent(self, member: Member) -> bool:
+        """Aucun déplacement ni changement de carte annoncé par le serveur depuis le dernier clic de ce personnage,
+        NET_SILENT s après (False sans écoute : pas de conclusion)."""
+        net = getattr(member.game, "net", None)
+        if net is None or not net.alive() or net.my_id is None:
+            return False
+        clicked = self._opened_at.get(member.name, 0.0)
+        moved = max(getattr(net, "moved_at", 0.0), getattr(net, "map_at", 0.0))
+        return time.monotonic() - clicked >= NET_SILENT and moved < clicked
 
     def _changed(self, member: Member, before: Frame) -> bool:
         """Ce personnage est passé dans une autre salle dans les CHANGE_WAIT secondes : nouvelle carte annoncée par le

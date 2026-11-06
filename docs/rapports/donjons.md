@@ -693,3 +693,36 @@ Restent ouvertes :
 - Pas encore vu en jeu : le retour à l'entrée depuis 7,-26 au passage suivant (l'équipe était déjà devant l'entrée au
   départ), ni les deux corrections d'échange.
 - État à la fin : les 8 sont en 7,-26 avec 1 clé chacun ; il reste 20 clés au coffre de Fourboun.
+
+### 06/11, nuit : donjon des Champs validé (session de 2 h, journal 210755)
+
+Demande de l'utilisateur : 3 donjons des Champs sans problème pour valider. Fait en un seul lancement (`--donjon champs
+--passages 3 --set donjon.cles=sac_banque --set donjon.cles_manquantes=farm --minutes 115`) :
+- **Clés** : 1 par sac au départ. L'équipe est allée à la banque et a repris 16 clés dans les coffres de Walitcoin,
+  Waldarch, Pesopepe et Enu-six. Ensuite, 6 échanges sur 6 ont réussi du premier coup (environ 30 s chacun) : 3 clés
+  chacun.
+  - Chez Fourboun, le type « Clefs » n'a pas été trouvé dans la liste du coffre. Correction : capture, puis onglet et
+    liste rouverts une fois. Pas encore vu en jeu.
+- **Passages** : 17, 16 et 16 minutes. 30 combats, 0 mort, 0 erreur, 0 pause « BLOQUÉ ». Le retour à l'entrée
+  depuis 7,-26 s'est fait seul avant les passages 2 et 3 (30 s).
+- **Sortie** : à chaque passage, Waldarch, Pesopepe et Enu-six ont raté leur premier clic. Les journaux réseau
+  montrent que les 8 clics tombent au même endroit pendant que les premiers personnages marchent sur la case : aucun
+  déplacement annoncé pour eux. Ils ont été recliqués après 12 s chacun (environ 50 s pour sortir).
+  - Correction : sans déplacement annoncé 1,5 s après le clic, le bot reclique tout de suite à un autre endroit
+    (`_all_take`, comme les soleils des cartes). Pas encore vu en jeu.
+- **Clés des coffres**, relevées dans les journaux réseau ; désormais aussi notées au journal à chaque coffre ouvert
+  (`log_chest_keys`). Par donjon, total des coffres lus (Fourboun, Eldieso, Walitcoin, Waldarch, Pesopepe, Enu-six) :
+  - Bouftou 242 ;
+  - Rats de Brâkmar 48 ;
+  - Blops 32 ;
+  - Squelettes 29 ;
+  - Incarnam 80 ;
+  - Tofus 19 ;
+  - Champs 24 (avant la session) ;
+  - Scarafeuilles 16 ;
+  - Bworks 15 ;
+  - Abraknyde 14 ;
+  - Ensablé 10 ;
+  - Canidés 12.
+
+**Le donjon des Champs est validé** (critère de l'utilisateur : 3 passages sans problème).

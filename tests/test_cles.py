@@ -442,3 +442,39 @@ def test_offer_item_waits_for_a_double_click_announced_twice(no_list):
     game.double_click = double_click
     assert trader.offer_item(KEY, 2)
     assert taker_net.trade()[0].theirs == {170: (KEY, 2)}
+
+
+def test_chest_type_list_opened_again_once_when_keys_are_not_found(no_list, monkeypatch):
+    # 06/11 (journal 210755) : « Clefs » pas trouvé chez Fourboun (20 clés au coffre), rien repris, aucune capture.
+    net = ClientFeed("Fourboun")
+    net.feed("ASK|1|Fourboun|10|0|0|0|aa~121~a~~;")
+    net.feed("ECK5")
+    net.feed("ELO11655e57~2161~5~~")
+
+    def on_ok(count):
+        net.feed("EsKO+291855959|4|8545|")
+        net.feed("OAKOb0~2161~1~~;")
+
+    tries, saved = [], []
+    monkeypatch.setattr(bank, "choose_type", lambda game, layout, name, *args: name != bank.KEYS_TYPE or
+                        tries.append(1) or len(tries) == 2)  # la liste remise sur « Tous types » ensuite : pas comptée
+    game = FakeGame(net, BAG_DROP, on_ok)
+    game.recorder = SimpleNamespace(save=lambda image, label, lossless=False: saved.append(label) or label)
+    game.look = lambda park=False: SimpleNamespace(layout=game.layout, image=None)
+    assert take_from_chest(SimpleNamespace(name="Fourboun", game=game), KEY, 1) == 1
+    assert len(tries) == 2 and saved == ["coffre_type_clefs_pas_trouve"]
+
+
+def test_dungeon_keys_of_an_open_chest_are_logged(monkeypatch, caplog):
+    # 06/11 : quelles clés a l'équipe, pour choisir le donjon suivant (seul le coffre de Walitcoin avait été lu).
+    import logging
+
+    from bot.team.bank import log_chest_keys
+
+    net = ClientFeed("Fourboun")
+    net.feed("ECK5")
+    net.feed("ELO11655e57~2161~5~~;O244eb62~6f1~7f~~")
+    with caplog.at_level(logging.INFO):
+        assert log_chest_keys(SimpleNamespace(name="Fourboun", game=SimpleNamespace(net=net))) == \
+            {"Clef du Donjon d'Incarnam": 5}
+    assert "Coffre de Fourboun : clés de donjon : Clef du Donjon d'Incarnam 5" in caplog.text

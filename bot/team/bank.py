@@ -61,6 +61,7 @@ ALL_TYPES = "Tous types"
 KEYS_TYPE = "Clefs"  # type 84 de la langue du client (brain/inventory.py, TYPE_KEYS)
 LIST_TOP = 15  # crans de molette vers le haut : liste des types remise en haut
 LIST_SCROLLS = 3  # crans de molette (par 3) pour trouver un type sous le bas de la liste
+TYPE_TRIES = 2  # liste des types du coffre ouverte au plus tant de fois (06/11)
 LIST_LOOK = 1.5  # s : liste des types cherchée toutes les 0,3 s après le clic
 LIST_WAIT = 0.6
 # Côté coffre de la fenêtre « Coffre » (à gauche ; le sac est à droite : RESOURCES_TAB, SORT_BUTTON). TOUTES À
@@ -182,10 +183,21 @@ def take_from_chest(member, template: int, count: int, rank_of=None) -> int:
     rank = rank_of(same_type, uid) if rank_of is not None else (same_type.index(uid) if uid in same_type else 0)
     wanted = min(count, stored)
     layout = game.look(park=False).layout
-    game.click(layout.point(*CHEST_RESOURCES_TAB), (5, 5))
-    game.sleep(0.6)
-    if not choose_type(game, layout, KEYS_TYPE, CHEST_FILTER, CHEST_LIST):
-        log.warning("%s : type « %s » pas trouvé dans la liste du coffre : rien repris", member.name, KEYS_TYPE)
+    for attempt in range(TYPE_TRIES):
+        # 06/11 (journal 210755) : « Clefs » pas trouvé chez Fourboun (20 clés au coffre, trouvé une heure plus tôt),
+        # aucune capture : rien repris, passages ramenés à ce que les autres coffres donnaient. Capture, puis onglet et
+        # liste rouverts une fois.
+        game.click(layout.point(*CHEST_RESOURCES_TAB), (5, 5))
+        game.sleep(0.6 + attempt)
+        if choose_type(game, layout, KEYS_TYPE, CHEST_FILTER, CHEST_LIST):
+            break
+        frame = game.look(park=False)
+        path = getattr(game, "recorder", None) and game.recorder.save(frame.image, "coffre_type_clefs_pas_trouve",
+                                                                       lossless=True)
+        log.warning("%s : type « %s » pas trouvé dans la liste du coffre (essai %d sur %d, capture : %s)", member.name,
+                    KEYS_TYPE, attempt + 1, TYPE_TRIES, path)
+    else:
+        log.warning("%s : rien repris du coffre", member.name)
         return 0
     taken = 0
     try:
@@ -577,7 +589,27 @@ class BankVisit:
         score, _ = self._text(member, "Coffre", False, clicked + 2.5 - time.monotonic(), bold=True)
         if score < FOUND:
             return self._fail(member, f"fenêtre « Coffre » pas vue ({score:.2f})")
+        log_chest_keys(member)
         return True
+
+
+def log_chest_keys(member) -> dict[str, int]:
+    """Clés de donjon du coffre ouvert, d'après la liste du serveur, au journal (06/11 : choisir le donjon suivant
+    demande de savoir quelles clés l'équipe a ; seul le coffre de Walitcoin avait été lu). Nom -> nombre."""
+    from bot.brain.inventory import key_names
+
+    net = _net(member)
+    exchange = net.trade()[0] if net is not None else None
+    if exchange is None:
+        return {}
+    names = key_names()
+    keys: dict[str, int] = {}
+    for model, quantity in exchange.storage.values():
+        if model in names and quantity > 0:
+            keys[names[model]] = keys.get(names[model], 0) + quantity
+    log.info("Coffre de %s : clés de donjon : %s", member.name,
+             ", ".join(f"{name} {count}" for name, count in sorted(keys.items())) or "aucune")
+    return keys
 
 
 def _net(member):
