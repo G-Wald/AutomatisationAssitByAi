@@ -196,8 +196,13 @@ class Trader:
         if not self._group_open(game):
             log.info("Échange %s -> %s : cadre du groupe pas déplié", self.giver.name, self.taker.name)
             return False
+        net = getattr(game, "net", None)
+        expected = net.frame_slot(self.taker.name) if hasattr(net, "frame_slot") else None
         for _ in range(2):  # second tour : une miniature dont le menu n'a pas été lu au premier
-            for index in self._order():
+            queue = self._order()
+            retried = False
+            while queue:
+                index = queue.pop(0)
                 asked, before = time.monotonic(), self._requests()
                 if not self._ask(index):
                     if self.stuck:
@@ -211,6 +216,12 @@ class Trader:
                     log.info("Échange %s : demande par la miniature %d pas annoncée par le serveur", self.giver.name,
                              index + 1)
                     close_wrong_window(game, self.giver.name)
+                    if index == expected and not retried:
+                        # 06/11 (journal 200051, et 4 séances du 05/11) : la miniature du receveur, prévue par
+                        # l'initiative, sans demande annoncée (clic perdu) ; les 5 autres demandées et refusées avant
+                        # d'y revenir, 30 s par échange. Redemandée une fois tout de suite.
+                        retried = True
+                        queue.insert(0, index)
                     continue
                 self.portraits[(self.giver.name, who.name)] = index
                 self._check_slot(index, who)

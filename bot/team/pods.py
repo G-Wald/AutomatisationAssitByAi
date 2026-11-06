@@ -161,8 +161,11 @@ def team_zone_farm(bot, zone: tuple[int, int], enough, seconds: float, why: str)
     try:
         while not bot.finished:
             step()
-            if bot._round_due:
-                continue  # fenêtres de résultat du combat fermées d'abord (tour des fenêtres)
+            pending = getattr(bot, "fight_pending", None)
+            if bot._round_due or (callable(pending) and pending()):
+                # 06/11 (journal 194826) : attaque lancée au dernier tour, farm arrêté 2 s après (durée écoulée),
+                # Fourboun seul en combat sans personne pour jouer. Combat fini et fenêtres fermées d'abord.
+                continue
             if enough():
                 reached = True
                 break

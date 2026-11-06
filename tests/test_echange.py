@@ -225,3 +225,23 @@ def test_exchange_line_of_the_7th_miniature_is_not_the_private_message_line(monk
     monkeypatch.setattr(trade, "close_portrait_menu", lambda g: True)
     assert trader._ask(6)
     assert 770 <= clicked[-1][1] <= 796  # « Echange » (783), pas « Message privé » (747)
+
+
+def test_the_expected_miniature_is_asked_again_before_the_others(monkeypatch):
+    # 06/11 (journal 200051) : miniature 3 de Walitcoin (prévue par l'initiative) sans demande annoncée, puis les
+    # miniatures 1, 4, 5, 7 et 8 demandées et refusées avant de revenir à la 3 : 30 s par échange.
+    from bot.team import trade
+    from bot.team.trade import Trader
+
+    net = SimpleNamespace(map_id=7453, frame_slot=lambda name: 2 if name == "Walitcoin" else None)
+    giver = SimpleNamespace(name="Fourboun", game=SimpleNamespace(net=net, sleep=lambda s: None))
+    taker = SimpleNamespace(name="Walitcoin", game=SimpleNamespace(net=SimpleNamespace(map_id=7453)))
+    trader = Trader(giver, taker, {}, [giver, taker])
+    asked = []
+    monkeypatch.setattr(trader, "_group_open", lambda game: True)
+    monkeypatch.setattr(trader, "_ask", lambda index: asked.append(index) or True)
+    monkeypatch.setattr(trader, "_requests", lambda: {})
+    monkeypatch.setattr(trader, "_requested_member", lambda before: taker if len(asked) == 2 else None)
+    monkeypatch.setattr(trader, "_accept_request", lambda since: True)
+    monkeypatch.setattr(trade, "close_wrong_window", lambda game, name: None)
+    assert trader.open() and asked == [2, 2]

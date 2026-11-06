@@ -728,3 +728,12 @@ def test_play_click_not_taken_keeps_the_character_chosen_in_this_window(titles):
     login = Login(game, ConnectionSettings(), lambda: [n for n in ["Gela-[A13]"] if n != login.chosen],
                   only_wanted=True)
     assert login.run() == "Gela-[A13]" and len(plays) == 2
+
+
+def test_an_account_without_a_wanted_character_is_closed_with_a_capture(titles):
+    # 06/11 : fenêtre fermée comme inutile : capture et message clair (« aucun de  sur ce compte » ne disait rien).
+    from bot.connection.login import NotWanted
+
+    game = ScreenGame("connexion_choix_personnage", lambda *args: None)
+    with pytest.raises(NotWanted, match="capture"):
+        Login(game, ConnectionSettings(), lambda: ["Brawli-[Gal]"], only_wanted=True).run()

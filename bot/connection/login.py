@@ -180,7 +180,9 @@ class Login:
             slot, self.chosen = found
             log.info("Personnage %s (emplacement %d)", self.chosen, slot + 1)
         elif self.only_wanted:
-            raise NotWanted(f"aucun de {', '.join(wanted)} sur ce compte")
+            path = self.game.recorder.save(frame.image, "connexion_compte_sans_personnage_voulu", lossless=True)
+            raise NotWanted(f"aucun de {', '.join(wanted)} sur ce compte (capture : {path})" if wanted else
+                            f"plus aucun personnage voulu à connecter (capture : {path})")
         else:
             slot = 0
             log.info("%sle personnage le plus à gauche (le dernier joué)",

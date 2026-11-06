@@ -654,3 +654,22 @@ def test_entry_and_exit_count_as_progress_for_the_watchdog(monkeypatch):
     monkeypatch.setattr(farm.entry, "enter", lambda *args: True)
     monkeypatch.setattr(farm.entry, "leave", lambda: True)
     assert farm.run() == 1 and notes == ["équipe entrée dans le donjon", "équipe sortie du donjon"]
+
+
+def test_zone_farm_never_stops_with_a_fight_announced(monkeypatch):
+    # 06/11 (journal 194826) : attaque lancée au dernier tour, farm arrêté 2 s après (durée écoulée), Fourboun seul en
+    # combat sans personne pour jouer ni rejoindre. Le farm attend la fin du combat.
+    from types import SimpleNamespace
+
+    from bot.brain import travel
+    from bot.team.pods import team_zone_farm
+
+    roamer = SimpleNamespace(traveler=SimpleNamespace(coords=(7, -26)))
+    monkeypatch.setattr(travel, "make_roamer", lambda game, settings: roamer)
+    fights = [True, True, False]  # combat annoncé aux deux premiers tours
+    bot = SimpleNamespace(engager=object(), roamer=None, travel_settings=travel.TravelSettings(), finished=False,
+                          _round_due=False, leader=SimpleNamespace(game=None), joiner=None)
+    steps = []
+    bot.step = lambda: steps.append(1)
+    bot.fight_pending = lambda: fights.pop(0)
+    assert not team_zone_farm(bot, (7, -25), lambda: False, 0, "Clés") and len(steps) == 3

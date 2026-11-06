@@ -119,6 +119,7 @@ ERRORS_WINDOW = 600.0
 # Combat fini sans fenêtre de résultat vue, et rien fermé chez le principal au tour des fenêtres : ses fenêtres
 # regardées de nouveau ce délai plus tard (20/10, journal 201321 : résultat reconnu de justesse, resté ouvert).
 RESULT_RECHECK = 2.0
+OUTSIDE_LOOP = 20.0  # s entre deux tours de boucle : une opération hors de la boucle (échanges, banque, donjon)
 # Pendant le tour d'un personnage, ni son timer ni son portrait encadré : revu sur une 2e capture avant de conclure
 # que son tour est fini (11/10, idée validée par l'utilisateur).
 TURN_MARKS_RECHECK = 0.2
@@ -485,6 +486,17 @@ class TeamBot:
         while not self.finished:
             self.safe_step()
 
+    def fight_pending(self) -> bool:
+        """Un combat de l'équipe à faire ou en cours : tour des fenêtres dû (résultat, combat qui commence), ou combat
+        annoncé par le serveur chez l'un d'eux (lancé au dernier tour, pas encore à l'écran). Jamais d'arrêt alors."""
+        if self._round_due:
+            return True
+        for member in self.members:
+            net = getattr(member.game, "net", None)
+            if net is not None and net.alive() and net.in_fight():
+                return True
+        return False
+
     def safe_step(self) -> None:
         """Un tour de boucle (step), ses erreurs rattrapées (21/10) : en combat, l'erreur et une capture au journal,
         puis on continue (jamais d'arrêt en plein combat : à MAX_FIGHT_ERRORS, fin de session après ce combat) ; hors
@@ -565,6 +577,18 @@ class TeamBot:
             self._rejoin_seen = attempts
 
     def step(self) -> None:
+        """Un tour de boucle. Le temps passé hors de la boucle entre deux tours (06/11, journal 200051 : 5 min
+        d'échanges de clés, puis pause « BLOQUÉ » juste après l'entrée du donjon ; de même banque, coffre, entrée) est
+        celui d'une opération menée par le farm, qui s'est terminée : un progrès, pas un blocage de la boucle."""
+        left = getattr(self, "_step_left_at", None)
+        if left is not None and time.monotonic() - left >= OUTSIDE_LOOP:
+            self._progress(f"opération hors de la boucle ({time.monotonic() - left:.0f} s)")
+        try:
+            self._step()
+        finally:
+            self._step_left_at = time.monotonic()
+
+    def _step(self) -> None:
         if not self.act:
             self._observe()
             return
@@ -589,6 +613,12 @@ class TeamBot:
             host = self._round()
             if host is not None:
                 self._fight(host)
+            elif self._stop_reason and self.fight_pending():
+                # 06/11 (journal 194826) : attaque lancée au dernier tour, combat commencé d'après le serveur, pas
+                # encore à l'écran ; le bot arrêté là, Fourboun s'est battu seul, personne pour jouer ni rejoindre.
+                log.info("Fin de la session : %s, mais un combat est annoncé par le serveur : je le fais d'abord",
+                         self._stop_reason)
+                self._round_due = True
             elif self._stop_reason:
                 log.info("Fin de la session : %s", self._stop_reason)
                 self.finished = True

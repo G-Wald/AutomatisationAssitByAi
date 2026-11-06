@@ -2166,3 +2166,37 @@ def test_no_ready_press_for_a_character_the_server_says_is_ready():
     bot = team_bot(a)
     bot._ready(a)  # un appui le ferait repasser « pas prêt »
     assert events(screen, "press") == [] and events(screen, "click") == []
+
+
+def test_time_spent_outside_the_loop_is_progress_not_a_stall(monkeypatch):
+    # 06/11 (journal 200051) : 5 min d'échanges de clés menés par le farm de donjon, hors de la boucle ; au tour suivant,
+    # « BLOQUÉ : aucun progrès depuis 344 s » et 2 min de pause. Un tour juste après un autre ne compte pas.
+    import time
+
+    screen = Screen()
+    bot = team_bot(member("A", screen, load_frame("hors_combat")), member("B", screen, load_frame("hors_combat")))
+    notes = []
+    monkeypatch.setattr(bot, "_progress", lambda what, soft=False: notes.append(what))
+    monkeypatch.setattr(bot, "_step", lambda: None)
+    bot.step()
+    bot.step()
+    assert notes == []
+    bot._step_left_at = time.monotonic() - 300
+    bot.step()
+    assert len(notes) == 1 and notes[0].startswith("opération hors de la boucle")
+
+
+def test_session_end_waits_for_a_fight_announced_by_the_server(monkeypatch):
+    # 06/11 (journal 194826) : combat commencé d'après le serveur, pas encore à l'écran, à la fin de la session.
+    screen = Screen()
+    bot = team_bot(member("A", screen, load_frame("hors_combat")), member("B", screen, load_frame("hors_combat")))
+    bot._stop_reason = "durée de la session écoulée"
+    bot._round_due = True
+    monkeypatch.setattr(bot, "_round", lambda: None)
+    pending = [True]
+    monkeypatch.setattr(bot, "fight_pending", lambda: pending[0])
+    bot._step()
+    assert not bot.finished and bot._round_due
+    pending[0] = False
+    bot._step()
+    assert bot.finished
