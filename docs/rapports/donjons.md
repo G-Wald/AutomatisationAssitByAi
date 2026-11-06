@@ -653,3 +653,16 @@ Restent ouvertes :
 - **À décider : clés quand le coffre est vide.** La Clef des Champs tombe à environ 0,5 % sur les monstres des Champs
   (client et web, `config/donjons.yaml`). Elle se fabrique aussi au métier de Bricoleur, avec 3 Pétales de Tournesol
   Sauvage et 3 Fleurs de Pissenlit Diabolique.
+- **Décidé (utilisateur, 06/11) : farm du butin.** Le réglage permet les deux voies, mais la fabrication n'est pas encore
+  faite : il faut désigner qui a le métier (Fourboun, Bricoleur 35).
+  - Réglage `donjon.cles_manquantes` : `farm`, `fabrication` ou `non` (par défaut).
+  - Avec `farm` : quand les clés réparties ne suffisent plus pour un passage, l'équipe farme la zone de la clé
+    (`zone_cles: [7, -25]`, Champs d'Astrub) en mode zone (`pods.team_zone_farm`).
+  - Le farm s'arrête dès que le butin donne une clé par personnage d'après le serveur. Sinon, il s'arrête au bout de
+    `donjon.farm_cles_minutes` (60 min), ou plus tôt pour garder le temps d'un passage sur `--minutes`.
+  - Les clés sont alors réparties, sans retour au coffre. L'équipe revient à l'entrée, puis fait le passage suivant.
+  - Si le butin ne donne pas une clé chacun, les passages s'arrêtent.
+  - Il faut `donjon.cles=sac` ou `sac_banque`.
+  - Exemple :
+    `--donjon champs --passages 10 --set donjon.cles=sac_banque --set donjon.cles_manquantes=farm --minutes 240`.
+  - Pas encore vu en jeu.

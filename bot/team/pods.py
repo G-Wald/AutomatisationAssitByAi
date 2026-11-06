@@ -131,3 +131,48 @@ def team_trip(bot, goal: tuple[int, int], why: str) -> bool:
     if not arrived:
         log.warning("%s : l'équipe n'est pas toute arrivée en %s,%s", why, *goal)
     return arrived
+
+
+def team_zone_farm(bot, zone: tuple[int, int], enough, seconds: float, why: str) -> bool:
+    """Toute l'équipe en farm dans la sous-zone de la carte `zone`, comme le mode zone (--combat-zone : groupes
+    attaqués, carte suivante quand il n'y en a plus, banque quand les pods sont pleins), jusqu'à `enough()` vrai entre
+    deux combats, ou `seconds` écoulées ; le farm d'avant reprend la main ensuite. True si `enough()` a été atteint."""
+    from bot.brain.travel import make_roamer
+
+    if bot.engager is None:
+        log.warning("%s : pas de lancement de combat (combats désactivés) : pas de farm", why)
+        return False
+    joiner = getattr(bot, "joiner", None)
+    saved = bot.roamer, bot.travel_settings, bot.finished, getattr(joiner, "fight_coords", None)
+    settings = replace(bot.travel_settings, mode="zone", start=zone, destination=None)
+    log.info("%s : farm de l'équipe dans la zone de %s,%s (%.0f min au plus)", why, *zone, seconds / 60)
+    roamer = make_roamer(bot.leader.game, settings)
+    if roamer is None:
+        return False
+    if hasattr(bot, "_dispatch"):  # comme team_trip : sans eux, les suiveurs ne cliquent pas les soleils
+        roamer.traveler.on_crossed = bot._crossed
+        roamer.traveler.on_click = bot._dispatch
+    bot.travel_settings, bot.roamer, bot.finished = settings, roamer, False
+    if joiner is not None:
+        joiner.fight_coords = lambda: roamer.traveler.coords  # carte du combat quand son nom ne se lit pas
+    step = getattr(bot, "safe_step", bot.step)
+    end = time.monotonic() + seconds
+    reached = False
+    try:
+        while not bot.finished:
+            step()
+            if bot._round_due:
+                continue  # fenêtres de résultat du combat fermées d'abord (tour des fenêtres)
+            if enough():
+                reached = True
+                break
+            if time.monotonic() >= end:
+                break
+    finally:
+        stopped = bot.finished
+        bot.roamer, bot.travel_settings, bot.finished = saved[:3]
+        bot.finished = bot.finished or (stopped and bool(getattr(bot, "_stop_reason", None)))
+        if joiner is not None:
+            joiner.fight_coords = saved[3]
+    log.info("%s : %s", why, "atteint" if reached else "pas atteint (durée écoulée ou arrêt)")
+    return reached

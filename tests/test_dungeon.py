@@ -573,3 +573,67 @@ def test_session_time_limit_never_cuts_a_pass(monkeypatch):
     deadline = time.monotonic() + 3 * PASS_ESTIMATE
     farm, bot, seen = farm_with(deadline)
     assert farm.run() == 3 and seen == [None] * 3 and bot.deadline == deadline  # limite rendue après chaque passage
+
+
+def test_missing_keys_farmed_in_the_key_zone_then_the_passes_go_on(monkeypatch):
+    # 06/11, utilisateur : clés qui manquent (coffre compris) : « farm du butin » (donjon.cles_manquantes=farm), zone de
+    # la clé dans config/donjons_entree.yaml (Champs : 7,-25) ; arrêt quand le butin ne donne plus une clé chacun.
+    from types import SimpleNamespace
+
+    from bot.team import pods
+    from bot.team.dungeon import DungeonFarm
+
+    members = [SimpleNamespace(name=n, game=None) for n in ("A", "B")]
+    bot = SimpleNamespace(members=members, leader=members[0], finished=False,
+                          _settings={"donjon": {"cles": "sac", "cles_manquantes": "farm"}})
+    farm = DungeonFarm(bot, load_dungeons()["champs"], 3)
+    assert farm.spec.key_zone == (7, -25) and farm.keys.refill
+    held = {"A": 1, "B": 1}
+    loot = [{"A": 2, "B": 0}, {"A": 0, "B": 1}]  # 1er farm : 2 clés (chez A) ; 2e : 1 seule, pas assez pour deux
+    farms = []
+
+    def zone_farm(bot, zone, enough, seconds, why):
+        farms.append(zone)
+        for name, count in loot.pop(0).items():
+            held[name] += count
+        return enough()
+
+    def prepare(dungeon, wanted, template=None):
+        each = min(sum(held.values()) // len(held), wanted)
+        held.update({name: each for name in held})  # répartis par échanges
+        return each
+
+    monkeypatch.setattr(pods, "team_zone_farm", zone_farm)
+    monkeypatch.setattr(farm.keys, "prepare", prepare)
+    monkeypatch.setattr(farm.keys, "count", lambda template: dict(held))
+
+    def one_pass(run, *args):
+        held.update({name: count - 1 for name, count in held.items()})  # une clé donnée chacun
+        return True
+
+    monkeypatch.setattr(farm, "_one_pass", one_pass)
+    assert farm.run() == 2 and farms == [(7, -25)] * 2 and farm.runs == 3
+    farm = DungeonFarm(SimpleNamespace(members=members, leader=None, finished=False,
+                                       _settings={"donjon": {"cles": "sac", "cles_manquantes": "fabrication"}}),
+                       load_dungeons()["champs"], 3)
+    assert not farm._can_refill() and not farm.keys.refill  # pas encore faite : passages ramenés aux clés
+
+
+def test_team_zone_farm_until_enough_then_the_previous_mode_comes_back(monkeypatch):
+    from types import SimpleNamespace
+
+    from bot.brain import travel
+    from bot.team.pods import team_zone_farm
+
+    roamer = SimpleNamespace(traveler=SimpleNamespace(coords=(7, -26)))
+    monkeypatch.setattr(travel, "make_roamer", lambda game, settings: roamer if settings.mode == "zone" else None)
+    steps = []
+    bot = SimpleNamespace(engager=object(), roamer=None, travel_settings=travel.TravelSettings(), finished=False,
+                          _round_due=False, leader=SimpleNamespace(game=None), joiner=SimpleNamespace(fight_coords=None))
+    bot.step = lambda: steps.append(bot.roamer is roamer and bot.travel_settings.start == (7, -25))
+    assert team_zone_farm(bot, (7, -25), lambda: len(steps) >= 3, 60, "Clés")
+    assert steps == [True] * 3 and bot.roamer is None and bot.travel_settings.mode != "zone" and not bot.finished
+    assert bot.joiner.fight_coords is None
+    assert not team_zone_farm(bot, (7, -25), lambda: False, 0, "Clés")  # durée écoulée
+    bot.engager = None
+    assert not team_zone_farm(bot, (7, -25), lambda: True, 60, "Clés")  # combats désactivés : pas de farm

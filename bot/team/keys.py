@@ -141,6 +141,7 @@ class KeyManager:
         self.chests = chests or KeyChests(members, hide_key)  # .fetch(qui manque, modèle, manquantes) -> reprises
         self.portraits: dict = {}  # portraits du cadre du groupe retenus d'un échange à l'autre (Trader)
         self.blocked = False  # un échange resté ouvert malgré l'annulation (31/10) : plus aucun échange ensuite
+        self.refill = False  # clés refaites ensuite par le farm de donjon (donjon.cles_manquantes) : manque pas signalé
 
     @property
     def enabled(self) -> bool:
@@ -179,8 +180,10 @@ class KeyManager:
         if plan.each <= 0:
             log.warning("Clés de %s : %d pour %d personnages, pas une chacun : aucun passage possible", dungeon,
                         sum(held.values()), size)
-            tell_user(f"{dungeon} : pas assez de clés ({sum(held.values())} pour {size} personnages : {summary(held)}). "
-                      f"Il en faut une par personnage et par passage : farm arrêté, rien n'est entré.")
+            if not self.refill:
+                tell_user(f"{dungeon} : pas assez de clés ({sum(held.values())} pour {size} personnages : "
+                          f"{summary(held)}). Il en faut une par personnage et par passage : farm arrêté, rien n'est "
+                          f"entré.")
             return 0
         if plan.moves:
             log.info("Clés de %s : échanges : %s", dungeon,

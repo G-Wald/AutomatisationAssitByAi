@@ -64,3 +64,4 @@ champs:
   trousseau_id: 6615
   salles: 7
   sortie_case: [27, 17]
+  zone_cles: [7, -25]     # Champs d'Astrub (26 cartes, sortie 7,-26 comprise) : butin de la clé, ~0,5 % (06/11)

@@ -150,6 +150,12 @@ donjon:                    # farm de donjon (--donjon ; bot/team/dungeon.py, bot
                            # en ont moins les reprennent dans LEUR coffre avant (trajet donjon <-> banque d'Astrub
                            # automatique depuis le 31/10, zaaps compris). Passages ramenés à ceux que les clés
                            # permettent. Interface : liste « clés » du farm de donjon ; --set donjon.cles=sac
+  cles_manquantes: non     # clés qui manquent pour les passages demandés (coffre compris, 06/11) : farm : farm de la
+                           # zone de la clé (zone_cles de config/donjons_entree.yaml) pour son butin, jusqu'à une clé
+                           # par personnage, puis répartition et passage suivant ; fabrication : pas encore faite (il
+                           # faut désigner qui a le métier : Fourboun, Bricoleur 35) ; non : passages ramenés aux clés.
+                           # Demande donjon.cles sac ou sac_banque. --set donjon.cles_manquantes=farm
+  farm_cles_minutes: 60    # durée d'un farm des clés, au plus (le temps d'un passage après lui gardé sur --minutes)
   trousseau: non           # « Utiliser le trousseau de clefs » chez le PNJ, pour qui n'a pas la clé : une fois par
                            # semaine seulement (31/10) ; non : jamais (sans clé pour tous, pas de farm et un message)
   garder_cle: ""           # clé reprise du coffre juste après « Transférer tous les objets » à la banque (qui l'y met

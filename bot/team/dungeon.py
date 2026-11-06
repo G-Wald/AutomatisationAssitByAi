@@ -30,7 +30,7 @@ from bot.perception.grid import Cell
 from bot.perception.popups import (find_context_menu, find_flash_menu, find_known_popup, find_npc_dialog,
                                    find_small_menu, find_trophy_cross)
 from bot.state.scene import Phase, read_scene
-from bot.team.keys import KeyManager
+from bot.team.keys import KeyManager, key_of, summary
 from bot.team.member import Member
 
 log = logging.getLogger(__name__)
@@ -54,6 +54,10 @@ SAME_ROOM_WAIT = 5.0  # s : toute l'équipe annoncée sur la carte du principal 
 # moins par salle ») : l'équipe combat par vagues, le groupe de la salle réapparaissant après chaque victoire.
 ROOMS_FILE = ROOT / "data" / "donjons.json"  # référence du client : places de chaque salle (placement p1 : joueurs)
 RESPAWN_WAIT = 180.0  # s au plus : le groupe de la salle réapparu, pour la vague suivante
+NO_KEY_LIMIT = 10**6
+MISSING_MODES = ("non", "farm", "fabrication")  # donjon.cles_manquantes
+FARM_MINUTES = 60.0  # donjon.farm_cles_minutes : durée d'un farm de la zone pour le butin des clés, au plus
+FARM_LEAST = 5 * 60.0  # s : pas de farm des clés plus court (le temps restant de la session n'y suffit pas)
 PASS_ESTIMATE = 18 * 60.0  # s : premier passage d'une session (Champs à 8 : 15 à 18 min, 05/11)
 WAVE_RETRY = 3.0  # s entre deux recherches du groupe pendant l'attente de sa réapparition
 SAME_PLACE = 12.0  # écart de décor (_gap de travel.py) sous lequel c'est la même salle (même : < 3, autre : > 30)
@@ -79,6 +83,8 @@ class DungeonSpec:
     keyring: str | None = None  # réponse du trousseau de clefs (31/10 : entrée sans clé), et son numéro
     keyring_id: int | None = None
     exit_cell: Cell | None = None  # sortie par une case de la salle de fin (05/11, donjon des Champs), sans PNJ
+    # Carte de la zone dont les monstres donnent la clé (zone_cles) : farm de leur butin quand les clés manquent (06/11)
+    key_zone: tuple[int, int] | None = None
 
 
 def load_dungeons(path: Path = DUNGEONS_FILE) -> dict[str, DungeonSpec]:
@@ -88,7 +94,7 @@ def load_dungeons(path: Path = DUNGEONS_FILE) -> dict[str, DungeonSpec]:
                              cell(d.get("dalle")), cell(d.get("soleil")), cell(d["pnj"]), str(d["reponse"]),
                              cell(d.get("pnj_fin")), d.get("reponse_fin"), BUTTONS[d.get("clic_fin", "droit")],
                              d.get("salles"), d.get("pnj_carte"), d.get("reponse_id"), d.get("trousseau"),
-                             d.get("trousseau_id"), cell(d.get("sortie_case")))
+                             d.get("trousseau_id"), cell(d.get("sortie_case")), cell(d.get("zone_cles")))
             for key, d in data.items()}
 
 
@@ -538,9 +544,19 @@ class DungeonFarm:
         # cartes pas encore annoncées par le serveur (pas de changement de carte depuis le lancement) ; sans, pas
         # d'attaque sans les cartes de toute l'équipe (_all_here).
         self.trust_together = str(donjon.get("reprise", "")).strip().lower() == "meme_salle"
+        # Clés qui manquent pour les passages demandés, coffre compris (06/11, utilisateur : « soit farm soit
+        # fabrication ») : farm de la zone de la clé (zone_cles) pour son butin ; fabrication pas encore faite (il faut
+        # désigner qui a le métier : Fourboun, Bricoleur 35).
+        missing = str(donjon.get("cles_manquantes", "non")).strip().lower()
+        if missing not in MISSING_MODES:
+            log.warning("donjon.cles_manquantes : « %s » inconnu (%s) : rien", missing, ", ".join(MISSING_MODES))
+            missing = "non"
+        self.missing_keys = missing
+        self.farm_seconds = 60 * float(donjon.get("farm_cles_minutes", FARM_MINUTES))
         # Répartition des clés au début du farm (team/keys.py, donjon.cles ; 30/10, demande de l'utilisateur).
         self.keys = KeyManager(bot.members, getattr(bot, "_settings", None) or {},
                                getattr(travel, "hide_players_key", "e"), trip=BankTrip(bot, spec))
+        self.keys.refill = self.missing_keys == "farm"  # pas assez de clés : pas de message « farm arrêté »
 
     def run(self, start: str | None = None, only: set[str] | None = None, room: int = 1) -> int:
         """Nombre de passages complets (entrée, salles, sortie). `start` : étape de l'entrée où reprendre (STEPS), ou
@@ -556,15 +572,24 @@ class DungeonFarm:
                     # rentrer solo » (ce matin-là, clé pas reconnue : Fourboun entré seul).
                     log.warning("Donjon : clés pas réparties (clé ou inventaire inconnus) : pas d'entrée")
                     return 0
-                if passes < self.runs:
+                if passes < self.runs and self._can_refill():
+                    log.info("Donjon : clés pour %d passage(s) sur %d demandés : farm de leur butin quand elles "
+                             "manqueront", passes, self.runs)
+                elif passes < self.runs:
                     log.warning("Donjon : clés pour %d passage(s) seulement sur %d demandés : j'en fais %d", passes,
                                 self.runs, passes)
                     self.runs = passes
+                self._keys_left = passes
         done = 0
         bot = self.bot
         deadline = getattr(bot, "deadline", None)
         estimate = PASS_ESTIMATE
-        for run in range(1, self.runs + 1):
+        while done < self.runs:
+            run = done + 1
+            if self.keys.enabled and start != "salles" and self._keys_left <= 0:
+                self._keys_left = self._refill(deadline)
+                if self._keys_left <= 0:
+                    break
             resuming = run == 1 and start == "salles"  # reprise dans les salles : l'équipe y est, à finir
             if deadline is not None and not resuming and time.monotonic() + estimate > deadline:
                 # 06/11 : --minutes n'arrête plus l'équipe au milieu d'un passage (dans les salles, clé donnée) ; pas de
@@ -583,10 +608,60 @@ class DungeonFarm:
                 if deadline is not None:
                     bot.deadline = deadline
             done += 1
+            self._keys_left -= 1
             estimate = time.monotonic() - started
             log.info("Donjon : passage %d/%d terminé en %.0f min", run, self.runs, estimate / 60)
         log.info("Donjon : %d passage(s) complet(s) sur %d", done, self.runs)
         return done
+
+    _keys_left = NO_KEY_LIMIT  # passages que les clés réparties permettent encore (donjon.cles ; sans : pas de limite)
+
+    def _can_refill(self) -> bool:
+        """Clés manquantes refaites pendant le farm : farm de la zone de la clé (donjon.cles_manquantes=farm)."""
+        if self.missing_keys == "fabrication":
+            log.warning("Donjon : fabrication des clés pas encore faite (il faut désigner qui a le métier) : je fais "
+                        "avec les clés qu'il y a")
+            return False
+        if self.missing_keys == "farm" and self.spec.key_zone is None:
+            log.warning("Donjon : %s : zone de la clé inconnue (zone_cles, config/donjons_entree.yaml) : pas de farm "
+                        "des clés", self.spec.name)
+            return False
+        return self.missing_keys == "farm"
+
+    def _refill(self, deadline: float | None) -> int:
+        """Plus de clé pour un passage : farm de la zone de la clé jusqu'à une clé par personnage (butin, d'après le
+        serveur), puis répartition. Passages possibles ensuite ; 0 : pas de farm, ou pas de clé de plus."""
+        from bot.team import pods
+
+        if not self._can_refill():
+            return 0
+        seconds = self.farm_seconds
+        if deadline is not None:
+            seconds = min(seconds, deadline - time.monotonic() - PASS_ESTIMATE)  # le temps du passage d'après compris
+        if seconds < FARM_LEAST:
+            log.info("Donjon : plus de clé, et plus le temps pour farmer leur butin puis faire un passage")
+            return 0
+        template = key_of(self.spec.name)
+        size = len(self.bot.members)
+        if template is None or size == 0:
+            return 0
+
+        def enough() -> bool:
+            held = self.keys.count(template)
+            return held is not None and sum(held.values()) >= size
+
+        log.info("Donjon : plus de clé pour un passage : farm du butin de la zone de %s,%s", *self.spec.key_zone)
+        pods.team_zone_farm(self.bot, self.spec.key_zone, enough, seconds, "Clés de " + self.spec.name)
+        if getattr(self.bot, "finished", False):
+            return 0  # session arrêtée pendant le farm
+        held = self.keys.count(template)
+        possible = sum(held.values()) // size if held else 0
+        if possible <= 0:
+            log.warning("Donjon : clés après le farm : %s : pas assez pour un passage",
+                        summary(held) if held else "inventaire inconnu")
+            return 0
+        # Seulement ce que le butin permet : pas de nouvel aller-retour au coffre, vidé au début du farm (sac_banque).
+        return self.keys.prepare(self.spec.name, possible, template) or 0
 
     def _one_pass(self, run: int, start: str | None, only: set[str] | None, room: int) -> bool:
         """Un passage : entrée (ou reprise), salles, sortie. False dès qu'une étape échoue."""
