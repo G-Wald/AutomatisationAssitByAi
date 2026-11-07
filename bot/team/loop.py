@@ -40,7 +40,7 @@ from bot.brain.popups import close_any_menu, close_context_menu, close_flash_men
 from bot.brain.position import PositionAsker
 from bot.brain.recovery import capture_once
 from bot.brain.rest import CHECK_EVERY, STOOL, STOOL_SPREAD, STOOL_ZONE, RestSettings
-from bot.brain.travel import (RECLICK_EVERY, SCENE_CHANGED, SCENE_STABLE, Journey, TravelSettings, Traveler,
+from bot.brain.travel import (MENU_SPOTS, RECLICK_EVERY, SCENE_CHANGED, SCENE_STABLE, Journey, TravelSettings, Traveler,
                               ZoneRoamer, make_roamer, merge_reading, same_map)
 from bot.brain.travel import _click_spot, _gap, _motion, _motion_view, _scene  # mêmes repères que le principal
 from bot.brain import possessions
@@ -199,6 +199,7 @@ class _Walk:
     still_since: float | None = None  # immobile depuis (vu à partir du premier regard ; None : pas encore regardé)
     reclicks: int = 0  # reclics faute de bouger (pas ceux d'un menu ouvert sur le soleil)
     menu_saved: bool = False  # capture d'un menu ouvert sur le soleil déjà gardée
+    menus: int = 0  # menus de personnage ouverts au lieu de la marche (MENU_SPOTS)
 
 
 def _reads_as(label: MapLabel | None, coords: tuple[int, int] | None, known: MapLabel | None) -> bool | None:
@@ -1154,10 +1155,13 @@ class TeamBot:
                         log.info("%s : menu ouvert au lieu de la marche (quelqu'un sur le soleil ?) (capture : %s)",
                                  name, path)
                     # Souvent lui-même, arrivé par ce soleil (21/10) : un clic à côté ferme le menu et l'écarte de la
-                    # case (Échap ne le ferme pas), puis le soleil de nouveau, au centre.
+                    # case (Échap ne le ferme pas), puis le soleil de nouveau, au centre. 07/11 (Pesopepe, 12,-27) :
+                    # un coéquipier déjà parti resté affiché sur le soleil dans SA fenêtre ouvrait le menu à chaque
+                    # clic, centre ou bas de la case ; la pointe de la case est passée. Menus suivants : les pointes.
                     if not close_context_menu(member.game, frame):
                         close_any_menu(member.game, name)  # 31/10 : plus d'Échap derrière un menu
-                    walk.spot = -1  # _reclick : le centre de la case
+                    walk.spot = MENU_SPOTS[min(walk.menus, len(MENU_SPOTS) - 1)] - 1  # _reclick : spot + 1
+                    walk.menus += 1
                     self._reclick(walk, member.game.look(park=False), crossing)
                     continue
                 told = self._told_arrival(member, sent[name])

@@ -91,7 +91,11 @@ MOTION_SIZE, MOTION_LEVEL = (160, 90), 12.0
 SURE_UNREAD = 2
 WALKED_POLLS = 3  # captures (0,4 s) où il bougeait : il a marché (pas seulement l'affichage des autres joueurs)
 CANDIDATE_TRIES = 2  # clics sur un même soleil (le second au bas de la case) avant de passer au soleil suivant
-MENU_RETRIES = 2  # menus de personnage fermés en s'écartant, sans compter d'essai sur le soleil
+MENU_RETRIES = 3  # menus de personnage fermés en s'écartant, sans compter d'essai sur le soleil
+# Endroits de la case du soleil visés après chaque menu (_click_spot) : le centre (souvent soi-même sur la case,
+# écarté par la fermeture), puis les pointes gauche et droite. 07/11 (Pesopepe, 12,-27 et 12,-28) : un coéquipier déjà
+# parti restait affiché sur le soleil dans sa fenêtre ; centre et bas de la case ouvraient son menu, la pointe est passée.
+MENU_SPOTS = (0, 2, 3)
 MAX_CANDIDATES = 3  # soleils essayés d'un même côté (carte coupée par un rempart : un soleil de chaque côté du mur)
 MODES = ("", "test", "explore", "zone", "aller")
 # Mode aller (03/10) : changements de carte ratés d'affilée (sortie introuvable, clic sans effet, agression) avant
@@ -919,15 +923,15 @@ class Traveler:
                 if arrived == MENU:
                     # Quelqu'un sur le soleil, souvent soi-même (arrivé par ce soleil) : son menu au lieu du déplacement.
                     # Fermé d'un clic à côté, qui écarte le personnage de la case (close_context_menu), puis le soleil
-                    # de nouveau, au centre ; MENU_RETRIES fois sans compter d'essai.
+                    # de nouveau, au centre, puis aux pointes (MENU_SPOTS) ; MENU_RETRIES fois sans compter d'essai.
                     log.info("Un menu de personnage s'est ouvert au lieu de la marche (quelqu'un sur le soleil, "
                              "peut-être moi) : je le ferme en m'écartant, puis je reclique le soleil")
                     if not close_context_menu(self.game, self.game.look(park=False)):
                         close_any_menu(self.game, "Soleil")  # 31/10 : plus d'Échap (Menu principal derrière un menu)
                     if menus < MENU_RETRIES:
+                        spot = MENU_SPOTS[min(menus, len(MENU_SPOTS) - 1)]
                         menus += 1
                         attempt -= 1
-                        spot = 0
                     else:
                         spot += 1
                     continue

@@ -627,6 +627,21 @@ def test_someone_on_the_sun_menu_closed_then_bottom_of_the_cell_clicked():
     assert not (x0 - 10 <= step[0] <= x1 + 10 and y0 - 50 <= step[1] <= y1 + 10)
 
 
+def test_menu_again_on_the_sun_then_the_tip_of_the_cell_is_clicked():
+    # 07/11 (Pesopepe, 12,-27) : un coéquipier déjà parti, resté affiché sur le soleil dans sa fenêtre, ouvrait son menu
+    # à chaque clic, au centre comme au bas de la case ; la pointe de la case est passée. Second menu : une pointe.
+    foret, menu, champs = load_frame("hors_combat_foret"), load_frame("hors_combat_menu_personnage"), load_frame("hors_combat")
+    t = traveler(foret, foret, foret, menu, menu, foret, foret, menu, menu, foret, foret, champs, champs)
+    frame, label = t.look()
+    assert t.go(frame, label, "droite").coords == (4, 3)
+    assert "escape" not in presses(t.game)
+    sun = clicks(t.game)[0::2]  # soleil, clic à côté, soleil, clic à côté, soleil
+    assert len(sun) == 3
+    cx, cy = frame.grid.center((27, 9))
+    assert abs(sun[1][0] - cx) <= 8  # 1er menu : la même place (souvent soi-même, écarté par la fermeture)
+    assert abs(abs(sun[2][0] - cx) - 0.55 * frame.grid.half_w) <= 8  # 2e menu : une pointe du losange
+
+
 def test_readable_name_of_the_departure_map_is_not_an_arrival():
     foret = load_frame("hors_combat_foret")  # 2,4 : le nom se lit maintenant, mais c'est toujours la carte de départ
     t = Traveler(FakeGame(foret), TravelSettings(mode="explore", settle=0, walk_timeout=0.05), World(None))
