@@ -71,8 +71,9 @@ champs:
 # maps/dungeons/Sandy), données du client (data/donjons.json, config/monde).
 # Entrée : carte 10155 en 13,-28 (Calanques d'Astrub ; itinéraire par le haut de 13,-27, 21 cartes depuis la banque),
 # le capitaine Igloute (PNJ 798) en case 195. Sa bulle raconte une histoire : 8 « Continuer la discussion » (réponses
-# 2936 à 2943, questions 3281 à 3288), puis q3289 avec « Donner la clef et rentrer » (2944 ; 2947 a le même texte,
-# laquelle est proposée : à voir). Clic gauche et « Parler » supposés comme Mawy et Altaïr.
+# 2936 à 2943, questions 3281 à 3288), puis q3289 avec « Donner la clef et rentrer » (2944). Qui a déjà fait le
+# donjon se voit proposer de passer tout le dialogue (utilisateur, 07/11) : sans doute 2947, même texte. Clic gauche
+# et « Parler » supposés comme Mawy et Altaïr.
 # Salles : 10156 à 10164, 9 combats (Mob l'Eponge et Raul Mops dans la 9e), 8 places de joueurs ou plus partout.
 # Sortie : salle 10165, Igloute en case 253, q3290 : « Se laisser faire » (2945) ou « Se sauver en courant » (2946) ;
 # laquelle ramène dehors, et où : à voir.
@@ -85,7 +86,9 @@ ensable:
   pnj_carte: 10155
   suite: Continuer la discussion
   reponse: Donner la clef et rentrer
-  reponse_id: 2944        # à vérifier en jeu (2947 a le même texte)
+  reponse_id: 2944        # au bout de l'histoire (q3289), à vérifier en jeu
+  reponse_id_autres: [2947]   # même texte : raccourci proposé dès la 1re bulle à qui a déjà fait le donjon
+                              # (utilisateur, 07/11 ; numéro d'après la langue du client, à vérifier en jeu)
   salles: 9
   pnj_fin: [13, 17]       # case 253 de 10165 (StarLoco), à vérifier en jeu
   reponse_fin: Se laisser faire   # à vérifier en jeu (ou « Se sauver en courant »)

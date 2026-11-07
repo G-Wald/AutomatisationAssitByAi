@@ -745,3 +745,8 @@ référence du monde.
 - **Observation sans rien consommer** : `tools/observer_pnj.py --personnage Fourboun --pnj-modele 798 --suivre
   "Continuer la discussion"`. L'outil clique seulement cette ligne, note chaque question et ses réponses, puis referme
   la bulle par sa croix.
+- **Raccourci du dialogue** (utilisateur, 07/11) : qui a déjà fait le donjon se voit proposer de passer tout le
+  dialogue. La recherche web n'a rien donné de précis sur Igloute. La langue du client a deux réponses « Donner la clef
+  et rentrer » : 2944, au bout de l'histoire, et 2947, sans doute le raccourci. Le bot accepte les deux
+  (`reponse_id_autres`) : un personnage qui a le raccourci répond tout de suite, les autres passent par les
+  « Continuer ». À confirmer en jeu avec l'observation.

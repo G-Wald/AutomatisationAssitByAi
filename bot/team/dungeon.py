@@ -89,6 +89,13 @@ class DungeonSpec:
     exit_cell: Cell | None = None  # sortie par une case de la salle de fin (05/11, donjon des Champs), sans PNJ
     # Ligne de la bulle d'entrée à cliquer avant la clé (07/11, Ensablé : « Continuer la discussion », 8 fois)
     chain: str | None = None
+    # Autres numéros de la même réponse « clé » (07/11, Ensablé : 2947, raccourci proposé dès la première bulle à qui a
+    # déjà fait le donjon, d'après l'utilisateur ; 2944 au bout de l'histoire)
+    reply_more: tuple[int, ...] = ()
+
+    @property
+    def reply_ids(self) -> set[int]:
+        return {i for i in (self.reply_id, *self.reply_more) if i is not None}
     # Carte de la zone dont les monstres donnent la clé (zone_cles) : farm de leur butin quand les clés manquent (06/11)
     key_zone: tuple[int, int] | None = None
 
@@ -101,7 +108,7 @@ def load_dungeons(path: Path = DUNGEONS_FILE) -> dict[str, DungeonSpec]:
                              cell(d.get("pnj_fin")), d.get("reponse_fin"), BUTTONS[d.get("clic_fin", "droit")],
                              d.get("salles"), d.get("pnj_carte"), d.get("reponse_id"), d.get("trousseau"),
                              d.get("trousseau_id"), cell(d.get("sortie_case")), key_zone=cell(d.get("zone_cles")),
-                             chain=d.get("suite"))
+                             chain=d.get("suite"), reply_more=tuple(d.get("reponse_id_autres") or ()))
             for key, d in data.items()}
 
 
@@ -251,10 +258,10 @@ class DungeonEntry:
         spec = self.spec
         net = getattr(member.game, "net", None)
         question = getattr(net, "question", None) if net is not None and net.alive() else None
-        if question is not None and spec.reply_id is not None \
+        if question is not None and spec.reply_ids \
                 and net.question_at >= self._opened_at.get(member.name, 0.0):
             answers = question[1]
-            if spec.reply_id in answers:
+            if spec.reply_ids & set(answers):
                 return spec.reply
             if self.keyring and spec.keyring and spec.keyring_id in answers:
                 log.info("Donjon : %s n'a pas de clé (d'après le jeu) : il entrera avec le trousseau", member.name)
@@ -395,7 +402,7 @@ class DungeonEntry:
         jeu) : la ligne `spec.chain` cliquée jusqu'à la question qui propose la clé (ou le trousseau), vue par le
         serveur (DQ), à défaut lue dans la bulle. La bulle de cette question ; None si la suite ne mène nulle part."""
         spec, game = self.spec, member.game
-        finals = {i for i in (spec.reply_id, spec.keyring_id) if i is not None}
+        finals = spec.reply_ids | ({spec.keyring_id} if spec.keyring_id is not None else set())
         for step in range(CHAIN_MAX):
             net = getattr(game, "net", None)
             question = getattr(net, "question", None) if net is not None and net.alive() else None

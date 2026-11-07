@@ -739,3 +739,26 @@ def test_entry_bubble_chain_that_never_reaches_the_key_is_closed(monkeypatch):
     monkeypatch.setattr(entry, "_read_reply", lambda game, frame, answer: (1, 1) if answer == spec.chain else None)
     monkeypatch.setattr(entry, "_close_bubble", lambda m: closed.append(m.name))
     assert entry._through_chain(hero, bubble) is None and closed == ["Fourboun"]
+
+
+def test_a_member_who_did_the_dungeon_skips_the_story(monkeypatch):
+    # 07/11, utilisateur : qui a déjà fait l'Ensablé se voit proposer de passer tout le dialogue ; même texte « Donner
+    # la clef et rentrer », numéro 2947 (langue du client). Aucun « Continuer » cliqué.
+    from types import SimpleNamespace
+
+    from bot.connection.network import ClientFeed
+
+    spec = load_dungeons()["ensable"]
+    assert spec.reply_ids == {2944, 2947}
+    net = ClientFeed("Fourboun")
+    net.feed("DQ3281|2936;2947")
+    clicks = []
+    bubble = SimpleNamespace(layout=SimpleNamespace(spread=lambda *a: (0, 0)), image=None)
+    game = SimpleNamespace(net=net, sleep=lambda s: None, look=lambda park=False: bubble,
+                           click=lambda point, spread=None: clicks.append(point))
+    hero = SimpleNamespace(name="Fourboun", game=game)
+    entry = DungeonEntry([hero], spec)
+    entry._opened_at["Fourboun"] = 0.0
+    monkeypatch.setattr(entry, "_read_reply", lambda game, frame, answer: (1, 1))
+    assert entry._through_chain(hero, bubble) is bubble and clicks == []
+    assert entry._entry_answer(hero, bubble) == spec.reply
