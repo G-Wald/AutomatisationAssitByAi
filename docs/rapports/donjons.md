@@ -787,3 +787,51 @@ référence du monde.
   trousseau). Sortie à relancer deux fois (corrections ci-dessus), plus d'intervention à la main à la fin.
 - **Raccourci du dialogue** : pas proposé au passage 2, alors que les 8 venaient de finir le donjon (q3281 à q3289
   envoyées à nouveau). 2947 reste accepté si un jour il est proposé ; l'histoire coûte environ 8 s par personnage.
+
+## 07/11, après-midi et soir : donjon Ensablé validé (3 passages d'affilée)
+
+Demande de l'utilisateur : « 3 donjons sans erreur pour valider », puis précisé : **trois donjons d'affilée**, les clés
+farmées dans la zone d'abord. Le panneau des smileys de la sortie du passage 2 du matin : l'émote « s'allonger »
+apprise au premier donjon terminé (utilisateur), donc une seule fois par personnage.
+
+- **Validation** (journal 191901) : **3 passages sur 3 d'affilée**, sans farm entre eux, 27 combats, 23, 28 (dont
+  6 min de repos de Fourbodeux et Pesopepe) et 30 min. **1 mort** : Fourbodeux, tué par le boss au passage 1 (combat
+  gagné, ressorti à 1 PV). Entrée des 8 en 1 min 15 à 1 min 30. Reprises faites seules : Pesopepe sans bulle au 1er
+  clic chez Igloute (passage 3), puis sa sortie (« Se laisser faire » cliqué sans effet, reparlé). Une erreur de capture
+  (« CreateCompatibleDC failed ») en fin de combat, sans suite.
+- **Zone des clés** : `zone_cles: [13, -28]`, Calanques d'Astrub (24 cartes, entrée comprise). D'après le client, la clé
+  8437 tombe sur 13 monstres (Pichons, Etoile de la Mer d'Asse, Raul Mops...) ; d'après les cartes StarLoco locales, les
+  Calanques ont des groupes de Pichons, d'Etoiles et de Crabes. Butin vu : **24 clés en environ 3 h 20 de farm**
+  (14:58-15:45, 16:14-16:40 et 17:15-19:11), 1 clé pour 4 à 8 min. Le trousseau n'est plus proposé cette semaine pour
+  l'Ensablé (q3289 : seule la réponse 2944).
+- **Nouveau réglage `donjon.farm_cles_passages`** (défaut 1) : clés farmées pour ce nombre de passages avant d'entrer,
+  puis les passages enchaînés. Avec 3 : un passage possible au départ ne lance pas d'entrée seul.
+
+Problèmes rencontrés pendant la session, et corrigés :
+
+- **Banque, « Consulter son coffre personnel » pas trouvée** (Elseiso, 14:50 ; passé au 2e essai) : les banquiers
+  **marchent** (« GA;1;-2;chemin » toutes les 10 à 20 s). « Parler » cliqué au moment où l'un repartait : aucun dialogue
+  ouvert par le serveur, puis un Échap qui ouvrait le Menu principal. Désormais : clic quand aucun PNJ n'a bougé depuis
+  1,5 s (4 s d'attente au plus) ; sans question du serveur 3 s après « Parler », on lui reparle, 3 fois au plus ;
+  pas d'Échap quand le serveur n'a ni dialogue ni coffre ouvert (DV, EV suivis).
+- **Igloute, « pas de bulle après Parler »** (Elseiso deux fois, Enu-six une : personne n'est entré, aucune clé
+  dépensée) : même chose, aucun dialogue ouvert par le serveur. Le « menu » cliqué était plus loin du clic que celui
+  d'Igloute : sans doute la bulle d'info d'un groupe de Pichons collé à lui. Désormais : clic quand PNJ et groupes ne
+  marchent plus, puis on lui reparle (3 fois au plus, un peu plus haut sur son corps) tant que le serveur n'ouvre rien.
+  Vu ensuite en jeu : Eldieso et Pesopepe, bulle au 2e clic.
+- **Soleils, coéquipiers « fantômes »** (Pesopepe puis Waldarch en 12,-27, Fourboun en 12,-28 : bot arrêté trois
+  fois, « aucun chemin ») : dans la fenêtre de Pesopepe, des coéquipiers déjà partis restaient affichés sur les soleils
+  (le serveur les avait retirés de la carte). Centre et bas de la case ouvraient leur menu à chaque clic ; un clic à la
+  pointe du losange est passé (fait à la main avec un script). Désormais, après un menu de personnage : la même place
+  une fois (souvent soi-même, écarté par la fermeture), puis les pointes gauche et droite. Vu ensuite en jeu : 12,-28 vers
+  13,-28 passé du premier coup par toute l'équipe.
+- **Capture, « CreateCompatibleDC failed »** (deux fois, en fin de combat, 8 fenêtres capturées en même temps) : remonté
+  comme erreur du combat, et le DC de la fenêtre n'était jamais rendu. Tout est rendu désormais, et l'échec est
+  réessayé (3 captures au plus, 0,1 s d'écart). Pas encore vu en jeu.
+
+Reste à faire :
+
+- **Reprise des clés au coffre** : Enu-six, 0 reprise au lieu de 1 (17:11, double-clic sans effet, rien d'autre sorti).
+  La place de la pile dans la grille est supposée d'après l'ordre d'arrivée des piles : fausse dans ce coffre. À fiabiliser
+  (reconnaître l'image de la clé dans la grille).
+- **Repos** : Fourbodeux mort au boss du passage 1, 6 min de repos au début du passage 2.

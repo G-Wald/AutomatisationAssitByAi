@@ -248,3 +248,32 @@ def test_numpad_not_tried_again_when_it_worked_in_a_previous_session():
     ai._use.new_turn(6)
     ai._check_numpad(turn)
     assert presses(game) == [] and ai._numpad_checked and not ai._numpad_ok  # une touche morte reste vue en combat
+
+
+def test_capture_out_of_gdi_objects_is_a_failed_capture_and_everything_is_released(monkeypatch):
+    # 07/11 : « CreateCompatibleDC failed » en fin de combat (8 fenêtres capturées en même temps) remontait comme
+    # erreur du combat, et le DC de la fenêtre n'était jamais rendu. Échec de capture (None), tout rendu, réessayé.
+    import win32ui
+
+    import bot.capture.printwindow as pw
+
+    released = []
+
+    class Source:
+        def CreateCompatibleDC(self):
+            raise win32ui.error("CreateCompatibleDC failed")
+
+        def DeleteDC(self):
+            released.append("source")
+
+    monkeypatch.setattr(pw.win32gui, "GetWindowRect", lambda hwnd: (0, 0, 100, 80))
+    monkeypatch.setattr(pw.win32gui, "GetWindowDC", lambda hwnd: 77)
+    monkeypatch.setattr(pw.win32gui, "ReleaseDC", lambda hwnd, dc: released.append(("window", dc)))
+    monkeypatch.setattr(pw.win32ui, "CreateDCFromHandle", lambda dc: Source())
+    assert pw.print_window(5) is None
+    assert released == ["source", ("window", 77)]
+    calls = []
+    monkeypatch.setattr(pw, "RETRY_PAUSE", 0.0)
+    monkeypatch.setattr(pw, "print_window", lambda hwnd: calls.append(hwnd) or (None if len(calls) < 3 else "image"))
+    capture = pw.WindowCapture(GameWindow(5, "Fourboun - Dofus Retro"))
+    assert capture.grab() == "image" and len(calls) == 3
