@@ -144,6 +144,9 @@ class ClientFeed:
     my_id: int | None = None
     actors: dict[int, Actor] = field(default_factory=dict)
     moved_at: float = 0.0  # dernier déplacement annoncé de mon personnage (GA0;1)
+    # Dernier pas annoncé d'un PNJ de la carte (« GA;1;-2;chemin », id négatif hors combat) : les banquiers d'Astrub
+    # marchent (07/11, Elseiso : « Parler » cliqué quand le banquier repartait, aucun dialogue ouvert par le serveur).
+    npc_moved_at: float = 0.0
     move_cells: list[int] = field(default_factory=list)
     spent_at: float = 0.0  # dernière action de mon personnage qui a coûté des PA (GA;102 : sort lancé, raté ou arme)
     cast_at: float = 0.0  # dernier sort lancé par mon personnage (GA;300)
@@ -152,6 +155,7 @@ class ClientFeed:
     # Banque (team/bank.py) : dialogue d'un PNJ ouvert (DCK), sa question et ses réponses (DQ), échange ou coffre ouvert
     # (ECK), fermé (EV), pods changés (Ow).
     dialog_at: float = 0.0
+    dialog_left_at: float = 0.0  # dialogue d'un PNJ refermé (« DV ») : plus rien à fermer par Échap (bank.py, 07/11)
     question_at: float = 0.0
     # Dernière question d'un PNJ : « DQ<question>|<réponse>;<réponse> » -> (question, réponses proposées). 31/10 : Altaïr
     # (donjon Bouftou) ne propose « Donner la clé » (564) qu'à qui a la clé ; le trousseau (6602) à tous.
@@ -325,6 +329,8 @@ class ClientFeed:
                 question = head.split(";")[0]
                 if question.isdigit():
                     self.question = (int(question), tuple(int(a) for a in answers.split(";") if a.isdigit()))
+            elif text.startswith("DV"):
+                self.dialog_left_at = now
             elif text.startswith("ECK"):
                 self.exchange_at = now
             elif text.startswith("EV"):
@@ -358,6 +364,8 @@ class ClientFeed:
                             # Chemin compressé (seuls les changements de direction) : sa longueur vient de GA;129,
                             # reçu dans la même salve ; à défaut, au moins une case par point.
                             self.moved_at, self.move_cells, self.move_steps = now, cells, max(1, len(cells) - 1)
+                        elif who < 0:
+                            self.npc_moved_at = now
             elif text.startswith(("GA;4;", "GA;5;")):
                 # Téléportation, poussée : « GA;5;lanceur;cible,case,... ».
                 parts = text.split(";")

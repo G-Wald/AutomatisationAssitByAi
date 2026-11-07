@@ -33,6 +33,7 @@ import win32con
 from bot.alerts import tell_user
 from bot.brain.popups import close_any_menu, menu_open
 from bot.brain.travel import escape_menu
+from bot.perception.popups import find_npc_dialog
 from bot.perception.templates import match_template
 from bot.perception.text import text_score
 from bot.perception.ui import pods_fill
@@ -49,6 +50,13 @@ SETTLE = 0.3  # s après la réponse du serveur : l'écran la montre
 LOOK_EVERY = 0.3
 # 27/10 : « Parler » cliqué, dialogue pas ouvert (Fourbodeux, l'équipe entière dans la pièce) : un second essai.
 VISIT_TRIES = 2
+# 07/11 (Elseiso) : les banquiers MARCHENT (« GA;1;-2;chemin » toutes les 10 à 20 s) ; « Parler » cliqué quand l'un
+# repartait : aucun dialogue ouvert par le serveur. Clic quand ils sont immobiles, et sans question du serveur après
+# « Parler » (rien d'ouvert, rien de payé), on lui reparle, TALK_TRIES fois au plus, sans Échap.
+TALK_TRIES = 3
+TALK_WAIT = 3.0  # s : question du serveur (DQ) après « Parler »
+NPC_STILL, NPC_STILL_MAX = 1.5, 4.0  # s sans pas de PNJ annoncé avant le clic ; attente au plus
+TEXT_WAIT = 1.5  # s : « Consulter son coffre personnel » dessiné après la question du serveur
 DOOR_RETRY = 5.0  # s sans changement de carte après le clic sur la porte : un second clic (27/10, Waldarch resté dehors)
 COUNTER = (1150, 150, 1700, 450)  # derrière le comptoir, où se tient le banquier
 RESOURCES_TAB, SORT_BUTTON = (1670, 220), (1875, 220)  # onglet ressources (bûche), bouton trier / transférer
@@ -280,8 +288,15 @@ def close_unexpected(game, why: str) -> bool:
     """Ce qui reste ouvert après un échec à la banque : un menu (joueur, Flash, petit menu, bulle) par la fermeture sûre
     (brain/popups.close_any_menu, jamais Échap devant un menu : il ouvre le Menu principal derrière) ; sinon le coffre
     ou le dialogue du banquier, fenêtres qu'Échap ferme (escape_menu). False si un menu reste ouvert."""
-    if menu_open(game.look(park=False)) is not None:
+    frame = game.look(park=False)
+    if menu_open(frame) is not None:
         return close_any_menu(game, why)
+    net = getattr(game, "net", None)
+    if (net is not None and net.alive() and net.dialog_left_at >= net.dialog_at
+            and net.exchange_left_at >= net.exchange_at and find_npc_dialog(frame) is None):
+        # 07/11 (Elseiso) : ni dialogue ni coffre ouverts d'après le serveur : Échap ouvrirait le Menu principal.
+        log.info("%s : rien d'ouvert d'après le serveur, pas d'Échap", why)
+        return True
     escape_menu(game)
     return True
 
@@ -554,7 +569,49 @@ class BankVisit:
         if menu_open(frame) is not None:
             if not close_any_menu(game, f"Banque, {member.name}"):
                 return self._fail(member, "un menu ouvert avant le banquier ne se ferme pas sans risque")
-            frame = game.look(park=False)
+        for talk in range(TALK_TRIES):
+            if talk:
+                log.info("%s : le serveur n'a pas ouvert le dialogue du banquier : je lui reparle (%d/%d)", member.name,
+                         talk + 1, TALK_TRIES)
+                if menu_open(game.look(park=False)) is not None:  # son petit menu resté ouvert : fermeture sûre
+                    if not close_any_menu(game, f"Banque, {member.name}"):
+                        return self._fail(member, "le menu du banquier ne se ferme pas sans risque")
+            answered = self._talk(member)
+            if answered is None:
+                return False  # échec déjà noté (_fail)
+            if answered:
+                break
+        else:
+            return self._fail(member, f"dialogue du banquier pas ouvert par le serveur ({TALK_TRIES} essais)")
+        score, point = self._text(member, "Consulter son coffre personnel", True, TEXT_WAIT)
+        if score < FOUND:
+            return self._fail(member, f"option « Consulter son coffre personnel » pas trouvée ({score:.2f})")
+        clicked = time.monotonic()
+        game.click(point, (20, 3))
+        self._wait(member, "exchange_at", clicked, 2.0)
+        score, _ = self._text(member, "Coffre", False, clicked + 2.5 - time.monotonic(), bold=True)
+        if score < FOUND:
+            return self._fail(member, f"fenêtre « Coffre » pas vue ({score:.2f})")
+        log_chest_keys(member)
+        return True
+
+    def _npcs_still(self, member) -> None:
+        """Banquiers immobiles avant le clic : NPC_STILL s sans pas de PNJ annoncé par le serveur, NPC_STILL_MAX s au
+        plus (07/11 : ils marchent ; un « Parler » cliqué pendant qu'il repart n'ouvre rien)."""
+        net = _net(member)
+        if net is None:
+            return
+        end = time.monotonic() + NPC_STILL_MAX
+        while time.monotonic() < end and time.monotonic() - net.npc_moved_at < NPC_STILL:
+            member.game.sleep(0.2)
+
+    def _talk(self, member) -> bool | None:
+        """Banquier -> « Parler » : True quand le dialogue est ouvert (question du serveur ; sans écoute, supposé),
+        False quand le serveur n'a rien ouvert et que rien n'est resté ouvert (un nouvel essai est sûr), None après un
+        échec noté (_fail)."""
+        game = member.game
+        self._npcs_still(member)
+        frame = game.look(park=False)
         speak = None
         for bx, by in find_bankers(frame)[:2]:
             # 31/10, revue : clic sur le banquier les autres joueurs cachés (touche hide_key tenue), comme les portes :
@@ -574,23 +631,22 @@ class BankVisit:
                 # banquier ; rien de sûr : arrêt (aucun clic par-dessus un menu).
                 log.info("%s : %s ouvert à la place du menu du banquier", member.name, kind)
                 if not close_any_menu(game, f"Banque, {member.name}"):
-                    return self._fail(member, f"{kind} ouvert à la place du menu du banquier, pas refermé sans risque")
+                    self._fail(member, f"{kind} ouvert à la place du menu du banquier, pas refermé sans risque")
+                    return None
         if speak is None:
-            return self._fail(member, "« Parler » du banquier introuvable")
+            self._fail(member, "« Parler » du banquier introuvable")
+            return None
         clicked = time.monotonic()
         game.click(speak[0], (6, 3))
-        self._wait(member, "question_at", clicked, 1.5)
-        score, point = self._text(member, "Consulter son coffre personnel", True, clicked + 1.5 - time.monotonic())
-        if score < FOUND:
-            return self._fail(member, f"option « Consulter son coffre personnel » pas trouvée ({score:.2f})")
-        clicked = time.monotonic()
-        game.click(point, (20, 3))
-        self._wait(member, "exchange_at", clicked, 2.0)
-        score, _ = self._text(member, "Coffre", False, clicked + 2.5 - time.monotonic(), bold=True)
-        if score < FOUND:
-            return self._fail(member, f"fenêtre « Coffre » pas vue ({score:.2f})")
-        log_chest_keys(member)
-        return True
+        net = _net(member)
+        if net is None:
+            game.sleep(1.5)
+            return True
+        if net.wait_for("question_at", clicked, TALK_WAIT) is not None:
+            game.sleep(SETTLE)
+            return True
+        # Pas de question : dialogue pas ouvert (serveur muet), sauf s'il se voit quand même à l'écran.
+        return find_npc_dialog(game.look(park=False)) is not None
 
 
 def log_chest_keys(member) -> dict[str, int]:

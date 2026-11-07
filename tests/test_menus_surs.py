@@ -2,6 +2,8 @@
 reconnu et refermé sans Échap (brain/popups.close_any_menu), les preuves viennent du serveur, et chaque abandon est dit
 à l'utilisateur (bot/alerts.tell_user). Jeux factices : aucun écran réel."""
 
+import logging
+import time
 from contextlib import contextmanager
 from types import SimpleNamespace
 
@@ -191,6 +193,87 @@ def test_banker_clicked_with_players_hidden_and_a_player_menu_closed_first(monke
     (first, held1), (second, held2) = game.clicks[:2]
     assert held1 == ("e",) and held2 == ("e",)  # les deux banquiers cliqués touche E tenue
     assert closed == [1]  # menu du joueur refermé juste après le 1er clic, avant le 2e banquier
+
+
+class TalkGame(BankGame):
+    """Le serveur n'ouvre le dialogue du banquier qu'au `opens`-ième clic sur « Parler » (07/11, Elseiso)."""
+
+    def __init__(self, net, opens: int):
+        super().__init__(net)
+        self.opens, self.talks = opens, 0
+
+    def click(self, point, spread=(0, 0), button="left"):
+        if point == (1100, 350):  # « Parler »
+            self.talks += 1
+            if self.talks == self.opens:
+                self.net.feed("DCK-2")
+                self.net.feed("DQ318;290|259;329")
+        return super().click(point, spread, button)
+
+
+def banker_talk(monkeypatch, opens: int):
+    monkeypatch.setattr(bank, "TALK_WAIT", 0.05)
+    monkeypatch.setattr(bank, "NPC_STILL", 0.0)
+    monkeypatch.setattr(bank, "find_bankers", lambda frame: [(900, 300)])
+    monkeypatch.setattr(bank, "menu_open", lambda frame: None)
+    monkeypatch.setattr(bank, "find_npc_dialog", lambda frame: None)
+    monkeypatch.setattr(bank, "match_template", lambda *args, **kwargs: ((1100, 350), 0.9))
+    monkeypatch.setattr(bank.BankVisit, "_text", lambda self, member, text, dark, timeout, bold=False: (1.0, (5, 5)))
+    monkeypatch.setattr(bank, "log_chest_keys", lambda member: {})
+    game = TalkGame(feed("Elseiso"), opens)
+    member = SimpleNamespace(name="Elseiso", game=game)
+    return bank.BankVisit([member], hide_key="e"), member, game
+
+
+def test_banker_spoken_to_again_when_the_server_opens_no_dialog(monkeypatch, caplog):
+    # 07/11 (Elseiso) : « Parler » cliqué quand le banquier repartait (« GA;1;-2;... ») : ni DCK ni question du serveur,
+    # « Consulter son coffre personnel » cherché pour rien, Échap derrière (Menu principal). Rien n'est ouvert : on lui
+    # reparle, sans Échap.
+    caplog.set_level(logging.INFO)
+    visit, member, game = banker_talk(monkeypatch, opens=2)
+    assert visit.open_chest(member)
+    assert game.talks == 2 and "je lui reparle (2/3)" in caplog.text
+
+
+def test_banker_silent_three_times_is_a_failure(monkeypatch):
+    visit, member, game = banker_talk(monkeypatch, opens=99)
+    assert not visit.open_chest(member)
+    assert game.talks == bank.TALK_TRIES
+    assert "dialogue du banquier pas ouvert" in visit.reasons["Elseiso"]
+
+
+def test_banker_clicked_once_his_steps_are_over(monkeypatch):
+    # Les banquiers marchent (07/11) : un pas de PNJ annoncé par le serveur, le clic attend NPC_STILL s sans pas.
+    monkeypatch.setattr(bank, "NPC_STILL", 0.3)
+    net = feed("Elseiso")
+    net.feed("GA;1;-2;aeahdY")
+    moved = net.npc_moved_at
+    assert moved > 0
+    net.my_id = 1439688
+    net.feed("GA0;1;1439688;afVdf9")  # mon personnage : pas un PNJ
+    assert net.npc_moved_at == moved
+    member = SimpleNamespace(name="Elseiso", game=BankGame(net))
+    visit = bank.BankVisit([member])
+    visit._npcs_still(member)
+    assert time.monotonic() - moved >= bank.NPC_STILL
+
+
+def test_nothing_open_for_the_server_means_no_escape(monkeypatch):
+    # 07/11 : après un « Parler » sans réponse, Échap ouvrait le Menu principal (rien d'autre à fermer).
+    escapes = []
+    monkeypatch.setattr(bank, "escape_menu", lambda game: escapes.append(game))
+    monkeypatch.setattr(bank, "menu_open", lambda frame: None)
+    monkeypatch.setattr(bank, "find_npc_dialog", lambda frame: None)
+    net = feed("Elseiso")
+    game = BankGame(net)
+    assert bank.close_unexpected(game, "Banque") and escapes == []
+    net.feed("DCK-2")  # dialogue ouvert, pas refermé (pas de DV) : Échap
+    assert bank.close_unexpected(game, "Banque") and len(escapes) == 1
+    net.feed("DV")
+    net.feed("ECK5")  # coffre ouvert
+    assert bank.close_unexpected(game, "Banque") and len(escapes) == 2
+    net.feed("EV")
+    assert bank.close_unexpected(game, "Banque") and len(escapes) == 2
 
 
 def test_transfer_is_proven_by_pods_or_by_objects_leaving_the_bag():

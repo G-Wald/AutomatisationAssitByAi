@@ -99,3 +99,5 @@ ensable:
   reponses_fin_avant: [Se laisser faire]   # q3290 (2945), vu en jeu le 07/11
   reponse_fin: Se sauver en courant         # q3291 (2946), seule proposée ensuite
   clic_fin: gauche
+  zone_cles: [13, -28]    # Calanques d'Astrub (24 cartes, entrée comprise) : Pichons et Etoiles de la Mer d'Asse,
+                          # butin de la clé (client, I 8437 drop ; groupes d'après StarLoco), ~1 % (07/11)
