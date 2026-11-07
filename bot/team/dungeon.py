@@ -22,7 +22,7 @@ import yaml
 
 from bot.alerts import tell_user
 from bot.brain.arena import map_cell
-from bot.brain.popups import close_any_menu, close_flash_menu
+from bot.brain.popups import close_any_menu, close_flash_menu, menu_open
 from bot.brain.travel import _click_spot, _gap, _scene, same_map
 from bot.config import ROOT
 from bot.perception.chat import find_text
@@ -49,6 +49,9 @@ MENU_WAIT = 3.0  # s : clic sur le PNJ -> menu ou bulle
 NPC_BODY_UP = 33  # px de référence : le corps du PNJ, au-dessus du centre de sa case (18/10 : 35 px)
 STEPS = ("entree", "dalle", "soleil", "pnj")  # étapes de l'entrée, dans l'ordre
 TALK_READS = 3  # lectures de « Parler » dans le menu du PNJ, 0,3 s d'écart
+OPEN_TRIES = 3  # clics sur le PNJ tant que le serveur n'ouvre aucun dialogue (07/11 : « Parler » sans réponse)
+OPEN_HIGHER = 10  # px de référence : chaque nouvel essai un peu plus haut sur son corps (un groupe voisin, 07/11)
+NPC_STILL, NPC_STILL_MAX = 1.5, 4.0  # s sans pas de PNJ ou de groupe annoncé avant le clic ; attente au plus
 REPLY_READS = 5  # lectures de la réponse dans la bulle, 0,3 s d'écart (son texte s'écrit après le cadre)
 EMPTY_ROOM = 2  # recherches de groupe vides d'affilée : salle de fin (une seule peut tomber pendant un affichage)
 BUTTONS = {"gauche": "left", "droit": "right"}
@@ -446,22 +449,49 @@ class DungeonEntry:
 
     def _open(self, member: Member, npc: Cell, button: str) -> tuple[Frame, Frame] | None:
         """Bulle du PNJ ouverte (clic, « Parler » si un menu s'ouvre) : (la salle avant le dialogue, la bulle vue) ;
-        None (dit au journal) sinon."""
+        None (dit au journal) sinon. 07/11 (Ensablé, Elseiso deux fois, Enu-six une) : « Parler » cliqué, aucun
+        dialogue ouvert par le serveur (ni DCK ni question) ; rien n'étant ouvert, on lui reparle, OPEN_TRIES fois au
+        plus, quand plus rien ne marche sur la carte (PNJ, groupes de monstres), un peu plus haut sur son corps."""
         game = member.game
         story = npc == self.spec.npc  # le PNJ d'entrée (sa bulle à plusieurs étapes), avant la case du serveur
-        npc = self._npc_cell(member, npc, roaming=not story)
-        self._opened_at[member.name] = time.monotonic()
-        frame = game.look(park=False)
-        x, y = frame.grid.center(npc)
-        point = (x, y - frame.layout.length(NPC_BODY_UP))
-        log.info("Donjon : %s parle au PNJ (case %d,%d)", member.name, *npc)
+        for attempt in range(OPEN_TRIES):
+            if attempt:
+                log.info("Donjon : %s : le serveur n'a ouvert aucun dialogue : je reparle au PNJ (%d/%d)", member.name,
+                         attempt + 1, OPEN_TRIES)
+                if menu_open(game.look(park=False)) is not None and not close_any_menu(game, member.name):
+                    return self._failed(member, "un menu reste ouvert devant le PNJ")
+            self._npcs_still(member)
+            cell = self._npc_cell(member, npc, roaming=not story)
+            self._opened_at[member.name] = time.monotonic()
+            frame = game.look(park=False)
+            x, y = frame.grid.center(cell)
+            point = (x, y - frame.layout.length(NPC_BODY_UP + OPEN_HIGHER * attempt))
+            if not attempt:
+                log.info("Donjon : %s parle au PNJ (case %d,%d)", member.name, *cell)
+            clicked = time.monotonic()
+            shown, why = self._open_once(member, point, button)
+            if shown is not None:
+                break
+            if not self._no_dialog(member, clicked) or attempt + 1 == OPEN_TRIES:
+                return self._failed(member, why)
+            self._failed(member, why + " ; rien d'ouvert d'après le serveur")
+        if self.spec.chain and story:
+            shown = self._through_chain(member, shown)
+            if shown is None:
+                return None
+        return frame, shown
+
+    def _open_once(self, member: Member, point, button: str) -> tuple[Frame | None, str]:
+        """Un clic sur le PNJ en `point` (et « Parler » si un menu s'ouvre) : (la bulle vue, "") ; sinon (None, pourquoi),
+        ce qui s'est ouvert refermé (menu d'un autre, menu de Flash)."""
+        game = member.game
         # 31/10, revue : joueurs cachés (touche E) pour le clic sur le PNJ aussi, comme pour les soleils (un joueur
         # devant Altaïr ouvrirait son menu).
-        self._hidden_click(member, point, frame.layout.spread(3, 3), button)
+        self._hidden_click(member, point, game.look(park=False).layout.spread(3, 3), button)
         shown = game.wait_until(lambda f: find_npc_dialog(f) is not None or find_small_menu(f, around=point) is not None
                                 or find_context_menu(f) is not None, MENU_WAIT, park=False)
         if shown is None:
-            return self._failed(member, "ni menu ni bulle après le clic sur le PNJ")
+            return None, "ni menu ni bulle après le clic sur le PNJ"
         if find_npc_dialog(shown) is None and button == "right":
             # Clic droit : le PNJ ouvre sa bulle, sans menu. Un menu, c'est qu'il n'était pas sous le clic (18/10 : le
             # menu de Flash, son milieu cliqué ouvrait ses Options) : refermé, et rien d'autre.
@@ -469,22 +499,35 @@ class DungeonEntry:
                 close_flash_menu(game, shown, point)
             else:
                 close_any_menu(game, member.name)
-            return self._failed(member, "un menu au lieu de la bulle du PNJ (pas sous le clic ?)")
+            return None, "un menu au lieu de la bulle du PNJ (pas sous le clic ?)"
         if find_npc_dialog(shown) is None:
             talk = self._talk_entry(game, shown, point)
             if talk is None:
                 close_any_menu(game, member.name)  # 31/10 : le menu d'un autre (joueur...) jamais cliqué, refermé
-                return self._failed(member, "menu du PNJ sans « Parler »")
+                return None, "menu du PNJ sans « Parler »"
             game.click(talk, shown.layout.spread(8, 3))
             shown = game.wait_until(lambda f: find_npc_dialog(f) is not None, MENU_WAIT, park=False)
             if shown is None:
-                self._failed(member, "pas de bulle après « Parler »")
-                return None
-        if self.spec.chain and story:
-            shown = self._through_chain(member, shown)
-            if shown is None:
-                return None
-        return frame, shown
+                return None, "pas de bulle après « Parler »"
+        return shown, ""
+
+    @staticmethod
+    def _no_dialog(member: Member, since: float) -> bool:
+        """Aucun dialogue ouvert par le serveur depuis `since` (pas de DCK) : un nouvel essai est sûr. Sans écoute :
+        False (rien de sûr)."""
+        net = getattr(member.game, "net", None)
+        return net is not None and net.alive() and getattr(net, "dialog_at", 0.0) < since
+
+    @staticmethod
+    def _npcs_still(member: Member) -> None:
+        """Plus de pas de PNJ ni de groupe de monstres annoncé par le serveur depuis NPC_STILL s (NPC_STILL_MAX s
+        d'attente au plus) : le PNJ ne repart pas sous le clic, un groupe ne passe pas devant (07/11)."""
+        net = getattr(member.game, "net", None)
+        if net is None or not net.alive():
+            return
+        end = time.monotonic() + NPC_STILL_MAX
+        while time.monotonic() < end and time.monotonic() - getattr(net, "npc_moved_at", 0.0) < NPC_STILL:
+            member.game.sleep(0.2)
 
     def _npc_cell(self, member: Member, npc: Cell, roaming: bool = False) -> Cell:
         """Case du PNJ : celle annoncée par le serveur pour son modèle (GM de la carte, `spec.npc_model`), sinon `npc`

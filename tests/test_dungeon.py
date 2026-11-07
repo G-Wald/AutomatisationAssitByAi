@@ -852,3 +852,65 @@ def test_smiley_panel_over_the_exit_bubble_is_found():
     toggle = DungeonEntry._smileys(shown)
     assert toggle is not None and abs(toggle[0] - 562) < 6 and abs(toggle[1] - 835) < 6
     assert DungeonEntry._smileys(clear) is None
+
+
+def npc_talk(monkeypatch, answers):
+    """Entrée des Champs (bulle sans histoire) : `_open_once` factice qui rend `answers` dans l'ordre ; chaque élément :
+    (bulle ou None, message du serveur à envoyer pendant le clic ou None)."""
+    from types import SimpleNamespace
+
+    import bot.team.dungeon as dungeon
+    from bot.connection.network import ClientFeed
+
+    monkeypatch.setattr(dungeon, "NPC_STILL", 0.0)
+    net = ClientFeed("Elseiso")
+    net.feed("BN")
+    room = load_frame(NPC_ROOM)
+    game = SimpleNamespace(net=net, look=lambda park=False: room, sleep=lambda s: None,
+                           recorder=SimpleNamespace(save=lambda *a, **k: "capture.png"))
+    member = SimpleNamespace(name="Elseiso", game=game)
+    entry = DungeonEntry([member], load_dungeons()["champs"])
+    monkeypatch.setattr(dungeon, "menu_open", lambda frame: None)
+    points, queue = [], list(answers)
+
+    def once(m, point, button):
+        points.append(point)
+        shown, message = queue.pop(0)
+        if message:
+            net.feed(message)
+        return shown, "" if shown is not None else "pas de bulle après « Parler »"
+
+    entry._open_once = once
+    return entry, member, points, room
+
+
+def test_npc_spoken_to_again_while_the_server_opens_no_dialog(monkeypatch, caplog):
+    # 07/11, Ensablé : « Parler » cliqué chez Igloute, ni DCK ni question du serveur (Elseiso deux fois, Enu-six une) :
+    # Elseiso déclaré sans bulle, personne n'est entré. Rien n'étant ouvert, on lui reparle, un peu plus haut.
+    import logging
+
+    import bot.team.dungeon as dungeon
+
+    caplog.set_level(logging.INFO)
+    entry, member, points, room = npc_talk(monkeypatch, [(None, None), (None, None), ("bulle", "DCK-1")])
+    assert entry._open(member, entry.spec.npc, "left") == (room, "bulle")
+    assert len(points) == 3 and "je reparle au PNJ (3/3)" in caplog.text
+    assert abs(points[0][1] - points[1][1] - room.layout.length(dungeon.OPEN_HIGHER)) < 0.01  # plus haut sur lui
+
+
+def test_npc_dialog_opened_by_the_server_is_not_clicked_again(monkeypatch):
+    # Dialogue ouvert d'après le serveur (DCK) mais bulle pas vue : pas de nouveau clic par-dessus (l'appelant la
+    # referme) ; trois silences de suite : échec.
+    entry, member, points, _ = npc_talk(monkeypatch, [(None, "DCK-1")])
+    assert not entry._open(member, entry.spec.npc, "left") and len(points) == 1
+    entry, member, points, _ = npc_talk(monkeypatch, [(None, None)] * 3)
+    assert not entry._open(member, entry.spec.npc, "left") and len(points) == 3
+
+
+def test_monster_groups_walking_count_as_npc_steps():
+    # Groupes de monstres et PNJ (ids négatifs) qui marchent : le clic sur le PNJ attend (07/11, Pichons autour d'Igloute).
+    from bot.connection.network import ClientFeed
+
+    net = ClientFeed("Elseiso")
+    net.feed("GA;1;-5;aeJbeY")
+    assert net.npc_moved_at > 0
