@@ -36,6 +36,9 @@ from bot.team.member import Member
 log = logging.getLogger(__name__)
 
 DUNGEONS_FILE = ROOT / "config" / "donjons_entree.yaml"  # donjons.yaml : recherche du 12/10 (candidats, sources)
+CHAIN_MAX = 12  # « Continuer la discussion » au plus dans une bulle d'entrée (07/11)
+CHAIN_WAIT = 2.0  # s : question suivante annoncée par le serveur après un « Continuer »
+CHAIN_SETTLE = 0.4  # s : texte de la bulle suivante écrit
 NET_SILENT = 1.5  # s : clic sur une case sans déplacement annoncé par le serveur : pas pris (06/11)
 CHANGE_WAIT = 12.0  # s : clic sur un soleil -> autre décor (marche jusqu'au soleil comprise)
 SETTLE = 1.0  # s : nouveau décor affiché, le temps qu'il finisse de se dessiner
@@ -84,6 +87,8 @@ class DungeonSpec:
     keyring: str | None = None  # réponse du trousseau de clefs (31/10 : entrée sans clé), et son numéro
     keyring_id: int | None = None
     exit_cell: Cell | None = None  # sortie par une case de la salle de fin (05/11, donjon des Champs), sans PNJ
+    # Ligne de la bulle d'entrée à cliquer avant la clé (07/11, Ensablé : « Continuer la discussion », 8 fois)
+    chain: str | None = None
     # Carte de la zone dont les monstres donnent la clé (zone_cles) : farm de leur butin quand les clés manquent (06/11)
     key_zone: tuple[int, int] | None = None
 
@@ -95,7 +100,8 @@ def load_dungeons(path: Path = DUNGEONS_FILE) -> dict[str, DungeonSpec]:
                              cell(d.get("dalle")), cell(d.get("soleil")), cell(d["pnj"]), str(d["reponse"]),
                              cell(d.get("pnj_fin")), d.get("reponse_fin"), BUTTONS[d.get("clic_fin", "droit")],
                              d.get("salles"), d.get("pnj_carte"), d.get("reponse_id"), d.get("trousseau"),
-                             d.get("trousseau_id"), cell(d.get("sortie_case")), cell(d.get("zone_cles")))
+                             d.get("trousseau_id"), cell(d.get("sortie_case")), key_zone=cell(d.get("zone_cles")),
+                             chain=d.get("suite"))
             for key, d in data.items()}
 
 
@@ -377,7 +383,42 @@ class DungeonEntry:
             if shown is None:
                 self._failed(member, "pas de bulle après « Parler »")
                 return None
+        if self.spec.chain and npc == self.spec.npc:
+            shown = self._through_chain(member, shown)
+            if shown is None:
+                return None
         return frame, shown
+
+    def _through_chain(self, member: Member, shown: Frame) -> Frame | None:
+        """Bulle d'entrée à plusieurs étapes (07/11, donjon Ensablé : le capitaine Igloute raconte son histoire, 8 fois
+        « Continuer la discussion » avant « Donner la clef et rentrer », d'après la langue du client ; à confirmer en
+        jeu) : la ligne `spec.chain` cliquée jusqu'à la question qui propose la clé (ou le trousseau), vue par le
+        serveur (DQ), à défaut lue dans la bulle. La bulle de cette question ; None si la suite ne mène nulle part."""
+        spec, game = self.spec, member.game
+        finals = {i for i in (spec.reply_id, spec.keyring_id) if i is not None}
+        for step in range(CHAIN_MAX):
+            net = getattr(game, "net", None)
+            question = getattr(net, "question", None) if net is not None and net.alive() else None
+            if question is not None and net.question_at >= self._opened_at.get(member.name, 0.0):
+                if finals & set(question[1]):
+                    return shown
+            elif self._read_reply(game, shown, spec.reply) is not None:
+                return shown
+            line = self._read_reply(game, shown, spec.chain)
+            if line is None:
+                # Ni la clé ni la suite : la réponse est cherchée ensuite (_entry_answer), qui dira ce qui manque.
+                return shown
+            asked = time.monotonic()
+            log.info("Donjon : %s : « %s » (%d)", member.name, spec.chain, step + 1)
+            game.click(line, shown.layout.spread(10, 3))
+            if net is not None and net.alive():
+                net.wait_for("question_at", asked, CHAIN_WAIT)
+            game.sleep(CHAIN_SETTLE)
+            self._opened_at[member.name] = asked  # la question suivante comptée depuis ce clic
+            shown = game.look(park=False)
+        self._close_bubble(member)
+        self._failed(member, f"toujours pas la clé après {CHAIN_MAX} « {spec.chain} »")
+        return None
 
     def _reply(self, member: Member, frame: Frame, shown: Frame, answer: str, not_gone: str) -> bool:
         """Dans la bulle ouverte, la ligne `answer`, puis le décor change (`frame` : la salle avant le dialogue)."""

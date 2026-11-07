@@ -65,3 +65,28 @@ champs:
   salles: 7
   sortie_case: [27, 17]
   zone_cles: [7, -25]     # Champs d'Astrub (26 cartes, sortie 7,-26 comprise) : butin de la clé, ~0,5 % (06/11)
+
+# Donjon Ensablé (07/11, préparé hors jeu, PAS ENCORE VU EN JEU : à observer avec tools/observer_pnj.py --suivre avant
+# tout passage). Données : langue du client (D q3281 à q3291), cartes StarLoco locales (data/externes/starloco,
+# maps/dungeons/Sandy), données du client (data/donjons.json, config/monde).
+# Entrée : carte 10155 en 13,-28 (Calanques d'Astrub ; itinéraire par le haut de 13,-27, 21 cartes depuis la banque),
+# le capitaine Igloute (PNJ 798) en case 195. Sa bulle raconte une histoire : 8 « Continuer la discussion » (réponses
+# 2936 à 2943, questions 3281 à 3288), puis q3289 avec « Donner la clef et rentrer » (2944 ; 2947 a le même texte,
+# laquelle est proposée : à voir). Clic gauche et « Parler » supposés comme Mawy et Altaïr.
+# Salles : 10156 à 10164, 9 combats (Mob l'Eponge et Raul Mops dans la 9e), 8 places de joueurs ou plus partout.
+# Sortie : salle 10165, Igloute en case 253, q3290 : « Se laisser faire » (2945) ou « Se sauver en courant » (2946) ;
+# laquelle ramène dehors, et où : à voir.
+# Clés (06/11, coffres lus) : 7 chez Fourboun, 2 chez Waldarch, 1 chez Enu-six : un passage à 8.
+ensable:
+  nom: Donjon Ensablé     # nom exact du donjon (table DU), comme dans config/donjons_cles.yaml
+  monde: douze
+  carte: [13, -28]
+  pnj: [13, 13]           # case 195 (StarLoco), à vérifier en jeu
+  pnj_carte: 10155
+  suite: Continuer la discussion
+  reponse: Donner la clef et rentrer
+  reponse_id: 2944        # à vérifier en jeu (2947 a le même texte)
+  salles: 9
+  pnj_fin: [13, 17]       # case 253 de 10165 (StarLoco), à vérifier en jeu
+  reponse_fin: Se laisser faire   # à vérifier en jeu (ou « Se sauver en courant »)
+  clic_fin: gauche

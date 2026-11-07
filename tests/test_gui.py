@@ -247,7 +247,8 @@ def test_dungeon_farm_errors():
     team = {"team": True, "leader": "Koalaloupour", "mode": "donjon"}
     assert validate(choices(**team, donjon="incarnam"), SETTINGS) == []
     assert validate(choices(**team), SETTINGS) == ["Farm de donjon : choisis le donjon"]
-    assert "n'est pas dans config/donjons_entree.yaml" in validate(choices(**team, donjon="ensable"), SETTINGS)[0]
+    # 07/11 : l'Ensablé est décrit ; un donjon pas encore décrit (Tofus) est refusé.
+    assert "n'est pas dans config/donjons_entree.yaml" in validate(choices(**team, donjon="tofus"), SETTINGS)[0]
     assert validate(choices(**team, donjon="bouftou", monde="douze"), SETTINGS) == []  # 30/10 : entrée décrite
     assert validate(choices(**team, donjon="incarnam", monde="douze"), SETTINGS)[0].endswith("choisis-le dans Monde")
     assert validate(choices(mode="donjon", donjon="incarnam"), SETTINGS) == [

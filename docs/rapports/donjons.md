@@ -726,3 +726,22 @@ Demande de l'utilisateur : 3 donjons des Champs sans problème pour valider. Fai
   - Canidés 12.
 
 **Le donjon des Champs est validé** (critère de l'utilisateur : 3 passages sans problème).
+
+## 07/11 : donjon Ensablé, préparé hors jeu (choix de l'utilisateur)
+
+Rien n'a encore été vu en jeu ; les données viennent de la langue du client, des cartes StarLoco locales et de la
+référence du monde.
+- **Entrée** : carte 10155 en 13,-28 (Calanques d'Astrub).
+  - Itinéraire par le haut de 13,-27 : 21 cartes depuis la banque, 10 depuis les Champs.
+  - Le capitaine Igloute (PNJ 798) se tient en case 195 = (13,13).
+- **Bulle à plusieurs étapes** : 8 « Continuer la discussion » (questions 3281 à 3288), puis q3289 avec « Donner la
+  clef et rentrer » (2944 ; 2947 a le même texte, à voir).
+  - Nouveau dans le bot : `suite` (yaml) et `DungeonEntry._through_chain`. Le bot clique cette ligne jusqu'à la question
+    qui propose la clé, d'après le serveur, et rien d'autre.
+- **Salles** : 10156 à 10164, 9 combats, 8 places ou plus partout (pas de vagues).
+- **Sortie** : salle 10165, Igloute en case 253 = (13,17). Réponses « Se laisser faire » (2945) ou « Se sauver en
+  courant » (2946). Laquelle ramène dehors, et où : à voir.
+- **Clés** : 10 dans les coffres (Fourboun 7, Waldarch 2, Enu-six 1), donc un passage à 8.
+- **Observation sans rien consommer** : `tools/observer_pnj.py --personnage Fourboun --pnj-modele 798 --suivre
+  "Continuer la discussion"`. L'outil clique seulement cette ligne, note chaque question et ses réponses, puis referme
+  la bulle par sa croix.

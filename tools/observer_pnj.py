@@ -4,6 +4,10 @@ PNJ par son modèle), la question et les réponses proposées (DQ), traduites pa
 
 Rien n'est consommé (ni clé ni trousseau) : la bulle est fermée par sa croix. Arrière-plan ; F12 arrête.
 
+Bulle à plusieurs étapes (07/11, donjon Ensablé : Igloute, 8 « Continuer la discussion » avant la clé) : `--suivre`
+clique cette ligne, et seulement elle, tant qu'elle est proposée, chaque question et ses réponses au journal ; la bulle
+est refermée par sa croix ensuite, rien donné (--pnj-modele 798 --suivre "Continuer la discussion").
+
     .venv\\Scripts\\python -m tools.observer_pnj --personnage Fourboun --porte 18,12 --pnj-modele 780
 """
 
@@ -46,12 +50,24 @@ def question_text(qid: int) -> str:
     return str(table["q"].get(str(qid), "?"))[:120]
 
 
+def log_question(question) -> None:
+    if question is None:
+        return
+    qid, answers = question
+    log.info("Question %d : %s", qid, question_text(qid))
+    for aid, text in answers_text(answers).items():
+        log.info("  réponse %d : %s", aid, text)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--personnage", required=True)
     parser.add_argument("--porte", help="x,y de la case de la porte à passer d'abord (grille de combat)")
     parser.add_argument("--pnj-modele", type=int, required=True, help="modèle du PNJ (GM, 5e champ) : 780 pour Mawy")
     parser.add_argument("--pnj-case", help="x,y du PNJ si la carte n'a pas changé (acteurs pas encore annoncés)")
+    parser.add_argument("--suivre", help="ligne de la bulle à cliquer tant qu'elle est proposée (« Continuer la "
+                                         "discussion ») ; aucune autre réponse n'est jamais cliquée")
+    parser.add_argument("--etapes", type=int, default=12, help="avec --suivre : clics au plus")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-7s %(message)s")
     sys.stdout.reconfigure(encoding="utf-8")
@@ -122,10 +138,23 @@ def main() -> int:
     if question is None:
         log.warning("Pas de question annoncée par le serveur (DQ) ; bulle %s", "vue" if shown is not None else "pas vue")
     else:
-        qid, answers = question
-        log.info("Question %d : %s", qid, question_text(qid))
-        for aid, text in answers_text(answers).items():
-            log.info("  réponse %d : %s", aid, text)
+        log_question(question)
+    for step in range(args.etapes if args.suivre and shown is not None else 0):
+        from bot.perception.text import find_text
+
+        line = find_text(shown, shown.layout.map_box, args.suivre, exact=True)
+        if line is None:
+            log.info("« %s » plus proposé après %d clic(s)", args.suivre, step)
+            break
+        clicked = time.monotonic()
+        game.click(line, shown.layout.spread(10, 3))
+        if net.wait_for("question_at", clicked, 3.0) is None:
+            log.warning("Clic %d sur « %s » : pas de nouvelle question annoncée", step + 1, args.suivre)
+        game.sleep(0.5)
+        shown = game.look(park=False)
+        Recorder().save(shown.image, f"bulle_{step + 1:02d}")
+        log.info("Clic %d sur « %s »", step + 1, args.suivre)
+        log_question(net.question)
     if shown is not None:
         cross = find_npc_dialog(shown)
         game.click(cross, shown.layout.spread(2, 2))  # refermée sans répondre : rien n'est consommé

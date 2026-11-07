@@ -694,3 +694,48 @@ def test_a_member_the_server_sees_still_is_clicked_again_at_once(monkeypatch):
     team[1].game.net = net(0.0)  # rien d'annoncé : reclic tout de suite
     assert DungeonEntry(team, spec).leave()
     assert len(events(screen, "click")) == 3
+
+
+def test_entry_bubble_in_several_steps_goes_on_until_the_key(monkeypatch):
+    # 07/11, Ensablé (langue du client) : Igloute raconte son histoire, 8 « Continuer la discussion » (2936 à 2943)
+    # avant la question qui propose « Donner la clef et rentrer » (2944). Chaque « Continuer » attend la question
+    # suivante du serveur ; rien n'est donné avant.
+    from types import SimpleNamespace
+
+    from bot.connection.network import ClientFeed
+
+    spec = load_dungeons()["ensable"]
+    assert spec.chain == "Continuer la discussion" and spec.reply_id == 2944 and spec.rooms == 9
+    net = ClientFeed("Fourboun")
+    clicks = []
+    bubble = SimpleNamespace(layout=SimpleNamespace(spread=lambda *a: (0, 0)), image=None)
+    game = SimpleNamespace(net=net, sleep=lambda s: None, look=lambda park=False: bubble,
+                           click=lambda point, spread=None: clicks.append(point) or advance())
+    hero = SimpleNamespace(name="Fourboun", game=game)
+    entry = DungeonEntry([hero], spec)
+    story = [(3281 + i, (2936 + i,)) for i in range(8)] + [(3289, (2944,))]
+
+    def advance():
+        question, answers = story.pop(0)
+        net.feed(f"DQ{question}|" + ";".join(map(str, answers)))
+
+    advance()  # première bulle, à l'ouverture
+    entry._opened_at["Fourboun"] = 0.0
+    monkeypatch.setattr(entry, "_read_reply", lambda game, frame, answer: (1, 1) if answer == spec.chain else None)
+    assert entry._through_chain(hero, bubble) is bubble
+    assert len(clicks) == 8 and net.question[0] == 3289 and entry._entry_answer(hero, bubble) == spec.reply
+
+
+def test_entry_bubble_chain_that_never_reaches_the_key_is_closed(monkeypatch):
+    from types import SimpleNamespace
+
+    spec = load_dungeons()["ensable"]
+    closed = []
+    bubble = SimpleNamespace(layout=SimpleNamespace(spread=lambda *a: (0, 0)), image=None)
+    game = SimpleNamespace(net=None, sleep=lambda s: None, look=lambda park=False: bubble,
+                           click=lambda point, spread=None: None, recorder=SimpleNamespace(save=lambda *a, **k: "x"))
+    hero = SimpleNamespace(name="Fourboun", game=game)
+    entry = DungeonEntry([hero], spec)
+    monkeypatch.setattr(entry, "_read_reply", lambda game, frame, answer: (1, 1) if answer == spec.chain else None)
+    monkeypatch.setattr(entry, "_close_bubble", lambda m: closed.append(m.name))
+    assert entry._through_chain(hero, bubble) is None and closed == ["Fourboun"]
