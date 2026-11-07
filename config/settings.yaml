@@ -156,6 +156,8 @@ donjon:                    # farm de donjon (--donjon ; bot/team/dungeon.py, bot
                            # faut désigner qui a le métier : Fourboun, Bricoleur 35) ; non : passages ramenés aux clés.
                            # Demande donjon.cles sac ou sac_banque. --set donjon.cles_manquantes=farm
   farm_cles_minutes: 60    # durée d'un farm des clés, au plus (le temps d'un passage après lui gardé sur --minutes)
+  farm_cles_passages: 1    # clés farmées pour combien de passages avant d'entrer (07/11, utilisateur : valider un
+                           # donjon = « trois donjons d'affilée » : 3, les 3 passages ensuite sans farm entre eux)
   trousseau: priorite      # « Utiliser le trousseau de clefs » chez le PNJ : priorite (07/11, utilisateur) : dès que
                            # le serveur le propose, la clé gardée (reprise avec la clé si la porte refuse le
                            # trousseau) ; oui : seulement pour qui n'a pas la clé (31/10) ; non : jamais

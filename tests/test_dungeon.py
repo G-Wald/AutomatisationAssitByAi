@@ -674,6 +674,47 @@ def test_missing_keys_farmed_in_the_key_zone_then_the_passes_go_on(monkeypatch):
     assert not farm._can_refill() and not farm.keys.refill  # pas encore faite : passages ramenés aux clés
 
 
+def test_keys_of_three_passes_farmed_first_then_the_passes_in_a_row(monkeypatch):
+    # 07/11, utilisateur : valider un donjon, c'est « trois donjons d'affilée » : avec donjon.farm_cles_passages=3,
+    # le farm continue jusqu'aux clés des 3 passages (une clé de départ chez A ne lance pas un passage seul), puis les
+    # 3 passages s'enchaînent sans farm entre eux.
+    from types import SimpleNamespace
+
+    from bot.team import pods
+    from bot.team.dungeon import DungeonFarm
+
+    members = [SimpleNamespace(name=n, game=None) for n in ("A", "B")]
+    bot = SimpleNamespace(members=members, leader=members[0], finished=False,
+                          _settings={"donjon": {"cles": "sac", "cles_manquantes": "farm", "farm_cles_passages": 3}})
+    farm = DungeonFarm(bot, load_dungeons()["ensable"], 3)
+    held = {"A": 2, "B": 1}  # un passage possible au départ
+    order = []
+
+    def zone_farm(bot, zone, enough, seconds, why):
+        order.append("farm")
+        assert not enough()
+        held.update({"A": 3, "B": 3})
+        return enough()
+
+    def prepare(dungeon, wanted, template=None):
+        each = min(sum(held.values()) // len(held), wanted)
+        held.update({name: each for name in held})
+        return each
+
+    monkeypatch.setattr(pods, "team_zone_farm", zone_farm)
+    monkeypatch.setattr(farm.keys, "prepare", prepare)
+    monkeypatch.setattr(farm.keys, "count", lambda template: dict(held))
+
+    def one_pass(run, *args):
+        order.append(f"passage {run}")
+        held.update({name: count - 1 for name, count in held.items()})
+        return True
+
+    monkeypatch.setattr(farm, "_one_pass", one_pass)
+    assert farm.run() == 3
+    assert order == ["farm", "passage 1", "passage 2", "passage 3"]
+
+
 def test_team_zone_farm_until_enough_then_the_previous_mode_comes_back(monkeypatch):
     from types import SimpleNamespace
 

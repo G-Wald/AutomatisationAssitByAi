@@ -788,6 +788,9 @@ class DungeonFarm:
             missing = "non"
         self.missing_keys = missing
         self.farm_seconds = 60 * float(donjon.get("farm_cles_minutes", FARM_MINUTES))
+        # 07/11, utilisateur : valider un donjon, c'est « trois donjons d'affilée » : les clés de plusieurs passages
+        # farmées d'abord, puis les passages enchaînés sans farm entre eux (donjon.farm_cles_passages ; 1 : avant).
+        self.farm_passes = max(1, int(donjon.get("farm_cles_passages", 1)))
         # Répartition des clés au début du farm (team/keys.py, donjon.cles ; 30/10, demande de l'utilisateur).
         self.keys = KeyManager(bot.members, getattr(bot, "_settings", None) or {},
                                getattr(travel, "hide_players_key", "e"), trip=BankTrip(bot, spec))
@@ -807,7 +810,12 @@ class DungeonFarm:
                     # rentrer solo » (ce matin-là, clé pas reconnue : Fourboun entré seul).
                     log.warning("Donjon : clés pas réparties (clé ou inventaire inconnus) : pas d'entrée")
                     return 0
-                if passes < self.runs and self._can_refill():
+                if passes < min(self.farm_passes, self.runs) and self._can_refill():
+                    # 07/11 : passages d'affilée demandés (farm_cles_passages) : les clés farmées d'abord.
+                    log.info("Donjon : clés pour %d passage(s), %d d'affilée demandés : farm de leur butin d'abord",
+                             passes, min(self.farm_passes, self.runs))
+                    passes = 0
+                elif passes < self.runs and self._can_refill():
                     log.info("Donjon : clés pour %d passage(s) sur %d demandés : farm de leur butin quand elles "
                              "manqueront", passes, self.runs)
                 elif passes < self.runs:
@@ -823,7 +831,7 @@ class DungeonFarm:
         while done < self.runs:
             run = done + 1
             if self.keys.enabled and start != "salles" and self._keys_left <= 0:
-                self._keys_left = self._refill(deadline)
+                self._keys_left = self._refill(deadline, min(self.farm_passes, self.runs - done))
                 if self._keys_left <= 0:
                     break
                 self._progress("clés refaites")
@@ -865,16 +873,17 @@ class DungeonFarm:
             return False
         return self.missing_keys == "farm"
 
-    def _refill(self, deadline: float | None) -> int:
-        """Plus de clé pour un passage : farm de la zone de la clé jusqu'à une clé par personnage (butin, d'après le
-        serveur), puis répartition. Passages possibles ensuite ; 0 : pas de farm, ou pas de clé de plus."""
+    def _refill(self, deadline: float | None, passes: int = 1) -> int:
+        """Plus de clé pour un passage : farm de la zone de la clé jusqu'à `passes` clés par personnage (butin, d'après
+        le serveur), puis répartition. Passages possibles ensuite ; 0 : pas de farm, ou pas de clé de plus."""
         from bot.team import pods
 
         if not self._can_refill():
             return 0
         seconds = self.farm_seconds
         if deadline is not None:
-            seconds = min(seconds, deadline - time.monotonic() - PASS_ESTIMATE)  # le temps du passage d'après compris
+            # le temps des passages d'après compris
+            seconds = min(seconds, deadline - time.monotonic() - PASS_ESTIMATE * passes)
         if seconds < FARM_LEAST:
             log.info("Donjon : plus de clé, et plus le temps pour farmer leur butin puis faire un passage")
             return 0
@@ -885,9 +894,10 @@ class DungeonFarm:
 
         def enough() -> bool:
             held = self.keys.count(template)
-            return held is not None and sum(held.values()) >= size
+            return held is not None and sum(held.values()) >= size * passes
 
-        log.info("Donjon : plus de clé pour un passage : farm du butin de la zone de %s,%s", *self.spec.key_zone)
+        log.info("Donjon : plus de clé pour %s : farm du butin de la zone de %s,%s jusqu'à %d clés",
+                 "un passage" if passes == 1 else f"{passes} passages d'affilée", *self.spec.key_zone, size * passes)
         pods.team_zone_farm(self.bot, self.spec.key_zone, enough, seconds, "Clés de " + self.spec.name)
         if getattr(self.bot, "finished", False):
             return 0  # session arrêtée pendant le farm
