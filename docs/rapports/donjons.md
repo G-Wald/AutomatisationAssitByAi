@@ -750,3 +750,40 @@ référence du monde.
   et rentrer » : 2944, au bout de l'histoire, et 2947, sans doute le raccourci. Le bot accepte les deux
   (`reponse_id_autres`) : un personnage qui a le raccourci répond tout de suite, les autres passent par les
   « Continuer ». À confirmer en jeu avec l'observation.
+
+## 07/11 : donjon Ensablé en jeu (session de 2 h)
+
+- **Clé visée** : 8437, « Clef du Donjon Ensablé », la clé normale. Les clés « corrompues » de Temporis n'existent pas
+  dans les données du client officiel (utilisateur : Temporis est temporaire).
+- **Bulle d'entrée observée** (`observer_pnj --suivre`, rien donné) : Igloute en case 195 = (13,13), comme StarLoco.
+  8 « Continuer la discussion » (q3281 à q3288), puis q3289. Sans clé dans le sac, seul « Utiliser le trousseau de
+  clefs. » (6617) est proposé ; avec la clé, « Donner la clef et rentrer » (2944).
+  - Corrigé : l'outil d'observation appelait la mauvaise fonction de lecture de texte (bulle laissée ouverte, refermée
+    ensuite par sa croix).
+- **Passage 1** (journal 115734) : clés reprises aux coffres (Fourboun 7, Waldarch 1), 6 échanges sur 6 du premier coup,
+  entrée des 8 en 1 min 30 (histoire comprise), 9 combats en 21 min, 0 mort.
+- **Sortie : trois problèmes, corrigés un à un** (journaux 115734, 123108, 123409, 123816, 124159) :
+  - Igloute n'est pas en 253 (StarLoco) : le serveur l'annonce en 268 à l'arrivée, et surtout **il marche dans la
+    salle** (« GA;1;-1;... » toutes les 20 s environ). Le bot clique désormais la case annoncée par le serveur pour le
+    modèle du PNJ (`pnj_modele`) ; relancé dans la salle (carte pas annoncée), il attend un pas du PNJ (30 s au plus).
+  - La sortie se fait en deux bulles : « Se laisser faire » (q3290, 2945), puis « Se sauver en courant » (q3291, 2946,
+    seule proposée). Nouveau champ `reponses_fin_avant`.
+  - Reprise dans la salle de fin : `--donjon ensable:salles` tournait en rond (salle sans groupe, clavier cru sourd).
+    `--donjon ensable:salles:10` (salle après la 9e) va directement à la sortie.
+  - Résultat : les 8 dehors en 28 s, déposés sur 10155, devant Igloute (la boucle enchaîne sans trajet).
+- **Trousseau en priorité** (demande de l'utilisateur, 07/11) : `donjon.trousseau` vaut désormais `priorite` par
+  défaut. Le trousseau est pris dès que le serveur le propose, la clé gardée ; si la porte le refuse, le personnage est
+  relancé avec sa clé. `oui` : seulement pour qui n'a pas la clé ; `non` : jamais.
+- **Passage 2** (journal 125042, `--set donjon.cles=non`) : les 8 sont entrés avec le trousseau, aucune clé dépensée.
+  9 combats, 0 mort (entrée 12:52, salle de fin 13:22).
+  - Sortie ratée : le **panneau des smileys** (bouton de la barre du bas) était ouvert dans les 8 fenêtres et cachait
+    « Se sauver en courant ». Il était déjà ouvert au premier combat, donc ouvert pendant l'entrée ; jamais vu au passage
+    1. Aucun clic du bot n'est tombé sur son bouton : cause pas trouvée.
+  - Panneau refermé à la main (bouton, seulement là où il était reconnu), puis sortie relancée (journal 132519) : les
+    8 dehors en 40 s.
+  - Garde-fou ajouté : à la sortie, une réponse pas lue avec le panneau reconnu (`panneau_smileys.png`) -> panneau
+    refermé par son bouton, réponse relue. Pas encore vu en jeu.
+- **Bilan de la session** : 2 passages complets, 18 combats, 0 mort ; 8 clés dépensées (passage 1), 0 (passage 2,
+  trousseau). Sortie à relancer deux fois (corrections ci-dessus), plus d'intervention à la main à la fin.
+- **Raccourci du dialogue** : pas proposé au passage 2, alors que les 8 venaient de finir le donjon (q3281 à q3289
+  envoyées à nouveau). 2947 reste accepté si un jour il est proposé ; l'histoire coûte environ 8 s par personnage.

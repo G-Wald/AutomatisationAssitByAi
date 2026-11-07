@@ -58,6 +58,10 @@ SAME_ROOM_WAIT = 5.0  # s : toute l'équipe annoncée sur la carte du principal 
 # Salles à peu de places (05/11, donjon des Champs : salle 3 à 3 joueurs, salle 5 à 4 ; utilisateur : « le bot doit se
 # débrouiller pour passer les salles où il y a moins de place, les plus haut level sont plus forts donc peuvent être
 # moins par salle ») : l'équipe combat par vagues, le groupe de la salle réapparaissant après chaque victoire.
+SMILEYS_FILE = PLACES_DIR / "panneau_smileys.png"  # 1re rangée du panneau des smileys (capture 1920x1057, 07/11)
+SMILEYS_SCALE = 104.86  # layout.length(100) de cette capture
+SMILEYS_TOGGLE = (10, 130)  # px de la capture : son bouton (barre du bas), depuis le coin du panneau
+SMILEYS_SCORE = 0.8
 ROOMS_FILE = ROOT / "data" / "donjons.json"  # référence du client : places de chaque salle (placement p1 : joueurs)
 RESPAWN_WAIT = 180.0  # s au plus : le groupe de la salle réapparu, pour la vague suivante
 NO_KEY_LIMIT = 10**6
@@ -377,6 +381,40 @@ class DungeonEntry:
     def _give_key(self, member: Member) -> bool:
         return self._talk(member, self.spec.npc, self.spec.reply, "left", "n'a pas passé la porte")
 
+    @staticmethod
+    def _smileys(frame: Frame) -> tuple[float, float] | None:
+        """Bouton du panneau des smileys s'il est ouvert (07/11, passage 2 de l'Ensablé : ouvert dans les 8 fenêtres,
+        cause pas trouvée, il cachait « Se sauver en courant ») ; None sinon."""
+        template = cv2.imread(str(SMILEYS_FILE))
+        if template is None:
+            return None
+        k = frame.layout.length(100) / SMILEYS_SCALE
+        if abs(k - 1.0) > 0.02:
+            template = cv2.resize(template, None, fx=k, fy=k)
+        h, w = frame.image.shape[:2]
+        x0, y0 = int(w * 0.2), int(h * 0.5)
+        region = frame.image[y0:int(h * 0.85), x0:int(w * 0.7)]
+        if region.shape[0] < template.shape[0] or region.shape[1] < template.shape[1]:
+            return None
+        _, score, _, (x, y) = cv2.minMaxLoc(cv2.matchTemplate(region, template, cv2.TM_CCOEFF_NORMED))
+        if score < SMILEYS_SCORE:
+            return None
+        return x0 + x + SMILEYS_TOGGLE[0] * k, y0 + y + SMILEYS_TOGGLE[1] * k
+
+    def _read_or_unhide(self, member: Member, shown: Frame, answer: str) -> tuple[tuple[float, float] | None, Frame]:
+        """La ligne `answer` dans la bulle ; pas lue et le panneau des smileys ouvert : refermé par son bouton, relue."""
+        game = member.game
+        line = self._read_reply(game, shown, answer)
+        if line is None:
+            toggle = self._smileys(shown)
+            if toggle is not None:
+                log.info("Donjon : %s : panneau des smileys ouvert sur la bulle, je le referme", member.name)
+                game.click(toggle, shown.layout.spread(2, 2))
+                game.sleep(CHAIN_SETTLE)
+                shown = game.look(park=False)
+                line = self._read_reply(game, shown, answer)
+        return line, shown
+
     def _talk_exit(self, member: Member) -> bool:
         """PNJ de sortie : sa bulle, les réponses `exit_before` une à une (la question suivante attendue du serveur),
         puis `exit_reply`, et le décor change (téléporté dehors)."""
@@ -387,7 +425,7 @@ class DungeonEntry:
         before, shown = bubble
         net = getattr(game, "net", None)
         for answer in spec.exit_before:
-            line = self._read_reply(game, shown, answer)
+            line, shown = self._read_or_unhide(member, shown, answer)
             if line is None:
                 return self._failed(member, f"pas de réponse « {answer} » dans la bulle de sortie")
             asked = time.monotonic()
@@ -397,6 +435,7 @@ class DungeonEntry:
                 net.wait_for("question_at", asked, CHAIN_WAIT)
             game.sleep(CHAIN_SETTLE)
             shown = game.look(park=False)
+        _, shown = self._read_or_unhide(member, shown, spec.exit_reply)
         return self._reply(member, before, shown, spec.exit_reply, "n'est pas sorti")
 
     def _talk(self, member: Member, npc: Cell, answer: str, button: str, not_gone: str) -> bool:

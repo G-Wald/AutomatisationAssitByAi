@@ -843,3 +843,12 @@ def test_roaming_exit_npc_found_by_its_steps_after_a_relaunch():
         assert entry._npc_cell(member, spec.npc, roaming=False) == spec.npc  # l'entrée : jamais deviné
     finally:
         dungeon.NPC_WAIT = dungeon_wait
+
+
+def test_smiley_panel_over_the_exit_bubble_is_found():
+    # 07/11, passage 2 de l'Ensablé : le panneau des smileys ouvert dans les 8 fenêtres cachait « Se sauver en
+    # courant » ; son bouton (barre du bas) le referme.
+    shown, clear = load_frame("donjon_ensable_sortie_smileys"), load_frame("donjon_ensable_sortie")
+    toggle = DungeonEntry._smileys(shown)
+    assert toggle is not None and abs(toggle[0] - 562) < 6 and abs(toggle[1] - 835) < 6
+    assert DungeonEntry._smileys(clear) is None
