@@ -131,6 +131,12 @@ team:                      # mode équipe : une fenêtre du jeu par personnage, 
                            # l'équipe se place selon l'ordre de jeu vu au combat précédent, les premiers à jouer à
                            # portée des ennemis, les derniers plus loin (bot/team/placement.py) ; 3 passes au plus,
                            # chacun de ceux qui ont bougé est reconnu (pas de repérage à son premier tour)
+  dps: []                  # DPS placés en priorité (07/11), si place est false : « Nom » ou « Nom:rôle », dans
+                           # l'ordre de priorité ; rôle distance (défaut : à portée de son sort qui porte le plus
+                           # loin, en ligne de vue, le plus loin possible des ennemis) ou contact (au plus près d'un
+                           # ennemi, sans couper la ligne de tir d'un DPS d'avant). Seuls eux bougent, partant de
+                           # leur case d'après le serveur ; les autres sont Prêts tout de suite.
+                           # --set "team.dps=Waldhary-[Gal]:distance"
   turn_signal: "notifications"  # qui joue : timeline (portrait et timer du tour, lus à l'écran) ; notifications : aussi les
                            # notifications Windows que le jeu envoie au début du tour d'un personnage (option du jeu
                            # « Notifications en arrière-plan »), lues par l'API de Windows pendant l'attente d'un tour :

@@ -768,6 +768,36 @@ def test_whole_team_placed_in_a_few_passes_each_known_on_its_true_cell(monkeypat
     assert sorted(e[0] for e in events(screen, "press")) == sorted(ready)  # une fois chacun
 
 
+def test_only_the_dps_move_first_by_priority_from_their_cell_told_by_the_server(monkeypatch, caplog):
+    # 07/11, utilisateur : « un mode où on définit les dps qui doivent être placés correctement en priorité pour taper,
+    # en fonction de la classe distance ou autre ». Seuls les DPS bougent ; leur case de départ vient du serveur.
+    from types import SimpleNamespace
+
+    from bot.brain.arena import map_cell
+
+    screen, bot, host, members, board = team_of_8(monkeypatch, seed=3)
+    bot.team = TeamSettings(enabled=True, dps=(("Pesopepe", "distance"), ("Lestunes", "contact")))
+    start = dict(board.at)
+    number = next(n for n in range(1200) if map_cell(n) == start["Pesopepe"])
+    members["Pesopepe"].game.net = SimpleNamespace(alive=lambda: True, my_cell=lambda: number)
+    with caplog.at_level(logging.INFO):
+        bot._seat_team(host, list(members.values()), dps=bot.team.dps)
+    assert f"Placement des DPS en priorité : Pesopepe (distance, en {start['Pesopepe']}), Lestunes (contact)"         in caplog.text
+    moved = {n for n in members if board.at[n] != start[n]}
+    assert moved <= {"Pesopepe", "Lestunes"}  # les autres restent où le jeu les a mis
+    assert {e[0] for e in events(screen, "click")} <= {"Pesopepe", "Lestunes"}
+    from bot.perception.grid import distance
+
+    enemy = next(iter(board.enemies))
+    free = RED_CELLS - set(start.values())
+    # Distance : à portée de son sort (0 à 8) dès qu'une case libre le permet ; contact : plus près qu'au départ, sans
+    # couper la ligne de tir du DPS d'avant (règle commune du placement).
+    if any(distance(c, enemy) <= 8 for c in free | {start["Pesopepe"]}):
+        assert distance(board.at["Pesopepe"], enemy) <= 8
+    if any(distance(c, enemy) < distance(start["Lestunes"], enemy) for c in free):
+        assert distance(board.at["Lestunes"], enemy) < distance(start["Lestunes"], enemy)
+
+
 def test_ready_pressed_once_in_every_window_the_host_last_after_the_placement(monkeypatch):
     screen, bot, host, members, board = team_of_8(monkeypatch, seed=1)
     host.game.after_press["f1"] = [load_frame("combat_tour_adversaire")]  # le dernier prêt : le combat commence

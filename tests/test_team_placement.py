@@ -237,3 +237,16 @@ def test_crowded_team_cells_still_read_as_occupied():
     assert free == {(8, 0), (9, 0)} and len(occupied) == 8
     free, occupied = split_cells({(0, 0): 0.6, (1, 0): 0.8})  # toutes occupées
     assert free == set()
+
+
+def test_contact_dps_takes_the_cell_next_to_the_enemy_and_dps_setting_is_read():
+    # 07/11 (team.dps) : « contact » au plus près d'un ennemi ; « distance » à portée, le plus loin possible.
+    from bot.team.roster import TeamSettings, parse_dps
+
+    cells, enemies = {(1, 0), (5, 0), (9, 0)}, {(10, 0)}
+    assert plan_seats([Seat("iop", (1, 1), role="contact")], cells, enemies)["iop"] == (9, 0)
+    assert plan_seats([Seat("cra", (1, 8))], cells, enemies)["cra"] == (5, 0)  # à portée, le plus loin
+    assert parse_dps("Waldhary-[Gal], Fourboun:contact") == (("Waldhary-[Gal]", "distance"), ("Fourboun", "contact"))
+    assert parse_dps({"A": "corps"}) == (("A", "distance"),)  # rôle inconnu : distance
+    assert TeamSettings.from_settings({"team": {"dps": ["Waldhary-[Gal]:distance"]}}).dps == (("Waldhary-[Gal]",
+                                                                                               "distance"),)

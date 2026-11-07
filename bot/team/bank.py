@@ -80,6 +80,7 @@ LIST_WAIT = 0.6
 # 1920 x 1057) : onglets à y 231, grille de 5 cases par ligne, 61 px entre deux cases.
 CHEST_RESOURCES_TAB = (702, 220)  # onglet ressources (bûche) du coffre
 CHEST_FILTER = (755, 264)  # liste des types du coffre (« Tous types »)
+CHEST_SEARCH = (900, 264)  # loupe du coffre, à droite de sa liste des types (07/11, capture du coffre du 05/11)
 CHEST_LIST = (745, 429)  # milieu de la liste ouverte (sous le bouton)
 CHEST_FIRST_STACK = (635, 321)  # première pile du coffre
 CHEST_STEP, CHEST_COLUMNS = 58.2, 5  # écart entre deux cases (px de référence), cases par ligne
@@ -174,6 +175,7 @@ def take_from_chest(member, template: int, count: int, rank_of=None) -> int:
     (type pas trouvé, rien d'annoncé, nombre différent) : Échap et ce qui est vérifié. `rank_of` : (piles du coffre de
     ce type, pile voulue) -> rang de la pile dans la grille filtrée ; défaut : son rang parmi les piles de clés du coffre
     (ordre d'arrivée, hypothèse à vérifier en jeu)."""
+    from bot.brain.equipment import close_bag_search, search_bag
     from bot.brain.inventory import key_names
 
     game, net = member.game, _net(member)
@@ -191,7 +193,17 @@ def take_from_chest(member, template: int, count: int, rank_of=None) -> int:
     rank = rank_of(same_type, uid) if rank_of is not None else (same_type.index(uid) if uid in same_type else 0)
     wanted = min(count, stored)
     layout = game.look(park=False).layout
-    for attempt in range(TYPE_TRIES):
+    # 07/11 (Enu-six : 0 reprise au lieu de 1, double-clic sur une autre case) : la place de la pile dans la grille
+    # filtrée sur « Clefs » n'est pas l'ordre d'arrivée dans tous les coffres. Recherche du coffre (sa loupe) sur le nom
+    # de la clé : il ne reste qu'elle, en première case. Type « Clefs » et rang supposé à défaut.
+    game.click(layout.point(*CHEST_RESOURCES_TAB), (5, 5))
+    game.sleep(0.6)
+    words = search_word(key_names().get(template, ""))
+    searched = bool(words) and search_bag(game, layout, words, CHEST_FILTER, CHEST_SEARCH)
+    if searched:
+        rank = 0
+        log.info("%s : coffre filtré sur « %s »", member.name, words)
+    for attempt in range(0 if searched else TYPE_TRIES):
         # 06/11 (journal 210755) : « Clefs » pas trouvé chez Fourboun (20 clés au coffre, trouvé une heure plus tôt),
         # aucune capture : rien repris, passages ramenés à ce que les autres coffres donnaient. Capture, puis onglet et
         # liste rouverts une fois.
@@ -205,8 +217,9 @@ def take_from_chest(member, template: int, count: int, rank_of=None) -> int:
         log.warning("%s : type « %s » pas trouvé dans la liste du coffre (essai %d sur %d, capture : %s)", member.name,
                     KEYS_TYPE, attempt + 1, TYPE_TRIES, path)
     else:
-        log.warning("%s : rien repris du coffre", member.name)
-        return 0
+        if not searched:
+            log.warning("%s : rien repris du coffre", member.name)
+            return 0
     taken = 0
     try:
         # 05/11 (tools/observer_coffre.py, Walitcoin) : le glisser de la pile vers le sac ne l'attrapait pas (7 coffres
@@ -233,8 +246,25 @@ def take_from_chest(member, template: int, count: int, rank_of=None) -> int:
             log.info("%s : %d repris du coffre (coffre %d -> %d)", member.name, taken, stored, left)
         return taken
     finally:
-        if not choose_type(game, layout, ALL_TYPES, CHEST_FILTER, CHEST_LIST):
+        if searched:
+            close_bag_search(game, layout, CHEST_FILTER, CHEST_SEARCH)
+        elif not choose_type(game, layout, ALL_TYPES, CHEST_FILTER, CHEST_LIST):
             log.info("%s : liste des types du coffre pas remise sur « %s »", member.name, ALL_TYPES)
+
+
+def search_word(name: str) -> str:
+    """Mot tapé dans la recherche du coffre pour un objet : son dernier mot, coupé au premier caractère accentué
+    (« Clef du Donjon Ensablé » -> « Ensabl » ; les accents ne passent pas en arrière-plan) ; "" sans mot utilisable."""
+    from bot.brain.equipment import search_text
+
+    words = search_text(name).split()
+    word = words[-1] if words else ""
+    kept = ""
+    for char in word:
+        if not char.isascii():
+            break
+        kept += char
+    return kept if len(kept) >= 4 else ""
 
 
 def _chest_moved(net, uid: int, stored: int, since: float, wait: float) -> bool:

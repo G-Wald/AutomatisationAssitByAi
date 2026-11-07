@@ -43,6 +43,7 @@ class Seat:
     name: str
     spell_range: tuple[int, int]
     pm: int = 3
+    role: str = "distance"  # team.dps (07/11) : « contact » cherche la case la plus proche d'un ennemi
 
 
 def merge_order(seen: list[str], before: list[str]) -> list[str]:
@@ -95,13 +96,16 @@ def plan_seats(seats: list[Seat], cells: set[Cell], enemies: set[Cell], blockers
         def cost(cell: Cell, seat=seat, obstacles=obstacles) -> tuple:
             near = _nearest(cell, enemies)
             cuts = sum(1 for start, aim in lines if not line_of_sight(start, aim, {cell}))
+            later = free is not None and cell not in free and cell != at.get(seat.name)
+            if seat.role == "contact":
+                # Au corps à corps (07/11) : la case la plus proche d'un ennemi, au contact si possible.
+                return cuts, near, later, cell
             if _targets(seat, cell, enemies, obstacles):
                 tier, key = 0, -near
             elif near - seat.spell_range[1] <= seat.pm:
                 tier, key = 1, near
             else:
                 tier, key = 2, near
-            later = free is not None and cell not in free and cell != at.get(seat.name)
             return near <= 1, cuts, tier, later, key, cell
 
         best = fixed[seat.name] if seat.name in fixed else min(left, key=cost)

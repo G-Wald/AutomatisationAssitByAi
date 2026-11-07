@@ -1596,6 +1596,8 @@ class TeamBot:
         ready: set[str] = set()
         if self.team.place:
             ready = self._seat_team(host, [host] + joined)
+        elif self.team.dps:
+            ready = self._seat_team(host, [host] + joined, dps=self.team.dps)
         else:
             self._note_placement(host)
         if self.auto_ready:
@@ -1757,6 +1759,21 @@ class TeamBot:
             return host.game.look(park=True)
 
     @staticmethod
+    def _told_cells(members: list[Member], mine) -> dict[str, Cell]:
+        """Case de placement de chacun d'après le serveur de SA fenêtre (GIC), gardée si elle est bien une case de
+        mon équipe occupée à l'écran (`mine`)."""
+        from bot.brain.arena import map_cell
+
+        cells: dict[str, Cell] = {}
+        seen = set(mine)  # brut : standing_cells écarterait une vraie case sous laquelle un autre se tient
+        for member in members:
+            net = getattr(member.game, "net", None)
+            number = net.my_cell() if net is not None and net.alive() else None
+            if number is not None and map_cell(number) in seen:
+                cells[member.name] = map_cell(number)
+        return cells
+
+    @staticmethod
     def _told_placement(host: Member) -> tuple[frozenset, frozenset, int | None] | None:
         """Cases de placement des deux équipes et numéro de la mienne d'après le serveur (GP) ; None sans écoute."""
         net = getattr(host.game, "net", None)
@@ -1802,11 +1819,14 @@ class TeamBot:
         mine, other = sorted(gaps, key=gaps.get)
         return mine if gaps[other] - gaps[mine] >= PLACE_COLOUR_MARGIN else None
 
-    def _seat_team(self, host: Member, fighters: list[Member]) -> set[str]:
+    def _seat_team(self, host: Member, fighters: list[Member], dps: tuple[tuple[str, str], ...] = ()) -> set[str]:
         """Toute l'équipe sur ses cases (team/placement.py) : à chaque passe, chacun dont la case prévue est libre y
         va, un clic dans sa fenêtre sans attendre ; une lecture des cases dans la fenêtre de `host` vérifie la passe.
         Ceux qui sont à leur place sont Prêts pendant l'attente de la passe suivante. Retient la case de chacun de ceux
-        qui sont reconnus (self._cells). Renvoie les noms de ceux qui sont déjà Prêts."""
+        qui sont reconnus (self._cells). Renvoie les noms de ceux qui sont déjà Prêts.
+
+        `dps` (team.dps, 07/11) : seuls ces personnages bougent, dans cet ordre (priorité), chacun selon son rôle
+        (distance, contact) ; leur case de départ vient du serveur (GIC) ; les autres restent où le jeu les a mis."""
         started = time.monotonic()
         frame = self._placement_frame(host)
         if frame is None:
@@ -1836,11 +1856,23 @@ class TeamBot:
             log.info("Placement : je ne vois aucun ennemi, personne ne bouge")
             return set()
         by_name = {m.name: m for m in fighters}
-        order, seen = self.router.play_order([m.name for m in fighters])
-        log.info("Placement : ordre de jeu %s (%s)", ", ".join(order),
-                 "vu aux combats précédents" if seen else "par défaut, aucun combat encore : celui de l'équipe")
-        seats = [Seat(name, by_name[name].ai.wanted_range(), getattr(by_name[name].ai, "move_points", 3))
-                 for name in order]
+        roles = dict(dps)
+        if dps:
+            order = [name for name, _ in dps if name in by_name]
+            if not order:
+                log.info("Placement : aucun DPS (team.dps : %s) dans ce combat, personne ne bouge",
+                         ", ".join(n for n, _ in dps))
+                return set()
+            known.update(self._told_cells([by_name[n] for n in order], placement.occupied[team]))
+            log.info("Placement des DPS en priorité : %s", ", ".join(f"{n} ({roles[n]}"
+                                                                     + (f", en {known[n]}" if n in known else "")
+                                                                     + ")" for n in order))
+        else:
+            order, seen = self.router.play_order([m.name for m in fighters])
+            log.info("Placement : ordre de jeu %s (%s)", ", ".join(order),
+                     "vu aux combats précédents" if seen else "par défaut, aucun combat encore : celui de l'équipe")
+        seats = [Seat(name, by_name[name].ai.wanted_range(), getattr(by_name[name].ai, "move_points", 3),
+                      roles.get(name, "distance")) for name in order]
         standing = _standing(frame, placement)
         blockers = read_blocks(frame, standing) if tactical_mode(frame) else None
         fixed: dict[str, Cell] = {}
@@ -1849,7 +1881,8 @@ class TeamBot:
         passes, plan, budget = 0, {}, time.monotonic() + PLACE_BUDGET
         while passes < PLACE_PASSES and time.monotonic() < budget:
             free = placement.free[team] - refused
-            cells = free | standing_cells(placement.occupied[team])
+            # Mode DPS : les autres ne bougent pas, leurs cases ne sont à prendre pour personne.
+            cells = free | (set(known.values()) if dps else standing_cells(placement.occupied[team]))
             plan = plan_seats(seats, cells, enemies, blockers, fixed, free, known)
             fixed.update({name: cell for name, cell in known.items() if plan.get(name) == cell})
             moves = [(name, cell) for name, cell in next_moves(plan, known, free, order, passes < PLACE_PASSES - 1)
@@ -1891,7 +1924,7 @@ class TeamBot:
                     refused.add(cell)
                     known.pop(name, None)  # clic sans effet, ou tombé sur une autre case : on ne sait plus
                     log.info("Placement : %s n'est pas allé en %s", name, cell)
-            guess = by_elimination(known, order, standing_cells(occupied))
+            guess = None if dps else by_elimination(known, order, standing_cells(occupied))
             if guess is not None:
                 known[guess[0]] = guess[1]
                 log.info("Placement : %s en %s (la seule case des miens qui reste)", *guess)

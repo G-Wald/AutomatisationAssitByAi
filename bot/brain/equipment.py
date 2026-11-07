@@ -37,6 +37,7 @@ FOUND = 0.75
 SEARCH_BUTTON = (1846, 229)  # loupe à droite de la liste des types : la remplace par un champ de recherche (31/10)
 SEARCH_WAIT = 1.0  # s : sac filtré après le nom tapé
 SEARCH_PATCH = 60  # px de référence de part et d'autre du milieu du champ, regardés pour son blanc
+TYPES_BOX = (180, 22)  # px de référence : demi-largeur, demi-hauteur du cadre où « Tous types » est cherché
 # Lettres vues dans le champ (31/10, revue) : les SEARCH_PROBE premières tapées puis la bande FIELD_BAND (px de
 # référence à gauche et à droite du point du champ, demi-hauteur) comparée avant / après ; FIELD_CHANGED px (aire de
 # référence) qui changent de plus de FIELD_DIFF sur un canal : quelques lettres (le curseur clignotant : ~14 px).
@@ -283,7 +284,13 @@ def _search_open(game, layout, field=None) -> bool:
     reach = round(layout.length(SEARCH_PATCH))
     patch = frame.image[y - 5:y + 5, x - reach:x + reach]
     white = patch.size > 0 and float((patch.min(axis=2) >= 245).mean()) >= 0.5
-    return white and best_text(frame, ALL_TYPES, dark=True)[0] < FOUND
+    # « Tous types » cherché autour du champ seulement (07/11 : le coffre et le sac ont chacun leur liste ; lu sur toute
+    # la fenêtre, celui du sac faisait croire la recherche du coffre fermée).
+    half_w, half_h = layout.length(TYPES_BOX[0]), layout.length(TYPES_BOX[1])
+    height, width = frame.image.shape[:2]
+    box = (max(0, round(x - half_w)), max(0, round(y - half_h)), min(width, round(x + half_w)),
+           min(height, round(y + half_h)))
+    return white and best_text(frame, ALL_TYPES, dark=True, box=box)[0] < FOUND
 
 
 def _right_item(equipped: int | None, item_type: str, template: int | None) -> bool:

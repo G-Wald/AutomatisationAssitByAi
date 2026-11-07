@@ -456,6 +456,9 @@ def test_chest_type_list_opened_again_once_when_keys_are_not_found(no_list, monk
         net.feed("EsKO+291855959|4|8545|")
         net.feed("OAKOb0~2161~1~~;")
 
+    from bot.brain import equipment
+
+    monkeypatch.setattr(equipment, "search_bag", lambda *args: False)  # recherche du coffre pas ouverte : type « Clefs »
     tries, saved = [], []
     monkeypatch.setattr(bank, "choose_type", lambda game, layout, name, *args: name != bank.KEYS_TYPE or
                         tries.append(1) or len(tries) == 2)  # la liste remise sur « Tous types » ensuite : pas comptée
@@ -464,6 +467,33 @@ def test_chest_type_list_opened_again_once_when_keys_are_not_found(no_list, monk
     game.look = lambda park=False: SimpleNamespace(layout=game.layout, image=None)
     assert take_from_chest(SimpleNamespace(name="Fourboun", game=game), KEY, 1) == 1
     assert len(tries) == 2 and saved == ["coffre_type_clefs_pas_trouve"]
+
+
+def test_chest_searched_by_key_name_then_its_first_stack_double_clicked(no_list, monkeypatch):
+    # 07/11 (Enu-six : 0 reprise, double-clic sur une autre case) : le rang de la pile parmi les clés n'est pas sa
+    # place dans la grille partout. Recherche du coffre sur le nom de la clé, la pile en première case.
+    from bot.brain import equipment
+
+    net = ClientFeed("Enu-six")
+    net.feed("ASK|1|Enu-six|10|0|0|0|aa~121~a~~;")
+    net.feed("ECK5")
+    net.feed("ELO11655e50~2162~1~~;O11655e57~2161~1~~")  # une autre clé d'abord : rang 1 parmi les clés
+
+    def on_ok(count):
+        net.feed("EsKO-291855959|8545|")
+        net.feed("OAKOb0~2161~1~~;")
+
+    searched, types, clicks = [], [], []
+    monkeypatch.setattr(equipment, "search_bag", lambda game, layout, text, field, button:
+                        searched.append((text, field, button)) or True)
+    monkeypatch.setattr(bank, "choose_type", lambda game, layout, name, *args: types.append(name) or True)
+    monkeypatch.setattr(inventory_module, "key_names", lambda: {KEY: "Clef du Donjon Ensablé"})
+    game = FakeGame(net, BAG_DROP, on_ok)
+    plain = game.double_click
+    game.double_click = lambda point, spread=None: clicks.append(point) or plain(point, spread)
+    assert take_from_chest(SimpleNamespace(name="Enu-six", game=game), KEY, 1) == 1
+    assert searched == [("Ensabl", bank.CHEST_FILTER, bank.CHEST_SEARCH)] and types == []
+    assert clicks == [game.layout.point(*bank.CHEST_FIRST_STACK)]  # la première case
 
 
 def test_dungeon_keys_of_an_open_chest_are_logged(monkeypatch, caplog):

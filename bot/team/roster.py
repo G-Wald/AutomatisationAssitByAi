@@ -24,6 +24,11 @@ class TeamSettings:
     # Placement : False (défaut, 03/10) : personne ne bouge, Prêt tout de suite ; chacun est repéré à son premier tour
     # par la portée d'un sort (rapide même à 8). True : le principal choisit sa case, chaque suiveur la sienne.
     place: bool = False
+    # DPS placés en priorité (07/11, utilisateur : « un mode où on définit les dps qui doivent être placés correctement
+    # en priorité pour taper ; en fonction de la classe on veut du distance ou autre ») : (nom, rôle), dans l'ordre de
+    # priorité ; rôle « distance » (à portée de son sort qui porte le plus loin, en ligne de vue, le plus loin possible
+    # des ennemis) ou « contact » (au plus près d'un ennemi). Seuls eux bougent ; les autres sont Prêts tout de suite.
+    dps: tuple[tuple[str, str], ...] = ()
 
     @classmethod
     def from_settings(cls, settings: dict, enabled: bool | None = None, leader: str | None = None) -> "TeamSettings":
@@ -43,7 +48,38 @@ class TeamSettings:
             join_timeout=float(team.get("join_timeout", cls.join_timeout)),
             round_every=float(team.get("round_every", cls.round_every)),
             place=bool(team.get("place", cls.place)),
+            dps=parse_dps(team.get("dps")),
         )
+
+
+DPS_ROLES = ("distance", "contact")
+
+
+def parse_dps(raw) -> tuple[tuple[str, str], ...]:
+    """team.dps : liste de « Nom » ou « Nom:rôle » (aussi une chaîne séparée par des virgules, pour --set), ou
+    {Nom: rôle} ; rôle « distance » par défaut. Un rôle inconnu est remplacé par « distance » (dit au journal)."""
+    import logging
+
+    if not raw:
+        return ()
+    if isinstance(raw, dict):
+        items = [f"{name}:{role}" for name, role in raw.items()]
+    elif isinstance(raw, str):
+        items = raw.split(",")
+    else:
+        items = [str(item) for item in raw]
+    out = []
+    for item in items:
+        name, _, role = str(item).strip().partition(":")
+        name, role = name.strip(), (role.strip().lower() or "distance")
+        if not name:
+            continue
+        if role not in DPS_ROLES:
+            logging.getLogger(__name__).warning("team.dps : rôle « %s » inconnu pour %s (%s) : distance", role, name,
+                                                ", ".join(DPS_ROLES))
+            role = "distance"
+        out.append((name, role))
+    return tuple(out)
 
 
 def pick_team(windows: list[GameWindow], title_part: str, settings: TeamSettings) -> list[tuple[str, GameWindow]]:
