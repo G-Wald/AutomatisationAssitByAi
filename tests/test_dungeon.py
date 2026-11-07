@@ -359,6 +359,61 @@ def test_entry_answer_chosen_from_the_server_key_then_keyring_only_if_allowed(mo
     assert replied == [("Fourboun", "Donner la clé des bouftous"), ("Eldieso", "Utiliser le trousseau de clefs")]
 
 
+def test_keyring_first_when_offered_and_the_key_kept(monkeypatch):
+    # 07/11, utilisateur : « utiliser trousseau de clé en priorité si c'est disponible ». Fourboun a la clé et le
+    # trousseau : trousseau ; Walitcoin n'a que la clé (trousseau pas proposé) : la clé.
+    entry, team, opened, replied, closed = _bouftou_entry(
+        monkeypatch, {"Fourboun": (564, 6602), "Eldieso": (6602,), "Walitcoin": (564,)})
+    entry.keyring = entry.keyring_first = True  # donjon.trousseau : priorite
+    assert entry._through_npc(team)
+    assert replied == [("Fourboun", "Utiliser le trousseau de clefs"), ("Eldieso", "Utiliser le trousseau de clefs"),
+                       ("Walitcoin", "Donner la clé des bouftous")]
+
+
+def test_keyring_refused_at_the_door_then_the_key(monkeypatch):
+    # Trousseau refusé (déjà servi ?) : Fourboun, qui a aussi la clé, est relancé avec la clé ; Eldieso, sans clé,
+    # garde le trousseau.
+    entry, team, opened, replied, closed = _bouftou_entry(monkeypatch, {"Fourboun": (564, 6602), "Eldieso": (6602,)})
+    entry.keyring = entry.keyring_first = True
+    monkeypatch.setattr(entry, "_reply", lambda m, before, shown, answer, gone: False)
+    talked = []
+    monkeypatch.setattr(entry, "_talk", lambda m, npc, answer, button, gone: talked.append((m.name, answer)) or True)
+    assert entry._through_npc(team)
+    assert talked == [("Fourboun", "Donner la clé des bouftous"), ("Eldieso", "Utiliser le trousseau de clefs")]
+
+
+def test_keyring_mode_from_the_settings():
+    from types import SimpleNamespace
+
+    from bot.team.dungeon import DungeonFarm
+
+    spec = load_dungeons()["champs"]
+    for mode, flags in ((None, (True, True)), ("priorite", (True, True)), ("oui", (True, False)),
+                        ("non", (False, False))):
+        settings = {"donjon": {} if mode is None else {"trousseau": mode}}
+        farm = DungeonFarm(SimpleNamespace(members=[], leader=None, _settings=settings), spec, 1)
+        assert (farm.entry.keyring, farm.entry.keyring_first) == flags, mode
+
+
+def test_npc_clicked_where_the_server_announces_it():
+    # 07/11, Ensablé : Igloute en case 268 = (14,18) dans la salle de fin d'après le serveur, 253 = (13,17) d'après
+    # StarLoco : 16 clics ratés. Sa case annoncée (modèle 798) passe avant celle du yaml.
+    from types import SimpleNamespace
+
+    from bot.connection.network import ClientFeed
+
+    spec = load_dungeons()["ensable"]
+    assert spec.npc_model == 798 and spec.exit_npc == (14, 18) and spec.keyring_id == 6617
+    assert spec.exit_before == ("Se laisser faire",) and spec.exit_reply == "Se sauver en courant"  # q3290, q3291
+    net = ClientFeed("Fourboun")
+    net.feed("GDM|10165|0706131721|aa")
+    member = SimpleNamespace(name="Fourboun", game=SimpleNamespace(net=net))
+    entry = DungeonEntry([member], spec)
+    assert entry._npc_cell(member, (13, 17)) == (13, 17)  # pas encore annoncé : le yaml
+    net.feed("GM|+268;1;0;-1;798;-4;30^100;0;-1;-1;-1;0,2043,2042,0,1ba5;;0")
+    assert entry._npc_cell(member, (13, 17)) == (14, 18)
+
+
 def test_a_member_left_in_another_room_is_found_by_the_server():
     # 31/10 : Walitcoin resté dans la salle 8 (combat pas rejoint) ; les 7 autres téléportés dans la suivante.
     from types import SimpleNamespace
@@ -762,3 +817,29 @@ def test_a_member_who_did_the_dungeon_skips_the_story(monkeypatch):
     monkeypatch.setattr(entry, "_read_reply", lambda game, frame, answer: (1, 1))
     assert entry._through_chain(hero, bubble) is bubble and clicks == []
     assert entry._entry_answer(hero, bubble) == spec.reply
+
+
+def test_roaming_exit_npc_found_by_its_steps_after_a_relaunch():
+    # 07/11 : bot relancé dans la salle de fin de l'Ensablé, carte pas annoncée, Igloute pas présenté (GM) ; il marche
+    # (« GA;1;-1;... ») : sa case vient de ses pas. Sans pas annoncé, la case du yaml, attendue une seule fois.
+    from types import SimpleNamespace
+
+    from bot.connection.network import ClientFeed
+
+    spec = load_dungeons()["ensable"]
+    net = ClientFeed("Fourboun")
+    net.feed("GA0;1;1610317;adbbdFadG")  # un message entendu (écoute vivante), pas de carte
+    slept = []
+    member = SimpleNamespace(name="Fourboun", game=SimpleNamespace(net=net, sleep=slept.append))
+    entry = DungeonEntry([member], spec)
+    import bot.team.dungeon as dungeon
+
+    dungeon_wait = dungeon.NPC_WAIT
+    try:
+        dungeon.NPC_WAIT = 0.0
+        assert entry._npc_cell(member, (14, 18), roaming=True) == (14, 18) and entry._npc_waited
+        net.feed("GA;1;-1;aembe5")
+        assert entry._npc_cell(member, (14, 18), roaming=True) == (17, 21)
+        assert entry._npc_cell(member, spec.npc, roaming=False) == spec.npc  # l'entrée : jamais deviné
+    finally:
+        dungeon.NPC_WAIT = dungeon_wait

@@ -156,8 +156,9 @@ donjon:                    # farm de donjon (--donjon ; bot/team/dungeon.py, bot
                            # faut désigner qui a le métier : Fourboun, Bricoleur 35) ; non : passages ramenés aux clés.
                            # Demande donjon.cles sac ou sac_banque. --set donjon.cles_manquantes=farm
   farm_cles_minutes: 60    # durée d'un farm des clés, au plus (le temps d'un passage après lui gardé sur --minutes)
-  trousseau: non           # « Utiliser le trousseau de clefs » chez le PNJ, pour qui n'a pas la clé : une fois par
-                           # semaine seulement (31/10) ; non : jamais (sans clé pour tous, pas de farm et un message)
+  trousseau: priorite      # « Utiliser le trousseau de clefs » chez le PNJ : priorite (07/11, utilisateur) : dès que
+                           # le serveur le propose, la clé gardée (reprise avec la clé si la porte refuse le
+                           # trousseau) ; oui : seulement pour qui n'a pas la clé (31/10) ; non : jamais
   garder_cle: ""           # clé reprise du coffre juste après « Transférer tous les objets » à la banque (qui l'y met
                            # aussi) : donjon de config/donjons_entree.yaml (« incarnam »), ou numéro de l'objet ; "" :
                            # rien de repris. Laissé vide tant que le côté coffre de la fenêtre n'est pas calibré

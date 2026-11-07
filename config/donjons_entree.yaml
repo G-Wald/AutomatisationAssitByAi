@@ -58,6 +58,7 @@ champs:
   carte: [7, -25]
   pnj: [26, 12]
   pnj_carte: 7453
+  pnj_modele: 780         # Mawy (GM du serveur, 05/11)
   reponse: Donner la clef et rentrer
   reponse_id: 2802
   trousseau: Utiliser le trousseau de clefs
@@ -66,8 +67,9 @@ champs:
   sortie_case: [27, 17]
   zone_cles: [7, -25]     # Champs d'Astrub (26 cartes, sortie 7,-26 comprise) : butin de la clé, ~0,5 % (06/11)
 
-# Donjon Ensablé (07/11, préparé hors jeu, PAS ENCORE VU EN JEU : à observer avec tools/observer_pnj.py --suivre avant
-# tout passage). Données : langue du client (D q3281 à q3291), cartes StarLoco locales (data/externes/starloco,
+# Donjon Ensablé (07/11, préparé hors jeu ; bulle d'entrée OBSERVÉE en jeu le 07/11 à 11h57 avec tools/observer_pnj.py
+# --suivre, rien donné : Igloute en case (13,13), 8 « Continuer la discussion » 2936 à 2943 (q3281 à q3288), puis q3289
+# où Fourboun, sans clé dans son sac et sans raccourci, n'avait que « Utiliser le trousseau de clefs. » (6617)). Données : langue du client (D q3281 à q3291), cartes StarLoco locales (data/externes/starloco,
 # maps/dungeons/Sandy), données du client (data/donjons.json, config/monde).
 # Entrée : carte 10155 en 13,-28 (Calanques d'Astrub ; itinéraire par le haut de 13,-27, 21 cartes depuis la banque),
 # le capitaine Igloute (PNJ 798) en case 195. Sa bulle raconte une histoire : 8 « Continuer la discussion » (réponses
@@ -82,14 +84,18 @@ ensable:
   nom: Donjon Ensablé     # nom exact du donjon (table DU), comme dans config/donjons_cles.yaml
   monde: douze
   carte: [13, -28]
-  pnj: [13, 13]           # case 195 (StarLoco), à vérifier en jeu
+  pnj: [13, 13]           # case 195 (StarLoco), vue en jeu le 07/11
   pnj_carte: 10155
+  pnj_modele: 798         # Igloute (GM du serveur, 07/11) : sa case annoncée passe avant pnj et pnj_fin
   suite: Continuer la discussion
   reponse: Donner la clef et rentrer
   reponse_id: 2944        # au bout de l'histoire (q3289), à vérifier en jeu
   reponse_id_autres: [2947]   # même texte : raccourci proposé dès la 1re bulle à qui a déjà fait le donjon
                               # (utilisateur, 07/11 ; numéro d'après la langue du client, à vérifier en jeu)
+  trousseau: Utiliser le trousseau de clefs
+  trousseau_id: 6617      # vu en jeu le 07/11 (q3289)
   salles: 9
-  pnj_fin: [13, 17]       # case 253 de 10165 (StarLoco), à vérifier en jeu
-  reponse_fin: Se laisser faire   # à vérifier en jeu (ou « Se sauver en courant »)
+  pnj_fin: [14, 18]       # case d'arrivée d'Igloute (268) ; il MARCHE dans la salle (07/11) : sa case vient du serveur
+  reponses_fin_avant: [Se laisser faire]   # q3290 (2945), vu en jeu le 07/11
+  reponse_fin: Se sauver en courant         # q3291 (2946), seule proposée ensuite
   clic_fin: gauche

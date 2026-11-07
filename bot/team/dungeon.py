@@ -21,6 +21,7 @@ import numpy as np
 import yaml
 
 from bot.alerts import tell_user
+from bot.brain.arena import map_cell
 from bot.brain.popups import close_any_menu, close_flash_menu
 from bot.brain.travel import _click_spot, _gap, _scene, same_map
 from bot.config import ROOT
@@ -39,6 +40,7 @@ DUNGEONS_FILE = ROOT / "config" / "donjons_entree.yaml"  # donjons.yaml : recher
 CHAIN_MAX = 12  # « Continuer la discussion » au plus dans une bulle d'entrée (07/11)
 CHAIN_WAIT = 2.0  # s : question suivante annoncée par le serveur après un « Continuer »
 CHAIN_SETTLE = 0.4  # s : texte de la bulle suivante écrit
+NPC_WAIT = 30.0  # s au plus : un pas du PNJ de sortie annoncé quand le bot est relancé dans la salle (07/11)
 NET_SILENT = 1.5  # s : clic sur une case sans déplacement annoncé par le serveur : pas pris (06/11)
 CHANGE_WAIT = 12.0  # s : clic sur un soleil -> autre décor (marche jusqu'au soleil comprise)
 SETTLE = 1.0  # s : nouveau décor affiché, le temps qu'il finisse de se dessiner
@@ -98,6 +100,12 @@ class DungeonSpec:
         return {i for i in (self.reply_id, *self.reply_more) if i is not None}
     # Carte de la zone dont les monstres donnent la clé (zone_cles) : farm de leur butin quand les clés manquent (06/11)
     key_zone: tuple[int, int] | None = None
+    # Modèle du PNJ d'entrée et de sortie (GM, 5e champ ; 07/11, Ensablé : Igloute 798) : sa case annoncée par le
+    # serveur passe avant celle du yaml (Igloute en 268 dans la salle de fin, 253 d'après StarLoco : 16 clics ratés)
+    npc_model: int | None = None
+    # Réponses de la bulle de sortie avant `exit_reply` (07/11, Ensablé : « Se laisser faire » (q3290), puis
+    # « Se sauver en courant » (q3291), seule proposée, qui fait sortir)
+    exit_before: tuple[str, ...] = ()
 
 
 def load_dungeons(path: Path = DUNGEONS_FILE) -> dict[str, DungeonSpec]:
@@ -108,7 +116,8 @@ def load_dungeons(path: Path = DUNGEONS_FILE) -> dict[str, DungeonSpec]:
                              cell(d.get("pnj_fin")), d.get("reponse_fin"), BUTTONS[d.get("clic_fin", "droit")],
                              d.get("salles"), d.get("pnj_carte"), d.get("reponse_id"), d.get("trousseau"),
                              d.get("trousseau_id"), cell(d.get("sortie_case")), key_zone=cell(d.get("zone_cles")),
-                             chain=d.get("suite"), reply_more=tuple(d.get("reponse_id_autres") or ()))
+                             chain=d.get("suite"), reply_more=tuple(d.get("reponse_id_autres") or ()),
+                             npc_model=d.get("pnj_modele"), exit_before=tuple(d.get("reponses_fin_avant") or ()))
             for key, d in data.items()}
 
 
@@ -119,9 +128,13 @@ class DungeonEntry:
         self.hide_key = hide_key  # touche qui cache les autres joueurs (travel.hide_players_key), tenue sur la carte
         self._place_scenes: dict[str, np.ndarray] | None = None  # décors de référence (locate), lus une fois
         self._opened_at: dict[str, float] = {}  # bulle du PNJ ouverte (time.monotonic()), par personnage
-        # Trousseau de clefs : une fois par semaine (31/10, utilisateur) : jamais choisi tout seul, seulement avec
-        # donjon.trousseau (DungeonFarm).
+        # Trousseau de clefs (donjon.trousseau, DungeonFarm) : `keyring` l'autorise ; `keyring_first` le prend avant la
+        # clé quand le serveur le propose (07/11, utilisateur : « utiliser trousseau de clé en priorité si c'est
+        # disponible ») ; sans `keyring_first`, seulement pour qui n'a pas la clé (31/10).
         self.keyring = False
+        self.keyring_first = False
+        self._with_key: set[str] = set()  # au trousseau en ayant aussi la clé : la clé si la porte refuse le trousseau
+        self._npc_waited = False  # pas du PNJ de sortie attendus en vain (carte pas annoncée) : plus d'attente
 
     def enter(self, start: str | None = None, only: set[str] | None = None) -> bool:
         """True si toute l'équipe a donné sa clef et passé la porte. Sans `start` : chacun est d'abord situé (locate) et
@@ -242,9 +255,15 @@ class DungeonEntry:
             if not self._reply(member, before, shown, answer, "n'a pas passé la porte"):
                 refused.append(member)
         for member in list(refused):  # une seconde fois, la bulle refermée (sa réponse est connue)
-            log.info("Donjon : %s n'a pas passé la porte, je lui reparle", member.name)
+            answer = opened[member.name][2]
+            if answer == spec.keyring and member.name in self._with_key:
+                # Trousseau refusé (déjà servi ?) : la clé, qu'il a aussi (07/11).
+                log.info("Donjon : %s n'est pas entré avec le trousseau : je lui reparle, avec la clé", member.name)
+                answer = spec.reply
+            else:
+                log.info("Donjon : %s n'a pas passé la porte, je lui reparle", member.name)
             self._close_bubble(member)
-            if self._talk(member, spec.npc, opened[member.name][2], "left", "n'a pas passé la porte"):
+            if self._talk(member, spec.npc, answer, "left", "n'a pas passé la porte"):
                 refused.remove(member)
         if refused:
             log.warning("Donjon : %s n'ont pas passé la porte", ", ".join(m.name for m in refused))
@@ -253,26 +272,35 @@ class DungeonEntry:
         return True
 
     def _entry_answer(self, member: Member, shown: Frame) -> str | None:
-        """Réponse d'entrée de ce personnage, bulle ouverte : la clé, sinon le trousseau ; None s'il n'a ni l'un ni
-        l'autre. D'après les réponses proposées par le serveur (DQ entendu depuis l'ouverture), à défaut la bulle lue."""
+        """Réponse d'entrée de ce personnage, bulle ouverte : le trousseau s'il est proposé et `keyring_first` (07/11,
+        utilisateur : en priorité), sinon la clé, sinon le trousseau (`keyring`) ; None s'il n'a ni l'un ni l'autre.
+        D'après les réponses proposées par le serveur (DQ entendu depuis l'ouverture), à défaut la bulle lue."""
         spec = self.spec
+        self._with_key.discard(member.name)
         net = getattr(member.game, "net", None)
         question = getattr(net, "question", None) if net is not None and net.alive() else None
+        answers = None
         if question is not None and spec.reply_ids \
                 and net.question_at >= self._opened_at.get(member.name, 0.0):
-            answers = question[1]
-            if spec.reply_ids & set(answers):
-                return spec.reply
-            if self.keyring and spec.keyring and spec.keyring_id in answers:
-                log.info("Donjon : %s n'a pas de clé (d'après le jeu) : il entrera avec le trousseau", member.name)
-                return spec.keyring
-            log.info("Donjon : %s : ni clé ni trousseau proposés par le jeu (réponses %s)", member.name, answers)
-            return None
-        if self._read_reply(member.game, shown, spec.reply) is not None:
-            return spec.reply
-        if self.keyring and spec.keyring and self._read_reply(member.game, shown, spec.keyring) is not None:
-            log.info("Donjon : %s n'a pas de clé (bulle lue) : il entrera avec le trousseau", member.name)
+            answers, source = question[1], "d'après le jeu"
+            key = bool(spec.reply_ids & set(answers))
+            ring = bool(self.keyring and spec.keyring and spec.keyring_id in answers)
+        else:
+            source = "bulle lue"
+            key = self._read_reply(member.game, shown, spec.reply) is not None
+            ring = bool(self.keyring and spec.keyring and (self.keyring_first or not key)
+                        and self._read_reply(member.game, shown, spec.keyring) is not None)
+        if ring and (self.keyring_first or not key):
+            if key:
+                self._with_key.add(member.name)
+                log.info("Donjon : %s entrera avec le trousseau, sa clé gardée (%s)", member.name, source)
+            else:
+                log.info("Donjon : %s n'a pas de clé (%s) : il entrera avec le trousseau", member.name, source)
             return spec.keyring
+        if key:
+            return spec.reply
+        if answers is not None:
+            log.info("Donjon : %s : ni clé ni trousseau proposés par le jeu (réponses %s)", member.name, answers)
         return None
 
     def leave(self) -> bool:
@@ -288,12 +316,11 @@ class DungeonEntry:
         if spec.exit_npc is None or not spec.exit_reply:
             log.warning("Donjon : %s : sortie pas décrite (pnj_fin, reponse_fin)", spec.name)
             return False
-        stuck = [m for m in self.members if not self._talk(m, spec.exit_npc, spec.exit_reply, spec.exit_click,
-                                                           "n'est pas sorti")]
+        stuck = [m for m in self.members if not self._talk_exit(m)]
         for member in list(stuck):  # une seconde fois, la bulle refermée (30/10 : Fourboun, pas de bulle après « Parler »)
             log.info("Donjon : %s n'est pas sorti, je lui reparle", member.name)
             self._close_bubble(member)
-            if self._talk(member, spec.exit_npc, spec.exit_reply, spec.exit_click, "n'est pas sorti"):
+            if self._talk_exit(member):
                 stuck.remove(member)
         stuck = [m.name for m in stuck]
         if stuck:
@@ -350,6 +377,28 @@ class DungeonEntry:
     def _give_key(self, member: Member) -> bool:
         return self._talk(member, self.spec.npc, self.spec.reply, "left", "n'a pas passé la porte")
 
+    def _talk_exit(self, member: Member) -> bool:
+        """PNJ de sortie : sa bulle, les réponses `exit_before` une à une (la question suivante attendue du serveur),
+        puis `exit_reply`, et le décor change (téléporté dehors)."""
+        spec, game = self.spec, member.game
+        bubble = self._open(member, spec.exit_npc, spec.exit_click)
+        if not bubble:
+            return False
+        before, shown = bubble
+        net = getattr(game, "net", None)
+        for answer in spec.exit_before:
+            line = self._read_reply(game, shown, answer)
+            if line is None:
+                return self._failed(member, f"pas de réponse « {answer} » dans la bulle de sortie")
+            asked = time.monotonic()
+            log.info("Donjon : %s répond « %s »", member.name, answer)
+            game.click(line, shown.layout.spread(10, 3))
+            if net is not None and net.alive():
+                net.wait_for("question_at", asked, CHAIN_WAIT)
+            game.sleep(CHAIN_SETTLE)
+            shown = game.look(park=False)
+        return self._reply(member, before, shown, spec.exit_reply, "n'est pas sorti")
+
     def _talk(self, member: Member, npc: Cell, answer: str, button: str, not_gone: str) -> bool:
         """Clic sur le PNJ ; « Parler » si un menu s'ouvre ; dans sa bulle, la ligne `answer` ; puis le décor change
         (porte passée, ou téléporté dehors)."""
@@ -360,6 +409,8 @@ class DungeonEntry:
         """Bulle du PNJ ouverte (clic, « Parler » si un menu s'ouvre) : (la salle avant le dialogue, la bulle vue) ;
         None (dit au journal) sinon."""
         game = member.game
+        story = npc == self.spec.npc  # le PNJ d'entrée (sa bulle à plusieurs étapes), avant la case du serveur
+        npc = self._npc_cell(member, npc, roaming=not story)
         self._opened_at[member.name] = time.monotonic()
         frame = game.look(park=False)
         x, y = frame.grid.center(npc)
@@ -390,11 +441,40 @@ class DungeonEntry:
             if shown is None:
                 self._failed(member, "pas de bulle après « Parler »")
                 return None
-        if self.spec.chain and npc == self.spec.npc:
+        if self.spec.chain and story:
             shown = self._through_chain(member, shown)
             if shown is None:
                 return None
         return frame, shown
+
+    def _npc_cell(self, member: Member, npc: Cell, roaming: bool = False) -> Cell:
+        """Case du PNJ : celle annoncée par le serveur pour son modèle (GM de la carte, `spec.npc_model`), sinon `npc`
+        (yaml). 07/11, Ensablé : Igloute marche dans la salle de fin (« GA;1;-1;... » toutes les ~20 s ; 268 = (14,18)
+        à l'arrivée, 253 = (13,17) d'après StarLoco). `roaming` (PNJ de sortie) : bot relancé dans la salle, carte pas
+        annoncée, le PNJ pas présenté (GM) mais ses pas oui : le seul acteur sans nom ni niveaux, attendu NPC_WAIT s
+        une fois (ensuite, plus d'attente)."""
+        model = self.spec.npc_model
+        net = getattr(member.game, "net", None)
+        if model is None or net is None or not net.alive():
+            return npc
+        guess = roaming and net.map_id is None
+        deadline = time.monotonic() + (NPC_WAIT if guess and not self._npc_waited else 0.0)
+        while True:
+            actors = [a for a in dict(getattr(net, "actors", {}) or {}).values() if a.id < 0]
+            found = [a for a in actors if a.name == str(model)]
+            if not found and guess:
+                found = [a for a in actors if not a.name and not getattr(a, "levels", None)]
+            if len(found) == 1 or time.monotonic() >= deadline:
+                break
+            member.game.sleep(0.5)
+        if guess and len(found) != 1:
+            self._npc_waited = True
+        if len(found) != 1:
+            return npc
+        cell = map_cell(found[0].cell)
+        if cell != tuple(npc):
+            log.info("Donjon : PNJ %d en %s d'après le serveur (%s dans la description)", model, cell, tuple(npc))
+        return cell
 
     def _through_chain(self, member: Member, shown: Frame) -> Frame | None:
         """Bulle d'entrée à plusieurs étapes (07/11, donjon Ensablé : le capitaine Igloute raconte son histoire, 8 fois
@@ -607,9 +687,12 @@ class DungeonFarm:
         self.runs = runs
         travel = getattr(bot, "travel_settings", None)
         self.entry = DungeonEntry(bot.members, spec, getattr(travel, "hide_players_key", "e"))
-        # Trousseau de clefs (une fois par semaine) : seulement si donjon.trousseau l'autorise (31/10, utilisateur).
+        # Trousseau de clefs (donjon.trousseau) : priorite (07/11, utilisateur : en priorité si disponible, la clé
+        # gardée pour plus tard), oui (seulement pour qui n'a pas la clé, 31/10), non (jamais).
         donjon = (getattr(bot, "_settings", None) or {}).get("donjon") or {}
-        self.entry.keyring = str(donjon.get("trousseau", "non")).strip().lower() in ("oui", "true", "1", "yes")
+        mode = str(donjon.get("trousseau", "priorite")).strip().lower()
+        self.entry.keyring = mode in ("priorite", "priorité", "oui", "true", "1", "yes")
+        self.entry.keyring_first = mode in ("priorite", "priorité")
         # Reprise dans une salle (05/11) : donjon.reprise=meme_salle certifie l'équipe lancée réunie dans une même salle,
         # cartes pas encore annoncées par le serveur (pas de changement de carte depuis le lancement) ; sans, pas
         # d'attaque sans les cartes de toute l'équipe (_all_here).

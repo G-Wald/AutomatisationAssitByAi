@@ -140,7 +140,7 @@ def main() -> int:
     else:
         log_question(question)
     for step in range(args.etapes if args.suivre and shown is not None else 0):
-        from bot.perception.text import find_text
+        from bot.perception.chat import find_text
 
         line = find_text(shown, shown.layout.map_box, args.suivre, exact=True)
         if line is None:
