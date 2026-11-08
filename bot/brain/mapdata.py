@@ -146,7 +146,9 @@ def _build(map_id: int, date: str, width: int, cases: list[dict]) -> MapData:
             walkable.add(cell)
         if not case["ligne_de_vue"]:
             blockers.add(cell)
-        if case["objet2"] in SUN_GFX:
+        # Soleils : objet2 au bord des cartes de dehors ; objet1 (au sol) dans les bâtiments (08/11 : sortie de la
+        # banque d'Astrub, carte 7549, case (8, 26) : objet1 1030).
+        if case["objet2"] in SUN_GFX or case.get("objet1") in SUN_GFX:
             suns.add(cell)
         if case["objet2_interactif"] and case["objet2"]:
             interactive[cell] = case["objet2"]

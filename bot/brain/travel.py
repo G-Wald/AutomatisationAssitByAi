@@ -2054,6 +2054,18 @@ class Journey:
             self._planner = Planner(reference, self._allowed, _arena_area(reference), zaaps)
         return self._planner
 
+    def _leave_building(self) -> bool:
+        """Dans un bâtiment d'après le serveur : en sortir (True s'il a fallu sortir et que c'est fait)."""
+        from bot.brain.building import is_building, leave_building
+
+        game = self.traveler.game
+        net = getattr(game, "net", None)
+        if net is None or not net.alive() or not is_building(getattr(net, "map_id", None)):
+            return False
+        hide = getattr(self.traveler.settings, "hide_players_key", "") or ""
+        name = getattr(getattr(game, "window", None), "title", "").split(" - ")[0]
+        return leave_building(game, net, hide, name)
+
     def step(self) -> None:
         frame, label = self.traveler.look()
         here, region = self.traveler.coords, self.traveler.region
@@ -2064,6 +2076,11 @@ class Journey:
         if self.at is None:
             log.info("Trajet vers %s,%s (%s), sans combat ; départ : %s,%s (%s)", *self.goal, region, *here,
                      label.describe())
+            # 08/11 : parti d'un bâtiment (taverne, maison...) d'après le serveur : sorti d'abord par ses soleils
+            # (brain/building.py) ; les soleils de la carte de dehors n'existent pas dedans (07/11, « aucun chemin »).
+            if self._leave_building():
+                frame, label = self.traveler.look()
+                here = self.traveler.coords
             if not any(m.suns for m in self.traveler.atlas.maps.values() if m.region == region) \
                     and not self.passages.reference:  # référence complétée : cases des soleils connues
                 log.info("%s : références sans soleils : chaque sortie est cherchée à l'écran (touche %s si besoin) ; "

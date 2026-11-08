@@ -59,6 +59,7 @@ from bot.config import apply_overrides, load_settings, parse_override
 from bot.connection.group import Player, form_group
 from bot.team.bank import BANK_MAP, BankVisit
 from bot.team.bank import inside as bank_inside
+from bot.team.bank import leave_buildings, told_outside as _told_outside
 from bot.connection.characters import parse_names
 from bot.connection.clients import client_windows
 from bot.connection.manager import Watcher, connect_at_start
@@ -528,8 +529,13 @@ def run_team(args: argparse.Namespace, settings: dict, team: TeamSettings, title
                 bot.learn_levels()  # niveaux jamais lus : liste des amis du principal
             log.info("Reconnexion automatique : serveur %s", connection.server)
             bot.connection = Watcher(connection, players)
+        if not args.observe and not args.donjon:
+            # 08/11 : n'importe quel bâtiment d'après le serveur (carte annoncée) et la carte du client (ses soleils) ;
+            # la banque garde sa sortie connue (coffre ou dialogue refermés d'abord). 07/11 : Waldhary dans une
+            # taverne, pris pour la banque à l'écran sombre, bot arrêté.
+            leave_buildings(members, bot.travel_settings.hide_players_key, banking=bool(args.banque))
         if not args.observe and not args.donjon and len(members) > 1:
-            alone = [m for m in members if bank_inside(m)]
+            alone = [m for m in members if bank_inside(m) and not _told_outside(m)]
             if alone and (len(alone) < len(members) or not args.banque):
                 # 27/10 : Fourboun resté dans la banque (coffre raté, bot arrêté) ; dedans seul, il ne pouvait plus
                 # mener l'équipe (soleil de la carte pas atteignable). Tous dedans hors --banque : bot arrêté en pleine

@@ -362,6 +362,50 @@ def best_text(frame, text: str, dark: bool, bold: bool = False, box=None) -> tup
     return best
 
 
+BANK_INSIDE = 7549  # carte de l'intérieur de la banque d'Astrub (serveur, GDM)
+
+
+def _live_net(member):
+    net = getattr(member.game, "net", None)
+    return net if net is not None and net.alive() and getattr(net, "map_id", None) is not None else None
+
+
+def told_outside(member) -> bool:
+    """Le serveur dit que ce personnage n'est dans aucun bâtiment (08/11 : l'écran sombre d'une taverne n'est pas la
+    banque). False sans écoute ou carte pas encore annoncée (l'écran décide, comme avant)."""
+    from bot.brain.building import is_building
+
+    net = _live_net(member)
+    return net is not None and not is_building(net.map_id)
+
+
+def leave_buildings(members, hide_key: str = "", banking: bool = False) -> list[str]:
+    """Au lancement (08/11) : chacun de ceux qui sont dans un bâtiment d'après le serveur en sort, par ses soleils
+    (brain/building.py) ; la banque d'Astrub par sa sortie connue (BankVisit.leave), sauf en mode banque (--banque :
+    la visite s'en charge). Noms de ceux qui sont restés dedans."""
+    from bot.brain.building import is_building, leave_building
+
+    stuck = []
+    bank = []
+    for member in members:
+        net = _live_net(member)
+        if net is None or not is_building(net.map_id):
+            continue
+        if net.map_id == BANK_INSIDE:
+            if not banking:
+                bank.append(member)
+            continue
+        if not leave_building(member.game, net, hide_key, member.name):
+            stuck.append(member.name)
+    if bank:
+        log.info("Banque : %s dedans au lancement : je les fais sortir", ", ".join(m.name for m in bank))
+        outside = BankVisit(members, hide_key).leave(bank)
+        stuck += [m.name for m in bank if m.name not in outside]
+    if stuck:
+        tell_user(f"{', '.join(stuck)} toujours dans un bâtiment au lancement : sortie pas trouvée")
+    return stuck
+
+
 def inside(member) -> bool:
     """Le personnage est dans un bâtiment (fond noir autour de la pièce)."""
     return dark_share(member.game.look(park=False)) >= INDOOR_DARK
