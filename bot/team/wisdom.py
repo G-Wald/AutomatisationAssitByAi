@@ -31,15 +31,16 @@ log = logging.getLogger(__name__)
 WISDOM, WISDOM_LESS = 124, 156  # effets « +sagesse », « -sagesse » (hexadécimal 7c, 9c)
 # Positions des objets portés -> emplacement ; types de la langue du client (I.t) -> emplacement
 SLOT_OF_POSITION = {0: "amulette", 1: "arme", 2: "anneau", 3: "ceinture", 4: "anneau", 5: "bottes", 6: "chapeau",
-                    7: "cape", 8: "familier", 15: "bouclier"}
+                    7: "cape", 8: "familier", 15: "bouclier", **{p: "dofus" for p in range(9, 15)}}
 POSITIONS = {slot: tuple(p for p, s in SLOT_OF_POSITION.items() if s == slot) for slot in set(SLOT_OF_POSITION.values())}
 TYPE_SLOT = {1: "amulette", 9: "anneau", 10: "ceinture", 11: "bottes", 16: "chapeau", 17: "cape", 18: "familier",
-             82: "bouclier", **{t: "arme" for t in (2, 3, 4, 5, 6, 7, 8, 19, 20, 21, 22)}}
-SLOT_ORDER = ("amulette", "anneau", "ceinture", "bottes", "chapeau", "cape", "familier", "bouclier", "arme")
+             82: "bouclier", 23: "dofus", **{t: "arme" for t in (2, 3, 4, 5, 6, 7, 8, 19, 20, 21, 22)}}
+SLOT_ORDER = ("amulette", "anneau", "ceinture", "bottes", "chapeau", "cape", "familier", "bouclier", "arme", "dofus")
 LOGS = ROOT / "logs"
 CHEST_EQUIP_TAB = (624, 220)  # onglet équipement du coffre (capture du 11/10 : à gauche de l'onglet ressources, 702)
 TRADE_EQUIP_TAB = (1344, 186)  # onglet équipement du sac, fenêtre d'échange (à gauche des ressources, 1421)
 EQUIP_WAIT = 2.5  # s : l'objet dans son emplacement d'après le serveur
+MIN_GAIN = 3  # sagesse gagnée en dessous de laquelle un échange ne vaut pas le temps (08/11 : +1 et +2 de l'Aventurier)
 MAX_SLOT_TRIES = 3  # cases du coffre filtré essayées quand la recherche laisse d'autres objets
 
 
@@ -135,10 +136,10 @@ def plan_wisdom(levels: dict[str, int], gear: list[Gear], supports: set[str], dp
             for item in candidates:
                 if item.uid in taken or item_slot(item.template) != slot or item_level(item.template) > levels.get(name, 0):
                     continue
-                if item.template in twins and item.template in set_items():
-                    continue
+                if item.template in twins and (item.template in set_items() or slot == "dofus"):
+                    continue  # deux fois le même objet de panoplie, ou le même Dofus : refusé par le jeu
                 gain = item.wisdom - current
-                if gain > 0 and (best is None or gain > best[0]):
+                if gain >= MIN_GAIN and (best is None or gain > best[0]):
                     best = (gain, index, item)
         if best is None:
             return moves
@@ -160,7 +161,9 @@ def chest_contents(names: list[str], logs: Path = LOGS) -> dict[str, list[Gear]]
     for name in names:
         safe = re.sub(r"[^\w\-]", "_", name)
         chest: dict[int, Gear] | None = None
-        for journal in sorted(logs.glob(f"*/reseau_{safe}.txt")):
+        # Par date d'écriture (08/11 : par nom, « observation_coffre_20261105... » passait après les sessions du jour :
+        # un coffre du 05/11 cru le dernier)
+        for journal in sorted(logs.glob(f"*/reseau_{safe}.txt"), key=lambda j: j.stat().st_mtime):
             for line in journal.read_text(encoding="utf-8", errors="replace").splitlines():
                 text = line.partition(" ")[2]
                 if text.startswith("EL") and not text.startswith("ELE"):

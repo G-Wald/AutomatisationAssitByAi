@@ -77,3 +77,10 @@ def test_never_the_same_ring_twice():
     assert [m.gear.template for m in moves].count(sanglier) <= 1
     assert any(uid == 3 for uid, _ in rings)
 
+
+
+def test_a_dofus_once_per_character():
+    cawotte = template("Dofus Cawotte")
+    gear = [Gear(1, cawotte, 32, "Walitcoin", "coffre"), Gear(2, cawotte, 24, "Fourboun", "coffre")]
+    moves = plan_wisdom({"Pesopepe": 41, "Enu-six": 47}, gear, {"Pesopepe", "Enu-six"}, set())
+    assert sorted(m.taker for m in moves) == ["Enu-six", "Pesopepe"] and all(m.slot == "dofus" for m in moves)
