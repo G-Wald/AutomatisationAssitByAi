@@ -65,6 +65,14 @@ class CombatSpell:
     # aussi (27/10, demande de l'utilisateur). ("point", 0) : moi seul. Pas celle des dégâts (`zone`) : un allié dans
     # cette zone-là est une raison de ne pas lancer, dans celle-ci un petit plus (engine, BOOST_ALLY).
     boost_zone: tuple[str, int] = ("point", 0)
+    # PM et PA retirés en moyenne à chaque ennemi touché (08/11, mode soutien) : sûrs en entier (Flèche Cinglante,
+    # -2 PM), esquivables à moitié (Flèche Glacée, 2 PA perdus : 1) ; spellbook._loss
+    pm_loss: float = 0.0
+    pa_loss: float = 0.0
+    # Bonus de caractéristique (Chance, Cupidité) : éléments des dégâts qu'il augmente (force : terre et neutre ;
+    # intelligence : feu ; chance : eau ; agilité : air) ; () : bonus de dommages, pour tous (08/11, mode soutien :
+    # Chance lancée sur Walarbalete, qui tape en feu, ne lui sert à rien)
+    boost_elements: tuple[str, ...] = ()
 
     @property
     def summons_only(self) -> bool:
@@ -171,7 +179,7 @@ class SpellUse:
             return
         if spell.range_bonus:
             self.bonuses.append((spell.range_bonus, self.turn + max(spell.bonus_turns, 1) - 1))
-        if spell.damage_boost:
+        if spell.damage_boost and spell.on_self:  # pas un bonus lancé sur un DPS (mode soutien, 08/11)
             self.boosts.append((spell.boost_flat, spell.boost_pct, self.turn + max(spell.boost_turns, 1) - 1))
 
     def available(self, spell: CombatSpell) -> bool:

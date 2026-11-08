@@ -113,6 +113,14 @@ class DungeonSpec:
     # Réponses de la bulle de sortie avant `exit_reply` (07/11, Ensablé : « Se laisser faire » (q3290), puis
     # « Se sauver en courant » (q3291), seule proposée, qui fait sortir)
     exit_before: tuple[str, ...] = ()
+    # Carte de dehors où se prend l'entrée (08/11, donjon des Blops : une case de la carte 4416, en -25,-17 comme ses
+    # salles, mène à la salle de Bibiblop) : un personnage qui y est en est à l'étape « entree ».
+    outside_map: int | None = None
+    # Salle du choix (08/11, donjon des Blops : après la 7e salle, Bibiblop fait choisir la salle du Blop royal) :
+    # salles combattues avant elle, case du PNJ, réponse choisie.
+    choice_after: int | None = None
+    choice_npc: Cell | None = None
+    choice_reply: str | None = None
 
 
 def load_dungeons(path: Path = DUNGEONS_FILE) -> dict[str, DungeonSpec]:
@@ -124,7 +132,9 @@ def load_dungeons(path: Path = DUNGEONS_FILE) -> dict[str, DungeonSpec]:
                              d.get("salles"), d.get("pnj_carte"), d.get("reponse_id"), d.get("trousseau"),
                              d.get("trousseau_id"), cell(d.get("sortie_case")), key_zone=cell(d.get("zone_cles")),
                              chain=d.get("suite"), reply_more=tuple(d.get("reponse_id_autres") or ()),
-                             npc_model=d.get("pnj_modele"), exit_before=tuple(d.get("reponses_fin_avant") or ()))
+                             npc_model=d.get("pnj_modele"), exit_before=tuple(d.get("reponses_fin_avant") or ()),
+                             outside_map=d.get("carte_dehors"), choice_after=d.get("choix_apres"),
+                             choice_npc=cell(d.get("choix_pnj")), choice_reply=d.get("choix_reponse"))
             for key, d in data.items()}
 
 
@@ -142,6 +152,9 @@ class DungeonEntry:
         self.keyring_first = False
         self._with_key: set[str] = set()  # au trousseau en ayant aussi la clé : la clé si la porte refuse le trousseau
         self._npc_waited = False  # pas du PNJ de sortie attendus en vain (carte pas annoncée) : plus d'attente
+        # Carte donnée au lancement (--position) : là où est l'équipe tant que le serveur ne l'a pas annoncée et que
+        # les coordonnées à l'écran ne sont pas lues (08/11)
+        self.told_position: tuple[int, int] | None = None
 
     def enter(self, start: str | None = None, only: set[str] | None = None) -> bool:
         """True si toute l'équipe a donné sa clef et passé la porte. Sans `start` : chacun est d'abord situé (locate) et
@@ -175,6 +188,8 @@ class DungeonEntry:
         here = net.map_id if net is not None and net.alive() else None
         if self.spec.npc_map is not None and here is not None:
             # 30/10 : carte annoncée par le serveur, plutôt que le décor (pas de décor de référence pour Bouftou).
+            if here == self.spec.outside_map and self.spec.entrance is not None:
+                return "entree"  # 08/11, Blops : devant la case d'entrée, le PNJ est dedans
             return "pnj" if here == self.spec.npc_map else None
         if self.spec.npc_map is not None:
             # 05/11 : fenêtres déjà connectées au lancement, aucun changement de carte depuis : carte du serveur
@@ -182,8 +197,14 @@ class DungeonEntry:
             from bot.perception.maplabel import read_map_label
 
             label = read_map_label(member.game.look(park=False))
-            if label is not None and label.coords == self.spec.outside:
-                return "pnj"
+            coords = label.coords if label is not None else None
+            if coords is None and self.told_position is not None:
+                # 08/11 (journal 153203) : « Coordonnées : -25, -17 » à l'écran mais pas lu, les 8 crus « ailleurs » :
+                # la carte donnée au lancement (--position).
+                coords = tuple(self.told_position)
+            if coords == self.spec.outside:
+                # Blops (08/11) : la case d'entrée est dehors, le PNJ dedans (mêmes coordonnées que les salles).
+                return "entree" if self.spec.outside_map is not None and self.spec.entrance is not None else "pnj"
         scene = _scene(member.game.look(park=False))
         gaps = {step: _gap(scene, ref) for step, ref in self._places().items()}
         step = min(gaps, key=gaps.get, default=None)
@@ -200,7 +221,7 @@ class DungeonEntry:
         net = getattr(member.game, "net", None)
         here = net.map_id if net is not None and net.alive() else None
         if here is not None:
-            return here != self.spec.npc_map and here not in rooms
+            return here not in (self.spec.npc_map, self.spec.outside_map) and here not in rooms
         from bot.perception.maplabel import read_map_label
 
         label = read_map_label(member.game.look(park=False))
@@ -335,6 +356,30 @@ class DungeonEntry:
             tell_user(f"{spec.name} : {', '.join(stuck)} pas sorti(s) du donjon (PNJ de fin) : bot arrêté.")
             return False
         log.info("Donjon : toute l'équipe est sortie de %s", spec.name)
+        return True
+
+    def choose(self) -> bool:
+        """Salle du choix (08/11, donjon des Blops : Bibiblop, « Choisir la salle du Blop ... Royal ») : chacun parle au
+        PNJ et choisit `choice_reply` ; True si toute l'équipe a changé de salle."""
+        spec = self.spec
+        if spec.choice_npc is None or not spec.choice_reply:
+            log.warning("Donjon : %s : salle du choix pas décrite (choix_pnj, choix_reponse)", spec.name)
+            return False
+        log.info("Donjon : salle du choix : « %s » pour toute l'équipe", spec.choice_reply)
+        stuck = [m for m in self.members
+                 if not self._talk(m, spec.choice_npc, spec.choice_reply, "left", "n'a pas changé de salle")]
+        for member in list(stuck):
+            log.info("Donjon : %s n'a pas changé de salle, je lui reparle", member.name)
+            self._close_bubble(member)
+            if self._talk(member, spec.choice_npc, spec.choice_reply, "left", "n'a pas changé de salle"):
+                stuck.remove(member)
+        if stuck:
+            names = ", ".join(m.name for m in stuck)
+            log.warning("Donjon : %s resté(s) dans la salle du choix", names)
+            tell_user(f"{spec.name} : {names} resté(s) dans la salle du choix (PNJ) : bot arrêté, l'équipe est encore "
+                      "dans le donjon.")
+            return False
+        log.info("Donjon : toute l'équipe est dans la salle choisie")
         return True
 
     # --- Étapes ---
@@ -724,7 +769,7 @@ def room_maps(dungeon: str, path: Path = ROOMS_FILE) -> set[int]:
 
 def room_places(dungeon: str, map_id: int | None, path: Path = ROOMS_FILE) -> int | None:
     """Places des joueurs dans la salle `map_id` du donjon au nom exact `dungeon` (data/donjons.json, placement p1) ;
-    None si la salle ou le donjon n'y sont pas."""
+    None si la salle ou le donjon n'y sont pas, ou si la salle n'a pas de place de combat."""
     import json
 
     try:
@@ -735,7 +780,8 @@ def room_places(dungeon: str, map_id: int | None, path: Path = ROOMS_FILE) -> in
         if row.get("nom") == dungeon:
             for room in row.get("salles") or []:
                 if room.get("carte") == map_id and room.get("placement"):
-                    return int(room["placement"][0])
+                    # 0 : salle sans combat (08/11, Blops : la salle du choix de Bibiblop), pas une salle à vagues
+                    return int(room["placement"][0]) or None
     return None
 
 
@@ -923,7 +969,18 @@ class DungeonFarm:
             return False
         else:
             self._progress("équipe entrée dans le donjon")
-        if not self._fight_rooms(room if run == 1 and start == "salles" else 1):
+        first = room if run == 1 and start == "salles" else 1
+        choice = self.spec.choice_after
+        if choice and first <= choice:
+            # 08/11, Blops : les salles d'avant le choix, le PNJ du choix, puis les salles d'après (le Blop royal).
+            if not self._fight_rooms(first, choice):
+                return False
+            self._close_windows()
+            if not self.entry.choose():
+                return False
+            self._progress("salle choisie")
+            first = choice + 1
+        if not self._fight_rooms(first):
             return False
         self._close_windows()
         if not self.entry.leave():
@@ -1164,7 +1221,7 @@ class DungeonFarm:
         finally:
             bot.fighting_only = None
 
-    def _fight_rooms(self, first: int = 1) -> bool:
+    def _fight_rooms(self, first: int = 1, last: int | None = None) -> bool:
         """Les combats de chaque salle, de la salle `first` à la dernière (spec.rooms) ; le PNJ de fin n'est cherché
         qu'après (utilisateur, 18/10 : retenir le nombre de salles). Salle 2, ce jour-là : un Petit Tournesol au bord,
         deux clics à côté, salle crue finie et PNJ de fin cherché devant lui. Nombre de salles inconnu : jusqu'à la salle
@@ -1178,7 +1235,16 @@ class DungeonFarm:
             from bot.brain.engage import DUNGEON_MISS_FORGET
 
             bot.engager.miss_forget = DUNGEON_MISS_FORGET
-        rooms = self.spec.rooms
+            bot.engager.no_level_limit = True  # 08/11 : le groupe de la salle, quel que soit son niveau
+        try:
+            return self._rooms_fought(first, last)
+        finally:
+            if bot.engager is not None:
+                bot.engager.no_level_limit = False  # farm de la zone des clés ensuite : la limite revient
+
+    def _rooms_fought(self, first: int, last: int | None) -> bool:
+        bot = self.bot
+        rooms = last or self.spec.rooms  # `last` : salle avant le choix (08/11, Blops), puis la dernière
         fights, won = bot.fights, 0
         step = getattr(bot, "safe_step", bot.step)  # erreurs rattrapées comme dans TeamBot.run (21/10)
         waved: set[int] = set()  # salles déjà faites en vagues (une fois chacune)

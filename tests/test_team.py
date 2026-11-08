@@ -2252,3 +2252,20 @@ def test_session_end_waits_for_a_fight_announced_by_the_server(monkeypatch):
     pending[0] = False
     bot._step()
     assert bot.finished
+
+
+def test_support_mode_given_to_everyone_but_the_dps():
+    # 08/11 : team.dps défini : les autres soutiennent (leur CombatAI connaît les DPS) ; sans DPS, personne.
+    from types import SimpleNamespace
+
+    from bot.team.loop import TeamBot
+
+    def team(dps):
+        members = [SimpleNamespace(name=n, ai=SimpleNamespace(support_of={"x": 1})) for n in ("A", "B", "C")]
+        fake = SimpleNamespace(team=SimpleNamespace(dps=dps), members=members, by_name={m.name: m for m in members})
+        TeamBot._support_mode(fake)
+        return members
+
+    a, b, c = team((("B", "distance"),))
+    assert a.ai.support_of == {"B": b.ai} and c.ai.support_of == {"B": b.ai} and b.ai.support_of == {}
+    assert all(m.ai.support_of == {} for m in team(()))

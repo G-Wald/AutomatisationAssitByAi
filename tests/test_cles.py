@@ -378,7 +378,7 @@ def test_every_dungeon_of_the_entry_file_has_its_key():
     from bot.team.keys import key_of
 
     assert {key: key_of(spec.name) for key, spec in load_dungeons().items()} == {
-        "incarnam": KEY, "bouftou": 1568, "champs": 8143, "ensable": 8437}
+        "incarnam": KEY, "bouftou": 1568, "champs": 8143, "ensable": 8437, "blops": 9248}
 
 
 def test_no_entry_without_shared_keys_but_a_keyring_lets_the_entry_decide():

@@ -43,6 +43,16 @@ def resistances(template: int, grade: int | None) -> dict[str, int]:
     return out
 
 
+# Menace des monstres pour le mode soutien (08/11) : un PM ou un PA retiré vaut d'autant plus. Gloutoblop (1181, donjon
+# des Blops) : « Gloutage » avale un personnage au contact quels que soient ses PV ; le sort coûte tous ses PA, 1 PA de
+# moins l'en empêche (utilisateur et JOL Rétro, 08/11).
+THREAT = {1181: 3.0}
+
+
+def threat(template: int) -> float:
+    return THREAT.get(template, 1.0)
+
+
 def factor(resist: dict[str, int] | None, element: str | None) -> float:
     """Part des dégâts d'un élément qui passe la résistance (-50 % : 1,5 ; 50 % : 0,5 ; jamais moins que 0)."""
     if not resist or not element:

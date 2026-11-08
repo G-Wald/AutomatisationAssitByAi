@@ -966,3 +966,48 @@ def test_plan_search_stops_at_its_time_budget_with_the_best_plan_so_far(monkeypa
     turn = plan((0, 0), 5, enemies, spells, pa=13)
     assert time.perf_counter() - started < 1.5
     assert turn.casts
+
+
+def test_support_mode_slows_the_dangerous_enemy_and_boosts_the_dps():
+    # 08/11, l'utilisateur : quand des DPS sont définis, les autres boostent les DPS et ralentissent les ennemis
+    # (Flèche Cinglante : -PM) ; le Gloutoblop avale au contact, 1 PA de moins l'en empêche.
+    from bot.brain.engine import Support
+
+    cinglante, glacee = reference_spell("174", 1, 1), reference_spell("163", 2, 1)
+    tir = reference_spell("166", 3, 4)  # Tir Puissant, portée 0 à 5
+    # Flèche Cinglante : -2 PM sûrs ; Flèche Glacée : 2 PA perdus, esquivables (sagesse contre esquive) : 1 en moyenne.
+    assert cinglante.pm_loss == 2 and glacee.pa_loss == 1 and cinglante.damage > 0
+    weak, glouton, dps = (3, 1), (1, 3), (0, 2)
+    # Sans soutien : la cible n'importe que pour les dégâts ; avec, le Gloutoblop (menace 3) est ralenti d'abord.
+    support = Support({}, {glouton: 3.0})
+    turn = plan_turn((0, 0), 0, [weak, glouton], [], [glacee], new_use(3), OPEN, Weights(), support=support)
+    assert turn.first.spell is glacee and turn.first.cell == glouton and "ralentit" in turn.first.reason
+    # Le DPS à portée (2 cases) : Tir Puissant lancé sur lui plutôt que sur moi, et pas compté pour mes coups.
+    support = Support({dps: (22.0, 4.0, "feu")}, {})
+    turn = plan_turn((0, 0), 0, [weak], [dps], [tir, cinglante], new_use(6), OPEN, Weights(), support=support)
+    first = turn.first
+    assert first.spell.name == tir.name and first.cell == dps and not first.spell.on_self
+    assert "soutien" in first.reason
+    use = new_use(6)
+    use.record(first.spell, dps)
+    assert use.damage_bonus == (0.0, 0.0)  # bonus du DPS, pas le mien
+    # Hors mode soutien : jamais un allié visé, Tir Puissant reste un bonus sur moi.
+    turn = plan_turn((0, 0), 0, [weak], [dps], [tir, cinglante], new_use(6), OPEN, Weights())
+    assert all(step.cell != dps for step in turn.steps)
+
+
+def test_support_never_gives_a_stat_boost_of_another_element():
+    # 08/11 : Enu-six et Walitcoin lançaient Chance (eau) sur Walarbalete, qui tape en feu (Flèche Explosive).
+    from bot.brain.engine import Support
+
+    data = load_reference()["sorts"]
+    key = next(k for k, v in data.items() if v["nom"] == "Chance")
+    level = data[key]["niveaux"][3]
+    entry = SpellEntry(0, None, None, True, np.zeros((46, 46, 3), np.uint8), level=4)
+    chance = Spell(entry, data[key]["cle"], "Chance", level, "boost_degats").combat_spell(1)
+    assert chance.boost_elements == ("eau",) and chance.damage_boost
+    dps, weak = (0, 2), (3, 1)
+    for element, aimed in (("feu", False), ("eau", True)):
+        support = Support({dps: (22.0, 4.0, element)}, {})
+        turn = plan_turn((1, 1), 0, [weak], [dps], [chance], new_use(6), OPEN, Weights(), support=support)
+        assert any(step.cell == dps for step in turn.steps) is aimed, element

@@ -553,7 +553,8 @@ def run_team(args: argparse.Namespace, settings: dict, team: TeamSettings, title
                 log.error("Donjon inconnu : %s (config/donjons_entree.yaml)", args.donjon)
                 return 1
             farm = DungeonFarm(bot, spec, args.passages)
-            done = farm.run(step or None, only, room)
+            farm.entry.told_position = args.position  # carte pas annoncée et coordonnées illisibles (08/11)
+            done =farm.run(step or None, only, room)
             # 30/10 : passages ramenés à ceux que les clés permettent (donjon.cles, team/keys.py) : réussi s'ils sont faits.
             return 0 if done and done == farm.runs else 1
         if args.banque and bank_inside(members[0]):

@@ -79,6 +79,12 @@ BOOST_SIDE_EFFECTS = {202, 115}
 # Bonus de caractéristique (+force, +intelligence, +chance, +agilité) : +1 % aux dégâts de l'élément par point (formule
 # des caractéristiques). Un personnage tape d'habitude dans deux éléments : compté pour la moitié de leur somme.
 STAT_BOOSTS = {118: "terre", 126: "feu", 123: "eau", 119: "air"}
+# Retraits (08/11, mode soutien). L'utilisateur : « les retraits, c'est en fonction de la sagesse, alors que Flèche
+# Cinglante retire des PM obligatoirement » : -PA (168) et -PM (169) sont sûrs ; PA perdus (101), PM perdus (127) et
+# les vols (84, 77) s'esquivent (sagesse du lanceur contre esquive de la cible) : comptés à DODGE_ODDS (estimation).
+PA_SURE, PA_DODGE = {168}, {101, 84}
+PM_SURE, PM_DODGE = {169}, {127, 77}
+DODGE_ODDS = 0.5
 TEAM_ZONE = 63  # taille de zone « toute la carte » chez Solomonk : bonus pour toute l'équipe
 MIN_DAMAGE_PER_PA = 1.0  # un sort à malus (ou recul...) qui fait moins de dégâts moyens par PA n'est pas une attaque
 # Classe d'après la fenêtre (match_class) : points des lignes reliées à un sort de la classe.
@@ -458,7 +464,27 @@ class Spell:
             damage_base=mean_damage(effects),
             damage_lines=sum(max(1, e.get("tours", 0)) * (e.get("chance") or 100) / 100 for e in hurting),
             boost_zone=(boost_zone.get("forme") or "point", boost_zone.get("taille") or 0),
+            pm_loss=_loss(effects, PM_SURE, PM_DODGE),
+            pa_loss=_loss(effects, PA_SURE, PA_DODGE),
+            boost_elements=_boosted_elements(effects) if boost and not boost_of(level) else (),
         )
+
+
+def _boosted_elements(effects: list[dict]) -> tuple[str, ...]:
+    """Éléments des dégâts qu'augmente un bonus de caractéristiques (force : terre et neutre)."""
+    out = []
+    for e in effects:
+        element = STAT_BOOSTS.get(e["id"])
+        if element:
+            out += [element, "neutre"] if element == "terre" else [element]
+    return tuple(dict.fromkeys(out))
+
+
+def _loss(effects: list[dict], sure: set[int], dodged: set[int]) -> float:
+    """PM ou PA retirés en moyenne à un ennemi touché : sûrs en entier, esquivables à DODGE_ODDS (08/11)."""
+    certain = max((e["max"] or 0 for e in effects if e["id"] in sure), default=0)
+    maybe = max((e["max"] or 0 for e in effects if e["id"] in dodged), default=0)
+    return float(max(certain, maybe * DODGE_ODDS))
 
 
 TOLD_ROWS = 1000  # lignes des sorts annoncés par le serveur sans ligne lue dans la fenêtre : 1000 + numéro du sort

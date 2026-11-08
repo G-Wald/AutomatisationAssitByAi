@@ -357,6 +357,7 @@ class TeamBot:
         self.leader, self.followers = members[0], members[1:]
         self.by_name = {m.name: m for m in members}
         self.team = team or TeamSettings.from_settings(settings)
+        self._support_mode()
         self.act = act
         engage_settings = EngageSettings.from_settings(settings)
         self.travel_settings = TravelSettings.from_settings(settings, travel, start, region)
@@ -1821,6 +1822,20 @@ class TeamBot:
         gaps = {team: gap(team) for team in (RED, BLUE)}
         mine, other = sorted(gaps, key=gaps.get)
         return mine if gaps[other] - gaps[mine] >= PLACE_COLOUR_MARGIN else None
+
+    def _support_mode(self) -> None:
+        """Mode soutien (08/11, l'utilisateur : « quand on définit un ou plusieurs DPS, les autres en mode soutien : ils
+        boostent les DPS et ralentissent les ennemis ») : chacun de ceux qui ne sont pas DPS connaît les DPS (leur
+        CombatAI, pour leurs sorts) ; brain/engine.py, Support."""
+        dps = [name for name, _ in getattr(self.team, "dps", ()) if name in self.by_name]
+        for member in self.members:
+            ai = getattr(member, "ai", None)
+            if ai is None or not hasattr(ai, "support_of"):
+                continue
+            ai.support_of = {} if member.name in dps else {n: self.by_name[n].ai for n in dps}
+        if dps:
+            log.info("Mode soutien : %s boostent %s et ralentissent les ennemis",
+                     ", ".join(m.name for m in self.members if m.name not in dps) or "personne", ", ".join(dps))
 
     def _seat_team(self, host: Member, fighters: list[Member], dps: tuple[tuple[str, str], ...] = ()) -> set[str]:
         """Toute l'équipe sur ses cases (team/placement.py) : à chaque passe, chacun dont la case prévue est libre y

@@ -101,3 +101,33 @@ ensable:
   clic_fin: gauche
   zone_cles: [13, -28]    # Calanques d'Astrub (24 cartes, entrée comprise) : Pichons et Etoiles de la Mer d'Asse,
                           # butin de la clé (client, I 8437 drop ; groupes d'après StarLoco), ~1 % (07/11)
+
+# Donjon des Blops (08/11, préparé hors jeu pour l'XP, demande de l'utilisateur : « blop + kani », Walarbalete en DPS).
+# Données : langue du client (DU 43, PNJ 1034 Bibiblop, dialogues q5402, q5403, q5410), cartes StarLoco locales
+# (data/externes/starloco, maps/dungeons/Blops, cania/4416), data/donjons.json.
+# Entrée : carte 4416 en -25,-17 (Massif de Cania, dehors) ; la case 355 (14,24) téléporte dans la salle 11878 (même
+# coordonnées), où Bibiblop (case 85) prend la clef (q5402 : « Donner la clef », 4531).
+# Salles : 11879 à 11885, 7 combats ; puis 11886, sans combat : Bibiblop (case 191), q5403 « dans quelle salle veux-tu
+# aller ? » : « Choisir la salle du Blop Coco / Griotte / Indigo / Reinette Royal » (4532 à 4535), salles 11887 à
+# 11890. Résistance feu (Flèche Explosive de Walarbalete) : Griotte Royal 90 à 94 % (jamais), les trois autres -20 à
+# -12 %. Après le boss : 11891, Bibiblop (case 344), q5410 : « Sortir du donjon » (4540).
+blops:
+  nom: Donjon des Blops   # nom exact du donjon (table DU), comme dans config/donjons_cles.yaml
+  monde: douze
+  carte: [-25, -17]
+  carte_dehors: 4416
+  entree: [14, 24]        # case 355 de 4416 (StarLoco : moveEndTeleport(11878, 365)), à vérifier en jeu
+  pnj: [25, 5]            # case 85 de 11878 (StarLoco) ; celle du serveur passe avant (pnj_modele)
+  pnj_carte: 11878
+  pnj_modele: 1034        # Bibiblop
+  reponse: Donner la clef
+  reponse_id: 4531
+  trousseau: Utiliser le trousseau de clefs
+  salles: 8               # 7 salles, puis le Blop royal choisi
+  choix_apres: 7
+  choix_pnj: [5, 13]      # case 191 de 11886 (StarLoco)
+  choix_reponse: Choisir la salle du Blop Indigo Royal
+  pnj_fin: [21, 23]       # case 344 de 11891 (StarLoco)
+  reponse_fin: Sortir du donjon
+  clic_fin: gauche
+  zone_cles: [-25, -17]   # Massif de Cania : Blops (butin de la clé à vérifier)

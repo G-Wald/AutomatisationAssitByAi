@@ -51,8 +51,10 @@ from bot.brain.engine import (
     RETREAT,
     TACKLE_PENALTY,
     ZONE_FALLOFF,
+    DPS_HITS,
     Board,
     Step,
+    Support,
     TurnPlan,
     Weights,
     cast_blocker,
@@ -486,6 +488,9 @@ class CombatAI:
                  name: str | None = None) -> None:
         self.game = game
         self.name = name  # nom du personnage (mode équipe) : lu sur sa fiche au survol, pour savoir lequel est moi
+        # Mode soutien (08/11) : DPS de l'équipe (team.dps) quand je n'en suis pas, nom -> leur CombatAI (leurs sorts) ;
+        # vide : pas de soutien (solo, pas de DPS désigné, ou je suis DPS). Rempli par la boucle d'équipe.
+        self.support_of: dict[str, "CombatAI"] = {}
         self.settings = settings
         self.spellbook = spellbook
         self._keys: dict[int, str] = {settings.spell_slot: settings.resolved_spell_key}  # case -> raccourci ("" : clic)
@@ -855,9 +860,13 @@ class CombatAI:
                 placed = placed or (step.kind != MOVE and steps == step.pm)
                 continue
             spell = step.spell
+            # Un allié visé : bonus de dégâts lancé sur un DPS (mode soutien, 08/11).
             target = me if spell.on_self else next((e for e in enemies if e.cell == step.cell), None) or \
+                next((f for f in fighters if f.cell == step.cell and f is not me), None) or \
                 Fighter("", *cell_point(frame.grid, step.cell, self.map.lift), step.cell)  # zone visant une case vide
-            log.info("%s sur %s : %s", spell.name, "moi" if spell.on_self else _aim_label(target), step.reason)
+            ally = not spell.on_self and spell.damage_boost  # mode soutien : bonus sur un DPS (08/11)
+            log.info("%s sur %s : %s", spell.name, "moi" if spell.on_self else
+                     f"l'allié en {step.cell}" if ally else _aim_label(target), step.reason)
             repeats = burst_length(plan) if self.settings.burst else 0
             # Dernière action du plan (le sort, et sa rafale) : fin de tour aussitôt après, sans attendre l'animation.
             # Le sort lui-même est vérifié (PA dépensés, ~0,5 s) : 19/10, 15 derniers sorts jamais partis comptés lancés.
@@ -1284,7 +1293,8 @@ class CombatAI:
         if expected is None or expected.kind != CAST or self._board is None:
             return
         first = plan.first
-        if first is not None and first.spell is expected.spell and first.cell == expected.cell:
+        # Même sort (par son numéro : un bonus lancé sur un DPS est une copie refaite à chaque plan, 08/11)
+        if first is not None and first.spell is not None and expected.spell is not None                 and first.spell.spell_id == expected.spell.spell_id and first.cell == expected.cell:
             return
         why = cast_blocker(expected.spell, me.cell, expected.cell, [e.cell for e in enemies], [a.cell for a in allies],
                            self._use, self._board)
@@ -1390,6 +1400,29 @@ class CombatAI:
                 out[cell] = found
         return out
 
+    def _support(self, enemies: list[Fighter]) -> Support | None:
+        """Mode soutien (08/11, l'utilisateur : les autres que les DPS boostent les DPS et ralentissent les ennemis) : les
+        DPS du combat par case (d'après le serveur : `_names`), avec la base des dégâts de leur meilleure attaque et
+        leurs coups par tour, et la menace de chaque ennemi (brain/monsters.py). None sans DPS désigné ou si j'en suis."""
+        if not self.support_of:
+            return None
+        dps = {}
+        for cell, name in self._names.items():
+            other = self.support_of.get(name)
+            if other is not None:
+                dps[cell] = _dps_strength(other)
+        threat: dict[Cell, float] = {}
+        net = self._net() if not self._watching else None
+        if net is not None:
+            from bot.brain.monsters import threat as monster_threat
+
+            cells = {e.cell for e in enemies}
+            for who, cell, _, _ in net.fighters():
+                actor = net.actors.get(who) if who < 0 and cell in cells else None
+                if actor is not None and str(actor.name).isdigit() and monster_threat(int(actor.name)) != 1.0:
+                    threat[cell] = monster_threat(int(actor.name))
+        return Support(dps, threat)
+
     def _plan(self, frame: Frame, me: Fighter, enemies: list[Fighter], allies: list[Fighter], pm: int,
               avoid: set[Cell] = frozenset(), missed: set[Cell] = frozenset(), can_move: bool = True,
               move_first: bool = True) -> TurnPlan:
@@ -1413,9 +1446,10 @@ class CombatAI:
             return plan_turn(me.cell, pm, [e.cell for e in enemies], [a.cell for a in allies], spells, self._use,
                              board, self.settings.weights, avoid=avoid, missed=missed, can_move=can_move,
                              move_first=move_first, life=self.map.life, names=self._names, summons=summons,
-                             resist=resist)
+                             resist=resist, support=support)
 
         resist = self._resistances(enemies)
+        support = self._support(enemies)
 
         plan = planned(spells)
         summons = self._summon_cells() & {e.cell for e in enemies} if last_resort else frozenset()
@@ -3084,3 +3118,15 @@ class CombatAI:
             if passed(self.game.look(park=False)):  # la timeline reste visible
                 return True  # main passée, ou combat fini
         return False
+
+
+def _dps_strength(ai: "CombatAI") -> tuple[float, float, str | None]:
+    """Mode soutien (08/11) : base des dégâts de la meilleure attaque d'un DPS (ce que multiplie un bonus en %) et coups
+    touchés par tour (une zone : DPS_HITS ; une cible seule : la moitié). Ses sorts pas encore établis : 20 et DPS_HITS."""
+    attacks = [s for s in getattr(ai, "_spells", None) or [] if s.damage > 0 and not s.on_self]
+    if not attacks:
+        return 20.0, DPS_HITS, None
+    best = max(attacks, key=lambda s: s.damage * (2 if s.zone[1] > 0 else 1))
+    base = best.damage_base if best.damage_base is not None else best.damage
+    return float(base), DPS_HITS if best.zone[1] > 0 else DPS_HITS / 2, best.element
+

@@ -955,3 +955,67 @@ def test_monster_groups_walking_count_as_npc_steps():
     net = ClientFeed("Elseiso")
     net.feed("GA;1;-5;aeJbeY")
     assert net.npc_moved_at > 0
+
+
+def test_blops_entry_cell_outside_npc_inside_and_the_choice_room():
+    # 08/11 : donjon des Blops (client et StarLoco) : case d'entrée sur la carte de dehors 4416, Bibiblop dans la salle
+    # 11878 aux mêmes coordonnées ; après la 7e salle, Bibiblop fait choisir la salle du Blop royal.
+    from bot.connection.network import ClientFeed
+    from bot.team.dungeon import room_places
+
+    spec = load_dungeons()["blops"]
+    assert spec.outside == (-25, -17) and spec.outside_map == 4416 and spec.entrance == (14, 24)
+    assert spec.npc_map == 11878 and spec.reply_ids == {4531} and spec.rooms == 8 and spec.choice_after == 7
+    assert spec.choice_reply == "Choisir la salle du Blop Indigo Royal" and spec.exit_reply == "Sortir du donjon"
+    screen = Screen()
+    entry = DungeonEntry([], spec)
+    nets = {}
+    for name, room in (("Dehors", 4416), ("Pnj", 11878), ("Salle", 11880), ("Ailleurs", 7414)):
+        nets[name] = member(name, screen, load_frame(OUTSIDE))
+        nets[name].game.net = ClientFeed(name)
+        nets[name].game.net.feed(f"GDM|{room}|0706131721|00")
+    assert [entry.locate(nets[n]) for n in ("Dehors", "Pnj", "Salle")] == ["entree", "pnj", None]
+    assert not entry.away(nets["Dehors"]) and not entry.away(nets["Salle"]) and entry.away(nets["Ailleurs"])
+    assert room_places("Donjon des Blops", 11886) is None  # salle du choix : 0 place, pas une salle à vagues
+    assert room_places("Donjon des Blops", 11879) == 10
+
+
+def test_rooms_before_the_choice_then_the_choice_then_the_boss(monkeypatch):
+    from types import SimpleNamespace
+
+    from bot.team.dungeon import DungeonFarm
+
+    steps = []
+    farm = DungeonFarm(SimpleNamespace(members=[], leader=None, _settings={}), load_dungeons()["blops"], 1)
+    monkeypatch.setattr(farm, "_close_windows", lambda: None)
+    monkeypatch.setattr(farm, "_pods_ready", lambda: True)
+    monkeypatch.setattr(farm, "_fight_rooms", lambda first=1, last=None: steps.append(("salles", first, last)) or True)
+    monkeypatch.setattr(farm.entry, "enter", lambda *args: steps.append("entrée") or True)
+    monkeypatch.setattr(farm.entry, "choose", lambda: steps.append("choix") or True)
+    monkeypatch.setattr(farm.entry, "leave", lambda: steps.append("sortie") or True)
+    assert farm.run() == 1
+    assert steps == ["entrée", ("salles", 1, 7), "choix", ("salles", 8, None), "sortie"]
+    steps.clear()
+    assert farm.run(start="salles", room=8) == 1  # reprise au boss : pas de choix
+    assert steps == [("salles", 8, None), "sortie"]
+    steps.clear()
+    monkeypatch.setattr(farm.entry, "choose", lambda: steps.append("choix") or False)
+    assert farm.run() == 0 and steps == ["entrée", ("salles", 1, 7), "choix"]
+
+
+def test_choice_npc_talked_to_by_everyone_and_retried_once(monkeypatch):
+    spec = load_dungeons()["blops"]
+    screen = Screen()
+    team = [member(n, screen, load_frame(OUTSIDE)) for n in ("A", "B")]
+    entry = DungeonEntry(team, spec)
+    talks = []
+
+    def talk(m, npc, answer, button, not_gone):
+        talks.append((m.name, npc, answer))
+        return not (m.name == "B" and len(talks) == 2)
+
+    monkeypatch.setattr(entry, "_talk", talk)
+    monkeypatch.setattr(entry, "_close_bubble", lambda m: None)
+    assert entry.choose()
+    assert talks == [("A", (5, 13), spec.choice_reply), ("B", (5, 13), spec.choice_reply),
+                     ("B", (5, 13), spec.choice_reply)]

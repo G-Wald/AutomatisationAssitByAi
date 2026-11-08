@@ -44,7 +44,7 @@ exception, avec la pénalité de tacle.
 import logging
 import time
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from functools import lru_cache
 
 import numpy as np
@@ -151,6 +151,15 @@ MAX_CASTS = 6  # sorts au plus dans un plan (12 PA en sorts à 2 PA)
 # 7,4 millions de suites, 79 s ; son tour était fini avant). Au-delà, le meilleur plan trouvé jusque-là ; les cases
 # les plus proches et les suites les plus courtes passent d'abord.
 PLAN_BUDGET = 3.0
+# Mode soutien (08/11, l'utilisateur : « quand on définit un ou plusieurs DPS, les autres en mode soutien : ils boostent
+# les DPS et ralentissent les ennemis ; Flèche Cinglante est pratique, elle retire 2 PM non esquivables ») : un PM ou
+# un PA retiré à un ennemi touché vaut SLOW_PM / SLOW_PA, fois sa menace (Gloutoblop : il avale au contact, 1 PA de
+# moins l'en empêche) ; un bonus de dégâts lancé sur un DPS vaut ce qu'il ajoute à ses coups du tour (DPS_HITS par
+# défaut), fois SUPPORT_SHARE (on n'est pas sûr qu'il les place), sur 2 tours au plus.
+SLOW_PM = 5.0
+SLOW_PA = 6.0
+SUPPORT_SHARE = 0.5
+DPS_HITS = 4.0  # coups du DPS par tour touchés par un bonus (2 lancers, 2 ennemis par zone)
 ZONE_SEARCH = 4  # cases vides visées par une zone : à 4 cases au plus d'un ennemi (au-delà, viser l'ennemi suffit)
 EPSILON = 1e-6
 
@@ -179,6 +188,18 @@ class Weights:
     behind_ally: float = BEHIND_ALLY
     cut_ally: float = CUT_ALLY
     safe: float = SAFE_DISTANCE
+    slow_pm: float = SLOW_PM
+    slow_pa: float = SLOW_PA
+    support_share: float = SUPPORT_SHARE
+
+
+@dataclass(frozen=True)
+class Support:
+    """Mode soutien (08/11) : DPS de l'équipe, par case (base des dégâts de son attaque principale, coups par tour), et
+    menace des ennemis, par case (1 : normale ; Gloutoblop : plus)."""
+
+    dps: dict[Cell, tuple[float, float, str | None]] = field(default_factory=dict)  # (base, coups, élément)
+    threat: dict[Cell, float] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -418,8 +439,9 @@ class _Planner:
                  use: SpellUse, board: Board, weights: Weights, avoid: set[Cell], missed: set[Cell],
                  can_move: bool, move_first: bool = True, life: dict[Cell, int] | None = None,
                  names: dict[Cell, str] | None = None, summons: frozenset[Cell] = frozenset(),
-                 resist: dict[Cell, dict[str, int]] | None = None) -> None:
+                 resist: dict[Cell, dict[str, int]] | None = None, support: Support | None = None) -> None:
         self.me, self.pm = me, max(pm, 0)
+        self.support = support  # mode soutien (08/11) : bonus sur les DPS, ennemis ralentis
         self.enemies = tuple(enemies)
         self.summon_ids = frozenset(i for i, e in enumerate(self.enemies) if e in summons)  # invocations ennemies
         self.allies = frozenset(allies)
@@ -446,6 +468,8 @@ class _Planner:
         self.hp = {i: life[e] for i, e in enumerate(self.enemies) if e in life}  # vie connue, par ennemi
         resist = resist or {}
         self.resist = {i: resist[e] for i, e in enumerate(self.enemies) if e in resist}  # résistances, par ennemi
+        threat = support.threat if support is not None else {}
+        self.threat = {i: threat.get(e, 1.0) for i, e in enumerate(self.enemies)}  # menace, par ennemi
         self.focus = min(self.hp, key=lambda i: (self.hp[i], i)) if self.hp else None  # la cible de l'équipe
         self.names = names or {}
         self.sequences = 0
@@ -554,6 +578,8 @@ class _Planner:
                 high += extra
             shape, size = spell.zone
             seen = set()
+            if self.support is not None and spell.damage_boost and not spell.team_boost and spell.spell_range[1] > 0:
+                options += self._ally_boosts(spell, origin, positions, extra, loose)
             for target in self._targets(spell, origin, positions):
                 gap = distance(origin, target)
                 # Marge du relief sur la portée maximale ; sur la minimale, une case au plus : 04/10, Flèche
@@ -610,6 +636,8 @@ class _Planner:
                 if not self.board.reliable:
                     blocked = 0  # obstacles mal connus : poussée contre un mur supposée, pas comptée
                 value = damage + PUSH_PER_CELL * blocked  # danger écarté : compté en fin de suite (_relief)
+                slow = self._slow(spell, hits)
+                value += slow
                 odds = 1.0 if low <= gap <= high else MARGIN_ODDS  # dans la marge d'une carte à relief : une chance
                 value *= odds
                 stretch = spell.range_modifiable and extra > 0 and gap > high - extra + margin
@@ -624,11 +652,46 @@ class _Planner:
                     reason = "ennemi poussé contre un obstacle"
                 else:
                     reason = "le plus de dégâts"
+                if slow:
+                    reason += ", " + _slow_text(spell)
                 dealt = tuple((i, d * odds) for i, d in per_enemy)
                 options.append(_Option(spell, target, hits, target_enemy, damage, value, dealt, moved, reason,
                                        stretch))
         options = _undominated(options)
         self._options_cache[key] = options
+        return options
+
+    def _slow(self, spell: CombatSpell, hits: tuple[int, ...]) -> float:
+        """Mode soutien : PM et PA retirés aux ennemis touchés, fois leur menace (0 hors mode soutien)."""
+        if self.support is None or not (spell.pm_loss or spell.pa_loss):
+            return 0.0
+        each = spell.pm_loss * self.w.slow_pm + spell.pa_loss * self.w.slow_pa
+        return sum(each * self.threat.get(i, 1.0) for i in hits)
+
+    def _ally_boosts(self, spell: CombatSpell, origin: Cell, positions: tuple[Cell, ...], extra: int,
+                     loose: bool) -> list[_Option]:
+        """Mode soutien : un bonus de dégâts (Tir Puissant, Maîtrise de l'Arc) lancé sur un DPS à portée, ce qu'il ajoute
+        à ses coups (Support.dps), fois SUPPORT_SHARE, sur 2 tours au plus. Le sort est une copie à portée 1 au moins :
+        visé comme une attaque sur la case du DPS, sans bonus pour moi."""
+        aimed = replace(spell, spell_range=(max(1, spell.spell_range[0]), spell.spell_range[1]))
+        low, high = spell_range(aimed, self.use)
+        if aimed.range_modifiable:
+            high += extra
+        turns = min(max(spell.boost_turns, 1), 2)
+        options = []
+        for cell, (base, hits, element) in sorted(self.support.dps.items()):
+            if spell.boost_elements and element not in spell.boost_elements:
+                continue  # Chance (eau) sur un DPS feu : rien
+            if cell not in self.allies or not low <= distance(origin, cell) <= high:
+                continue
+            if aimed.in_line and not aligned(origin, cell):
+                continue
+            if aimed.needs_sight and not loose and not self._sight(origin, cell, positions):
+                continue
+            gain = (base * spell.boost_pct / 100 + spell.boost_flat) * hits
+            value = self.w.support_share * gain * turns
+            options.append(_Option(aimed, cell, (), None, 0.0, value, (), None,
+                                   f"soutien : bonus de dégâts sur {self._name(cell)} ({_boost_text(spell)})"))
         return options
 
     def _carry(self, boost: CombatSpell) -> float:
@@ -906,7 +969,8 @@ class _Planner:
                 for i, d in option.dealt:
                     dealt[i] += d
                 sequence.append(option)
-                more = (boost[0] + spell.boost_flat, boost[1] + spell.boost_pct) if spell.damage_boost else boost
+                # Un bonus lancé sur un DPS (mode soutien) ne compte pas pour mes coups.
+                more = (boost[0] + spell.boost_flat, boost[1] + spell.boost_pct)                     if spell.damage_boost and spell.on_self else boost
                 search(pa - spell.pa, option.positions or positions, extra + (spell.range_bonus if is_bonus else 0),
                        more, 0 if changes else index, value + option.value, damage + option.damage, bonus or is_bonus)
                 sequence.pop()
@@ -1079,6 +1143,11 @@ def _lasting(spell: CombatSpell) -> bool:
     return spell.damage <= 0 and max(spell.boost_turns, spell.bonus_turns) >= 2
 
 
+def _slow_text(spell: CombatSpell) -> str:
+    parts = ([f"-{spell.pm_loss:g} PM"] if spell.pm_loss else []) + ([f"-{spell.pa_loss:g} PA"] if spell.pa_loss else [])
+    return "ralentit (" + ", ".join(parts) + ")"
+
+
 def _allies_text(count: int) -> str:
     """« 1 allié », « 3 alliés »."""
     return f"{count} allié{'s' if count > 1 else ''}"
@@ -1133,7 +1202,8 @@ def plan_turn(me: Cell, pm: int, enemies: list[Cell], allies: list[Cell], spells
               board: Board, weights: Weights = Weights(), avoid: set[Cell] = frozenset(),
               missed: set[Cell] = frozenset(), can_move: bool = True, move_first: bool = True,
               life: dict[Cell, int] | None = None, names: dict[Cell, str] | None = None,
-              summons: frozenset[Cell] = frozenset(), resist: dict[Cell, dict[str, int]] | None = None) -> TurnPlan:
+              summons: frozenset[Cell] = frozenset(), resist: dict[Cell, dict[str, int]] | None = None,
+              support: Support | None = None) -> TurnPlan:
     """Meilleur plan du tour depuis l'état actuel (voir le début du module).
 
     `pm` : PM restants ; `use` : PA restants et compteurs du tour (lancers, cibles refusées, portées mesurées,
@@ -1143,9 +1213,10 @@ def plan_turn(me: Cell, pm: int, enemies: list[Cell], allies: list[Cell], spells
     `move_first` : faux pour lancer d'ici sans aller ailleurs d'abord (le repli reste possible) ; `life` : vie connue
     des ennemis, par case (lue au survol) ; `names` : noms des alliés, par case (journal) ; `summons` : cases des
     invocations ennemies, seules cibles des sorts qui ne frappent qu'elles (CombatSpell.summons_only) ; `resist` :
-    résistances des ennemis, par case (élément -> %, d'après le serveur et la langue du client, brain/monsters.py)."""
+    résistances des ennemis, par case (élément -> %, d'après le serveur et la langue du client, brain/monsters.py) ;
+    `support` : mode soutien (08/11 : bonus sur les DPS, ennemis ralentis selon leur menace)."""
     return _Planner(me, pm, enemies, allies, spells, use, board, weights, set(avoid), set(missed), can_move,
-                    move_first, life, names, frozenset(summons), resist).plan()
+                    move_first, life, names, frozenset(summons), resist, support).plan()
 
 
 def cast_blocker(spell: CombatSpell, me: Cell, target: Cell, enemies: list[Cell], allies: list[Cell], use: SpellUse,
