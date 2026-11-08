@@ -1239,12 +1239,12 @@ class DungeonFarm:
             from bot.brain.engage import DUNGEON_MISS_FORGET
 
             bot.engager.miss_forget = DUNGEON_MISS_FORGET
-            bot.engager.no_level_limit = True  # 08/11 : le groupe de la salle, quel que soit son niveau
+            bot.engager.dungeon_room = True  # 08/11 : le groupe de la salle, quels que soient son niveau et sa place
         try:
             return self._rooms_fought(first, last)
         finally:
             if bot.engager is not None:
-                bot.engager.no_level_limit = False  # farm de la zone des clés ensuite : la limite revient
+                bot.engager.dungeon_room = False  # farm de la zone des clés ensuite : la limite revient
 
     def _rooms_fought(self, first: int, last: int | None) -> bool:
         bot = self.bot

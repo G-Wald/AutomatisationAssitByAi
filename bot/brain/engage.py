@@ -376,9 +376,10 @@ class Engager:
         self._net_misses: dict[tuple[int | None, int], int] = {}
         self._net_missed_at: dict[tuple[int | None, int], float] = {}  # dernier raté (time.monotonic())
         self.miss_forget = NET_MISS_FORGET  # s : ratés d'un groupe oubliés (team/dungeon.py : DUNGEON_MISS_FORGET)
-        # Salles d'un donjon (08/11, Blops : groupe de la salle 5 au niveau 325, max 293, laissé 10 min) : le groupe de
-        # la salle est à combattre quel que soit son niveau (team/dungeon.py le met le temps des salles).
-        self.no_level_limit = False
+        # Salles d'un donjon (team/dungeon.py le met le temps des salles) : le groupe de la salle est à combattre quel
+        # que soit son niveau (08/11, Blops : salle 5 au niveau 325, max 293, laissé 10 min) et où qu'il soit (salle 6 :
+        # « tout en haut de la carte », laissé ; les suiveurs rejoignent par l'épée annoncée par le serveur).
+        self.dungeon_room = False
         self._hit = False  # dernier clic sans menu « Attaquer » : quelque chose a été touché (ni menu de Flash, ni autre)
         self._last_click: Point | None = None  # dernier clic sur un groupe de cette recherche
         # Mémoire des zones hors d'atteinte (remember_in) : où l'écrire (World de travel.py) et où l'on est
@@ -520,9 +521,10 @@ class Engager:
                 return False
         self.groups_seen = len(seen)
         tooltips = [t for t in seen if t.monsters <= self.settings.max_monsters]
-        if (self.settings.max_level or self.settings.max_level_auto) and not self.no_level_limit:
+        if (self.settings.max_level or self.settings.max_level_auto) and not self.dungeon_room:
             tooltips = self._not_too_strong(frame, tooltips)
-        tooltips = self._not_at_the_top(frame, tooltips)
+        if not self.dungeon_room:
+            tooltips = self._not_at_the_top(frame, tooltips)
         self.game.recorder.save(frame.image, "groupes_z", quality=92)  # capture brute, pour réanalyse
         firsts = [points[0] for points in (hover_points(t, frame) for t in tooltips) if points]  # 1er survol prévu
         self.game.recorder.save(
@@ -620,7 +622,8 @@ class Engager:
             log.info("Aucun groupe de monstres sur la carte (d'après le jeu)")
             self.none_found = True
             return False
-        limit = self.level_limit() if (self.settings.max_level or self.settings.max_level_auto)             and not self.no_level_limit else None
+        limit = self.level_limit() if (self.settings.max_level or self.settings.max_level_auto) \
+            and not self.dungeon_room else None
         top = frame.layout.map_box[1] + frame.layout.length(TOP_GROUP_BAND)
         area = self.walk_area() if self.walk_area is not None else None
         me = net.my_grid_cell()
@@ -633,7 +636,7 @@ class Engager:
                 left.append(f"{len(levels)} monstres")
             elif limit is not None and sum(levels) > limit:
                 left.append(f"niveau {sum(levels)} (max {limit})")
-            elif frame.grid.center(cell)[1] < top:
+            elif frame.grid.center(cell)[1] < top and not self.dungeon_room:
                 left.append("tout en haut de la carte")
             elif area and cell not in area:
                 left.append("injoignable d'ici")
