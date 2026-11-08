@@ -286,11 +286,9 @@ class WisdomGear:
                      if i.position == BAG and i.template != move.gear.template]
             query = unique_query(item_name(move.gear.template), names) or None
             if not trader.offer_item(move.gear.template, 1, tab=TRADE_EQUIP_TAB, query=query):
-                recorder = getattr(giver.game, "recorder", None)
-                if recorder is not None:  # 08/11 : Pesopepe, objets repris du coffre jamais posés : à voir
-                    path = recorder.save(giver.game.look(park=False).image, "sagesse_echange_rate", lossless=True)
-                    log.info("Sagesse : échange %s -> %s raté (recherche « %s », capture : %s)", giver.name,
-                             taker.name, query, path)
+                # 08/11 : Pesopepe, objets repris du coffre jamais posés : capture de son échange
+                log.info("Sagesse : échange %s -> %s raté (recherche « %s », capture : %s)", giver.name, taker.name,
+                         query, _shot(giver.game, "sagesse_echange_rate"))
                 trader.cancel()
                 return False
             free = free_pods(taker.game.net)
@@ -314,6 +312,17 @@ class WisdomGear:
         log.info("Sagesse : %s : %s %s (%s, %+d)", move.taker, item_name(move.gear.template),
                  "équipé" if ok else "PAS équipé", move.slot, move.gear.wisdom)
         return ok
+
+
+def _shot(game, label: str) -> str | None:
+    """Capture de la fenêtre (08/11, utilisateur : « prends des screenshots des équipements qui posent problème »)."""
+    recorder = getattr(game, "recorder", None)
+    if recorder is None:
+        return None
+    try:
+        return recorder.save(game.look(park=False).image, label, lossless=True)
+    except Exception:  # capture impossible : pas de quoi arrêter
+        return None
 
 
 def equip_gear(game, template: int, positions: tuple[int, ...]) -> bool:
@@ -362,6 +371,7 @@ def equip_gear(game, template: int, positions: tuple[int, ...]) -> bool:
             if now - worn_before:
                 return True
             game.sleep(0.2)
+        log.info("%s : pas équipé d'après le serveur (capture : %s)", name, _shot(game, "sagesse_pas_equipe"))
         return False
     finally:
         close_bag_search(game, layout)
@@ -411,8 +421,8 @@ def take_gear(member, template: int) -> bool:
                 game.sleep(0.2)
             if rank + 1 < tries:
                 log.info("%s : case %d du coffre filtré : pas %s, case suivante", member.name, rank + 1, name)
-        log.warning("%s : %s pas arrivé dans le sac d'après le serveur (%d case(s) essayée(s))", member.name, name,
-                    tries)
+        log.warning("%s : %s pas arrivé dans le sac d'après le serveur (%d case(s) essayée(s), capture : %s)",
+                    member.name, name, tries, _shot(game, "sagesse_coffre_rate"))
         return False
     finally:
         close_bag_search(game, layout, CHEST_FILTER, CHEST_SEARCH)
