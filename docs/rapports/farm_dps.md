@@ -106,5 +106,5 @@ Résistance feu (la Flèche Explosive) entre parenthèses ; agressivité d'aprè
   - taverne de 5,-17 (carte 7573), Waldhary entré avant le lancement : carte pas encore annoncée par le serveur, pièce
     sombre à l'écran, soleil vu au sol en (8, 24), sorti au début du trajet, puis l'équipe rejointe ;
   - banque d'Astrub (7549), même cas : sorti dès le lancement par (8, 26), arrivé sur 7414 (commits b64ec85, 6ca6720).
-  - Premier essai (journal 135508) raté : carte inconnue au lancement (le serveur ne la redit qu'au changement de
+  - Premier essai (journal 135502) raté : carte inconnue au lancement (le serveur ne la redit qu'au changement de
     carte), d'où la recherche des soleils au sol à l'écran.
