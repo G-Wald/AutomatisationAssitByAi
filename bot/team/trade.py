@@ -120,6 +120,8 @@ def close_waiting(game, name: str) -> bool:
     joueur est déjà en échange » à chaque demande) : fermée par son « Annuler ». True si elle l'était."""
     from bot.team.bank import best_text
 
+    if not hasattr(game, "look"):
+        return False  # jeu factice des tests
     frame = game.look(park=False)
     waiting, _ = best_text(frame, "En attente de la réponse", dark=True)
     cancel, where = best_text(frame, "Annuler", dark=False)

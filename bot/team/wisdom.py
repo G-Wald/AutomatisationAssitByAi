@@ -40,6 +40,8 @@ LOGS = ROOT / "logs"
 CHEST_EQUIP_TAB = (624, 220)  # onglet équipement du coffre (capture du 11/10 : à gauche de l'onglet ressources, 702)
 TRADE_EQUIP_TAB = (1344, 186)  # onglet équipement du sac, fenêtre d'échange (à gauche des ressources, 1421)
 EQUIP_WAIT = 2.5  # s : l'objet dans son emplacement d'après le serveur
+ERROR_FOUND = 0.75  # titre « Erreur » de la fenêtre d'erreur du jeu
+ERROR_OK_FOUND = 0.8  # son bouton « Ok »
 MIN_GAIN = 3  # sagesse gagnée en dessous de laquelle un échange ne vaut pas le temps (08/11 : +1 et +2 de l'Aventurier)
 MAX_SLOT_TRIES = 3  # cases du coffre filtré essayées quand la recherche laisse d'autres objets
 
@@ -430,14 +432,26 @@ def equip_gear(game, template: int, positions: tuple[int, ...]) -> bool:
 
 def _close_error(game) -> None:
     """Fenêtre « Erreur » du jeu (08/11, Walitcoin : « Déjà équipé ! » restée ouverte, les deux recherches suivantes
-    du sac pas ouvertes) : son bouton « Ok », ou ce qui ferme, cliqué ; 3 fenêtres au plus."""
-    from bot.perception.popups import find_generic_close
+    du sac pas ouvertes) : son bouton « Ok » seulement, et seulement si le titre « Erreur » est vu. 08/11 : la
+    première version prenait n'importe quel bouton de fermeture, la croix de la fenêtre du jeu comprise : Walarbalete
+    et Elseiso déconnectés (fenêtre du jeu fermée)."""
+    from bot.perception.templates import match_template
+    from bot.team.bank import best_text
 
+    if not hasattr(game, "look"):
+        return
     for _ in range(3):
-        found = find_generic_close(game.look(park=False))
+        frame = game.look(park=False)
+        title, at = best_text(frame, "Erreur", dark=False, bold=True)
+        if title < ERROR_FOUND:
+            return
+        x, y = at
+        length = frame.layout.length
+        box = tuple(round(v) for v in (x - length(60), y, x + length(700), y + length(200)))
+        found = match_template(frame, "informations_ok.png", box=box, threshold=ERROR_OK_FOUND)
         if found is None:
             return
-        log.info("Fenêtre fermée par « %s »", found[1])
+        log.info("Fenêtre « Erreur » fermée par son « Ok »")
         game.click(found[0], (3, 3))
         game.sleep(0.4)
 
