@@ -79,3 +79,38 @@ Walarbalete était connecté avant le bot : le serveur n'envoie le sac qu'à la 
 - Le sac d'un personnage repris d'un fichier peut être faux (Enu-six : 4 clés reçues, comptées 0) : à marquer
   inconnu dès qu'un objet du serveur n'y est pas.
 - La lecture des coordonnées à l'écran a échoué en -25,-17 (« Coordonnées : -25, -17 » visible).
+
+## 08/11 soir : sagesse des soutiens équipée par le bot (`--sagesse`, bot/team/wisdom.py)
+
+Demande de l'utilisateur : « fais-le, mais le bot devrait le faire lui-même » ; captures des objets qui posent problème.
+
+- **Plan** d'après le serveur (porté et sacs avec leurs jets, sacs gardés avec leurs jets depuis ce soir : plus besoin
+  de reconnexion) et les coffres (dernier « EL » puis « EsKO », journaux lus par date) ; chaque objet une fois, le plus
+  gros gain d'abord, rien de porté par un DPS ; gains de moins de 3 écartés ; Dofus compris.
+- **Règles du jeu vues** : deux fois le même objet de panoplie refusé (« Déjà équipé ! », capture de Walitcoin ;
+  utilisateur : « pas tout, je crois que c'est les stuffs qui sont dans des panoplies » ; table IS du client : l'Anneau
+  du Sanglier y est, pas l'Alliance de Silimelle, que deux personnages portent en double) ; un même Dofus une fois.
+- **Coffres** : onglet équipement (624, 220), recherche sur un texte qui ne laisse que l'objet (« Aventurier »
+  laissait les bottes, la ceinture, l'anneau ; « Ceinture du Rat » donnait un mot vide).
+- **Échanges** : onglet équipement (1344, 186) ; une demande restée « En attente de la réponse » après une mauvaise
+  miniature est annulée (sinon « Ce joueur est déjà en échange » ensuite).
+- **Résultat** (7 passes, 17:20 à 18:26) : 38 objets équipés, chacun confirmé par le serveur (23, 9, 1, 1, 1, 0, 3). Sagesse portée :
+
+| Soutien | Avant (matin) | Après |
+|---|---|---|
+| Eldieso | +144 | +184 (Dofus compté) |
+| Elseiso | +134 | +236 (Dofus compté) |
+| Waldarch | +112 | +212 |
+| Enu-six | +0 | +159 |
+| Fourboun | +42 | +154 |
+| Pesopepe | +20 | +112 |
+| Walitcoin | +2 | +72 |
+
+- **Contrepartie** (à décider par l'utilisateur) : les Enutrofs ont quitté leurs panoplies Bouftou : Enu-six Force
+  90 -> 1, Intelligence 83 -> 4, **7 -> 6 PA** ; Pesopepe Force 30 -> 2, Intelligence 43 -> 1. Plus de sagesse (retraits,
+  XP), moins de dégâts et un PA de moins. Les bonus de panoplie ne sont pas comptés par le plan (la table IS les donne).
+- **Incident** : la première fonction « fermer la fenêtre Erreur » prenait aussi la croix de la fenêtre du jeu :
+  Walarbalete et Elseiso déconnectés (hors combat, à la banque), reconnectés par le bot. Corrigée : titre « Erreur » vu
+  et seulement son « Ok ».
+- Reste : Dofus Cawotte (+24) pour Walitcoin pas échangé (recherche de l'échange pas ouverte, capture
+  logs/20261108_182302/0001_Fourboun_sagesse_echange_rate.png).

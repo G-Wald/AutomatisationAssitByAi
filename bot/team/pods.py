@@ -113,6 +113,7 @@ def team_trip(bot, goal: tuple[int, int], why: str) -> bool:
     saved = bot.roamer, bot.engager, bot.travel_settings, bot.finished
     settings = replace(bot.travel_settings, mode="aller", destination=goal, start=None)
     log.info("%s : trajet de l'équipe jusqu'à %s,%s", why, *goal)
+    _leave_rooms(bot)
     roamer = make_roamer(bot.leader.game, settings)
     if roamer is not None and hasattr(bot, "_dispatch"):
         # 05/11 (journal 192048) : nouveau voyageur sans ces branchements, les suiveurs ne cliquaient plus les soleils ;
@@ -131,6 +132,19 @@ def team_trip(bot, goal: tuple[int, int], why: str) -> bool:
     if not arrived:
         log.warning("%s : l'équipe n'est pas toute arrivée en %s,%s", why, *goal)
     return arrived
+
+
+def _leave_rooms(bot) -> None:
+    """Avant un trajet : chacun sort de la salle intérieure où il est, par le soleil au sol (08/11, validation des
+    Blops : « Sortir du donjon » ramène devant Bibiblop, salle 11878 aux coordonnées de dehors ; banque demandée par les
+    pods de Walarbalete, trajet arrêté : « aucun chemin de -25,-17 »). Rien dehors ni sans carte annoncée."""
+    from bot.brain.building import leave_room
+
+    hide = getattr(getattr(bot, "travel_settings", None), "hide_players_key", "e")
+    for member in getattr(bot, "members", []):
+        net = getattr(getattr(member, "game", None), "net", None)
+        if net is not None and hasattr(net, "map_id"):
+            leave_room(member.game, net, hide, member.name)
 
 
 def team_zone_farm(bot, zone: tuple[int, int], enough, seconds: float, why: str) -> bool:
