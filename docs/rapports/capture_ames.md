@@ -7,6 +7,10 @@ cochée est capturée : un personnage équipé d'une pierre d'âme de niveau suf
 combat. La pierre fixe le niveau maximal capturable : si tous les monstres d'une salle sont niveau 25 sauf un de niveau
 250, il faut une pierre de 250 ou plus pour avoir une chance de capturer la salle.
 
+**Qui capture** (utilisateur, 08/11) : un ou plusieurs personnages **capteurs**, à désigner, de préférence autres que
+les DPS (la pierre remplace l'arme, ce qui peut baisser les dégâts). Un même personnage peut quand même être coché DPS
+et capteur.
+
 Pas encore codé : à reprendre quand l'utilisateur le demandera.
 
 ## Ce que dit le jeu installé (vérifié)
