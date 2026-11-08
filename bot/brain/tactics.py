@@ -42,6 +42,7 @@ class CombatSpell:
     per_target: int | None = None
     cooldown: int | None = None  # tours entre deux lancers
     damage: float = 0.0  # dégâts moyens par ennemi touché
+    element: str | None = None  # élément de sa ligne de dégâts la plus forte (neutre, terre, feu, eau, air ; 08/11)
     push: int = 0  # cases de recul données aux ennemis touchés
     # Zone des dégâts (et du recul) : (forme, taille) comme chez Solomonk — point, cercle, croix, ligne,
     # ligne_perpendiculaire, anneau, damier ; taille 0 : la cible seule (voir engine.in_zone).

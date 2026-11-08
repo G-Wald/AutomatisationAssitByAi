@@ -47,6 +47,7 @@ from functools import lru_cache
 
 import numpy as np
 
+from bot.brain.monsters import factor as resist_factor
 from bot.brain.tactics import (
     DANGER_DISTANCE,
     EMPTY_REFUSALS_LIMIT,
@@ -408,7 +409,8 @@ class _Planner:
     def __init__(self, me: Cell, pm: int, enemies: list[Cell], allies: list[Cell], spells: list[CombatSpell],
                  use: SpellUse, board: Board, weights: Weights, avoid: set[Cell], missed: set[Cell],
                  can_move: bool, move_first: bool = True, life: dict[Cell, int] | None = None,
-                 names: dict[Cell, str] | None = None, summons: frozenset[Cell] = frozenset()) -> None:
+                 names: dict[Cell, str] | None = None, summons: frozenset[Cell] = frozenset(),
+                 resist: dict[Cell, dict[str, int]] | None = None) -> None:
         self.me, self.pm = me, max(pm, 0)
         self.enemies = tuple(enemies)
         self.summon_ids = frozenset(i for i, e in enumerate(self.enemies) if e in summons)  # invocations ennemies
@@ -434,6 +436,8 @@ class _Planner:
         self.free = board.cells - board.unwalkable - board.unseen - self.allies  # où l'on peut se tenir (sans ennemis)
         life = life or {}
         self.hp = {i: life[e] for i, e in enumerate(self.enemies) if e in life}  # vie connue, par ennemi
+        resist = resist or {}
+        self.resist = {i: resist[e] for i, e in enumerate(self.enemies) if e in resist}  # résistances, par ennemi
         self.focus = min(self.hp, key=lambda i: (self.hp[i], i)) if self.hp else None  # la cible de l'équipe
         self.names = names or {}
         self.sequences = 0
@@ -589,8 +593,9 @@ class _Planner:
                 seen.add(outcome)
                 # Zone dégressive : moins de dégâts à mesure qu'on s'éloigne de la case visée.
                 strength = spell.boosted(flat, pct)
-                per_enemy = tuple((i, strength * max(0.0, 1 - self.w.zone_falloff * distance(target, positions[i])))
-                                  for i in hits)
+                # Résistances (08/11) : la part de l'élément du sort qui passe celle de chaque ennemi touché.
+                per_enemy = tuple((i, strength * max(0.0, 1 - self.w.zone_falloff * distance(target, positions[i]))
+                                   * resist_factor(self.resist.get(i), spell.element)) for i in hits)
                 damage = sum(d for _, d in per_enemy)
                 if not self.board.reliable:
                     blocked = 0  # obstacles mal connus : poussée contre un mur supposée, pas comptée
@@ -1108,7 +1113,7 @@ def plan_turn(me: Cell, pm: int, enemies: list[Cell], allies: list[Cell], spells
               board: Board, weights: Weights = Weights(), avoid: set[Cell] = frozenset(),
               missed: set[Cell] = frozenset(), can_move: bool = True, move_first: bool = True,
               life: dict[Cell, int] | None = None, names: dict[Cell, str] | None = None,
-              summons: frozenset[Cell] = frozenset()) -> TurnPlan:
+              summons: frozenset[Cell] = frozenset(), resist: dict[Cell, dict[str, int]] | None = None) -> TurnPlan:
     """Meilleur plan du tour depuis l'état actuel (voir le début du module).
 
     `pm` : PM restants ; `use` : PA restants et compteurs du tour (lancers, cibles refusées, portées mesurées,
@@ -1117,9 +1122,10 @@ def plan_turn(me: Cell, pm: int, enemies: list[Cell], allies: list[Cell], spells
     essayées ; `can_move` : faux quand le tour a déjà compté assez de déplacements (ni approche, ni repli) ;
     `move_first` : faux pour lancer d'ici sans aller ailleurs d'abord (le repli reste possible) ; `life` : vie connue
     des ennemis, par case (lue au survol) ; `names` : noms des alliés, par case (journal) ; `summons` : cases des
-    invocations ennemies, seules cibles des sorts qui ne frappent qu'elles (CombatSpell.summons_only)."""
+    invocations ennemies, seules cibles des sorts qui ne frappent qu'elles (CombatSpell.summons_only) ; `resist` :
+    résistances des ennemis, par case (élément -> %, d'après le serveur et la langue du client, brain/monsters.py)."""
     return _Planner(me, pm, enemies, allies, spells, use, board, weights, set(avoid), set(missed), can_move,
-                    move_first, life, names, frozenset(summons)).plan()
+                    move_first, life, names, frozenset(summons), resist).plan()
 
 
 def cast_blocker(spell: CombatSpell, me: Cell, target: Cell, enemies: list[Cell], allies: list[Cell], use: SpellUse,

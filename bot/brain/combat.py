@@ -1371,6 +1371,25 @@ class CombatAI:
                       ", ".join(s.name for s in self.spells if s.spell_id in greyed) or "aucun")
         self._use.greyed = greyed
 
+    def _resistances(self, enemies: list[Fighter]) -> dict[Cell, dict[str, int]]:
+        """Résistances des ennemis, par case (08/11) : modèle et grade de chaque monstre d'après le serveur (GM|+ du
+        combat), résistances de la langue du client (brain/monsters.py). {} sans écoute."""
+        from bot.brain.monsters import resistances
+
+        net = self._net() if not self._watching else None
+        if net is None:
+            return {}
+        cells = {e.cell for e in enemies}
+        out: dict[Cell, dict[str, int]] = {}
+        for who, cell, _, _ in net.fighters():
+            actor = net.actors.get(who) if who < 0 and cell in cells else None
+            if actor is None or not str(actor.name).isdigit():
+                continue
+            found = resistances(int(actor.name), getattr(actor, "grade", None))
+            if found:
+                out[cell] = found
+        return out
+
     def _plan(self, frame: Frame, me: Fighter, enemies: list[Fighter], allies: list[Fighter], pm: int,
               avoid: set[Cell] = frozenset(), missed: set[Cell] = frozenset(), can_move: bool = True,
               move_first: bool = True) -> TurnPlan:
@@ -1393,7 +1412,10 @@ class CombatAI:
         def planned(spells: list[CombatSpell], summons: frozenset[Cell] = frozenset()) -> TurnPlan:
             return plan_turn(me.cell, pm, [e.cell for e in enemies], [a.cell for a in allies], spells, self._use,
                              board, self.settings.weights, avoid=avoid, missed=missed, can_move=can_move,
-                             move_first=move_first, life=self.map.life, names=self._names, summons=summons)
+                             move_first=move_first, life=self.map.life, names=self._names, summons=summons,
+                             resist=resist)
+
+        resist = self._resistances(enemies)
 
         plan = planned(spells)
         summons = self._summon_cells() & {e.cell for e in enemies} if last_resort else frozenset()

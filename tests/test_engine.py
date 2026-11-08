@@ -931,3 +931,22 @@ def test_spells_beyond_the_visible_bar_are_left_out():
     entries = [spell.entry for spell in book.spells.values()]
     book.slots = {1: entries[0], 16: entries[1]}
     assert [s.slot for s in book.combat_spells()] == [1]
+
+
+def test_fire_arrow_aims_at_the_enemy_weak_to_fire():
+    # 08/11 (l'utilisateur : « tu prends en compte les résistances des mobs en face ? ») : deux Blops à égale distance,
+    # le Griotte résiste au feu (53 %), l'Indigo y est faible (-62 %) : la Flèche Explosive (feu) vise l'Indigo, et les
+    # dégâts prévus suivent les résistances.
+    from bot.brain.engine import plan_turn
+    from bot.brain.monsters import resistances
+
+    explosive = solomonk_spell("179", level=5)
+    assert explosive.element == "feu"
+    griotte, indigo = (6, 0), (0, 6)
+    resist = {griotte: resistances(275, 2), indigo: resistances(274, 1)}
+    turn = plan_turn((0, 0), 0, [griotte, indigo], [], [explosive], new_use(4), OPEN, Weights(), resist=resist)
+    hit = [cell for step in turn.steps if step.spell is explosive for cell in step.hits]
+    assert indigo in hit and griotte not in hit
+    alone = plan_turn((0, 0), 0, [indigo], [], [explosive], new_use(4), OPEN, Weights())
+    weak = plan_turn((0, 0), 0, [indigo], [], [explosive], new_use(4), OPEN, Weights(), resist=resist)
+    assert abs(weak.damage - alone.damage * 1.62) < 1

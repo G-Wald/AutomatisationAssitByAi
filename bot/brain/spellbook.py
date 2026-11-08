@@ -445,6 +445,7 @@ class Spell:
             per_target=level["lancers_par_cible"],
             cooldown=level["relance"],
             damage=damage,
+            element=(strongest or {}).get("element"),
             push=max((e["max"] or 0 for e in effects if e["id"] == PUSH), default=0),
             zone=(zone.get("forme") or "point", zone.get("taille") or 0),
             range_bonus=bonus["max"] if bonus else 0,

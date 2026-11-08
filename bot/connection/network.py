@@ -96,6 +96,7 @@ class Actor:
     name: str = ""
     levels: tuple[int, ...] = ()  # groupe de monstres hors combat : niveau de chacun
     team: int | None = None  # en combat : 0 ou 1 (GM|+ du combat, avant-dernier champ)
+    grade: int | None = None  # monstre en combat : son grade, 1 à 5 (« case;dir;0;id;modèle;-2;apparence;grade;... »)
 
 
 @dataclass
@@ -576,6 +577,8 @@ class ClientFeed:
             if actor.id < 0 and not fighting and len(fields) > 7 and fields[5] == "-3":
                 # Groupe de monstres sur la carte : « case;dir;0;id;modèles;-3;apparences;niveaux;... ».
                 actor.levels = tuple(int(v) for v in fields[7].split(",") if v.isdigit())
+            if actor.id < 0 and fighting and len(fields) > 7 and fields[5] == "-2" and fields[7].isdigit():
+                actor.grade = int(fields[7])  # 08/11 : résistances du monstre à ce grade (brain/monsters.py)
             if fighting:
                 tail = [f for f in fields if f != ""]
                 if len(tail) >= 2 and tail[-2] in ("0", "1"):

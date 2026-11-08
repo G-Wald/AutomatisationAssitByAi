@@ -568,3 +568,18 @@ def test_listener_health_line_for_the_session_summary():
     line = listener.health()
     assert line.startswith("1200 messages, 3 paquets renvoyés et 1 à cheval écartés (410 octets), 0 message(s)")
     assert "plus rien du serveur pour Pesopepe" in line and "Fourboun" not in line
+
+
+def test_monster_template_and_grade_read_in_a_fight():
+    # 08/11 : résistances des monstres (brain/monsters.py) d'après leur modèle et leur grade, donnés par le serveur au
+    # début du combat (« case;dir;0;id;modèle;-2;apparence;grade;... », journal 103434 : Biblop Griotte 280 grade 2).
+    from bot.brain.monsters import resistances
+
+    feed = ClientFeed("Waldhary-[Gal]")
+    feed.feed("BN")
+    feed.feed("GJK2|0|1|0|45000|4")
+    feed.feed("GM|+270;1;0;-1;280;-2;1177^95;2;-1;-1;-1;0,0,0,0;95;5;4;;1;95|+285;1;0;-2;275;-2;1172^90;1;-1;-1;-1;"
+              "0,0,0,0;330;6;4;;1;330")
+    assert (feed.actors[-1].name, feed.actors[-1].grade) == ("280", 2)
+    assert (feed.actors[-2].name, feed.actors[-2].grade) == ("275", 1)
+    assert resistances(275, 1)["feu"] == 50 and resistances(275, 1)["eau"] == -62  # Blop Griotte
