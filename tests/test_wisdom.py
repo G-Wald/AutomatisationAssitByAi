@@ -76,3 +76,4 @@ def test_never_the_same_ring_twice():
     # la Silimelle dans l'emplacement libre ; le Sanglier +10 remplace le +8 (même emplacement), jamais les deux
     assert [m.gear.template for m in moves].count(sanglier) <= 1
     assert any(uid == 3 for uid, _ in rings)
+

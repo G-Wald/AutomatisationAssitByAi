@@ -183,13 +183,17 @@ def chest_contents(names: list[str], logs: Path = LOGS) -> dict[str, list[Gear]]
     return out
 
 
-def team_gear(members) -> tuple[dict[str, int], list[Gear], list[str]]:
-    """(niveau de chacun, objets portés et des sacs d'après le serveur, noms dont le sac est inconnu)."""
+def team_gear(members, settings: dict | None = None) -> tuple[dict[str, int], list[Gear], list[str]]:
+    """(niveau de chacun, objets portés et des sacs d'après le serveur, noms dont le sac est inconnu). Niveaux : le
+    groupe d'après le serveur (PM+), à défaut ceux retenus (data/personnages, 08/11 : sans reconnexion, PM+ pas
+    renvoyé, niveaux 0 et rien de prévu)."""
     from bot.brain.inventory import BAG
+    from bot.team.member import load_level
 
-    known: dict[str, int] = {}
+    known: dict[str, int] = {m.name: load_level(settings, m.name) or 0 for m in members} if settings else {}
     for member in members:  # niveaux du groupe d'après le serveur (PM+, comme DungeonFarm._levels)
-        known.update(getattr(getattr(member.game, "net", None), "group_levels", None) or {})
+        known.update({k: v for k, v in (getattr(getattr(member.game, "net", None), "group_levels", None) or {}).items()
+                      if v})
     levels, gear, unknown = {}, [], []
     for member in members:
         net = getattr(member.game, "net", None)
@@ -218,7 +222,7 @@ class WisdomGear:
     def plan(self) -> list[Move] | None:
         from bot.brain.inventory import item_name
 
-        levels, gear, unknown = team_gear(self.members)
+        levels, gear, unknown = team_gear(self.members, getattr(self.bot, "_settings", None))
         if unknown:
             log.warning("Sagesse : sac de %s inconnu (connecté avant le bot) : relancer avec --connexion pour le lire",
                         ", ".join(unknown))
@@ -238,6 +242,13 @@ class WisdomGear:
 
     def run(self) -> int:
         """Objets équipés (confirmés par le serveur) ; 0 si rien à faire ou plan impossible."""
+        from bot.brain.travel import escape_menu
+
+        for member in self.members:
+            # 08/11 (capture de Walitcoin) : fenêtre « Erreur » et inventaire restés ouverts d'un lancement d'avant ;
+            # porte de la banque, recherches et échanges ratés ensuite.
+            _close_error(member.game)
+            escape_menu(member.game)
         moves = self.plan()
         if not moves:
             log.info("Sagesse : rien à changer")
