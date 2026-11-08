@@ -373,23 +373,24 @@ def _live_net(member):
 def told_outside(member) -> bool:
     """Le serveur dit que ce personnage n'est dans aucun bâtiment (08/11 : l'écran sombre d'une taverne n'est pas la
     banque). False sans écoute ou carte pas encore annoncée (l'écran décide, comme avant)."""
-    from bot.brain.building import is_building
+    from bot.brain.building import indoors
 
-    net = _live_net(member)
-    return net is not None and not is_building(net.map_id)
+    net = getattr(member.game, "net", None)
+    return net is not None and net.alive() and not indoors(member.game, net)
 
 
 def leave_buildings(members, hide_key: str = "", banking: bool = False) -> list[str]:
     """Au lancement (08/11) : chacun de ceux qui sont dans un bâtiment d'après le serveur en sort, par ses soleils
     (brain/building.py) ; la banque d'Astrub par sa sortie connue (BankVisit.leave), sauf en mode banque (--banque :
     la visite s'en charge). Noms de ceux qui sont restés dedans."""
-    from bot.brain.building import is_building, leave_building
+    from bot.brain.building import indoors, leave_building
 
     stuck = []
     bank = []
     for member in members:
-        net = _live_net(member)
-        if net is None or not is_building(net.map_id):
+        net = getattr(member.game, "net", None)
+        net = net if net is not None and net.alive() else None
+        if net is None or not indoors(member.game, net):
             continue
         if net.map_id == BANK_INSIDE:
             if not banking:

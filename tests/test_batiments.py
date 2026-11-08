@@ -58,9 +58,23 @@ def test_leave_through_the_nearest_sun_then_the_next_room(monkeypatch):
 
 def test_room_without_known_exit_is_a_failure(monkeypatch):
     monkeypatch.setattr(building, "current_map", lambda net: None)  # clé pas encore entendue
+    monkeypatch.setattr(building, "_screen_suns", lambda game: [])  # et aucun soleil vu à l'écran
     net = Net({})
     assert not building.leave_building(Game(net), net)
     assert net.clicked == []
+
+
+def test_map_not_yet_announced_dark_room_left_by_a_sun_seen_on_screen(monkeypatch):
+    # 08/11 : Waldhary entré dans la taverne avant que le bot écoute ; le serveur ne redit la carte qu'au changement
+    # suivant. Pièce sombre à l'écran : bâtiment ; sortie par un soleil vu au sol, la carte d'arrivée est annoncée.
+    import bot.team.bank as bank
+
+    monkeypatch.setattr(bank, "dark_share", lambda frame: 0.5)
+    monkeypatch.setattr(building, "_screen_suns", lambda game: [(8, 24)])
+    net = Net({(None, (8, 24)): 7429})
+    net.map_id = None
+    assert building.leave_building(Game(net), net, "e", "Waldhary-[Gal]")
+    assert net.map_id == 7429 and net.clicked == [(8, 24)]
 
 
 def test_bank_exit_is_a_ground_sun_of_the_client_map():
@@ -74,3 +88,12 @@ def test_bank_exit_is_a_ground_sun_of_the_client_map():
     if data is None:
         pytest.skip("carte du client ou clé de la banque absente")
     assert data.suns == frozenset({(8, 26)})
+
+
+def test_floor_suns_of_the_tavern_seen_on_screen():
+    # Capture du 07/11 (Waldhary dans la taverne de 5,-17, carte 7573) : sorties au sol vues à l'écran, parmi celles de la
+    # carte du client ((8, 24), (9, 25), (21, 23), (22, 22), (6, 10)).
+    from bot.perception.exits import find_floor_suns
+
+    cells = {exit_.cell for exit_ in find_floor_suns(load_frame("batiment_taverne_5_-17"))}
+    assert cells and cells <= {(8, 24), (9, 25), (21, 23), (22, 22), (6, 10)}

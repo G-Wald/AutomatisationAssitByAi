@@ -122,6 +122,35 @@ def find_suns(frame: Frame, every: bool = False) -> list[Exit]:
     return _clusters_per_side(found) if every else _best_per_side(found)
 
 
+FLOOR_SUN_MIN = 0.7  # au sol, toute la pièce est regardée : plus strict qu'au bord (banque : un faux à 0,51, le vrai 0,87)
+
+
+def find_floor_suns(frame: Frame) -> list[Exit]:
+    """Soleils au sol, sur toutes les cases (08/11 : sorties d'un bâtiment, au milieu de la pièce ; find_suns ne regarde
+    que le bord de la carte). Un par groupe de cases voisines, du plus sûr au moins sûr ; côté « sol »."""
+    mask = cv2.GaussianBlur(sun_mask(frame.image), (3, 3), 0)
+    template = _sun_template()
+    s = frame.layout.scale
+    if abs(s - 1) > 0.02:
+        template = cv2.resize(template, None, fx=s, fy=s, interpolation=cv2.INTER_AREA)
+    th, tw = template.shape
+    found = []
+    for cell in frame.grid.cells():
+        cx, cy = frame.grid.center(cell)
+        x0, y0 = round(cx - tw / 2 - 6 * s), round(cy - th / 2 - 6 * s)
+        window = mask[max(0, y0) : y0 + th + round(12 * s), max(0, x0) : x0 + tw + round(12 * s)]
+        if window.shape[0] < th or window.shape[1] < tw or window.max() == 0:
+            continue
+        score = float(cv2.matchTemplate(window, template, cv2.TM_CCOEFF_NORMED).max())
+        if score >= FLOOR_SUN_MIN:
+            found.append(Exit("sol", cell, (round(cx), round(cy)), score))
+    kept: list[Exit] = []
+    for exit_ in sorted(found, key=lambda e: e.score, reverse=True):
+        if not any(distance(k.cell, exit_.cell) <= SAME_SUN for k in kept):
+            kept.append(exit_)
+    return kept
+
+
 def _outline_at(bright: np.ndarray, frame: Frame, cell: Cell) -> tuple[float, tuple[float, float]]:
     """Meilleur contour de la case (décalée jusqu'à OUTLINE_SHIFT_MAX demi-hauteur) : score, et centre du losange."""
     cx, cy = frame.grid.center(cell)

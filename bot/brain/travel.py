@@ -2056,11 +2056,11 @@ class Journey:
 
     def _leave_building(self) -> bool:
         """Dans un bâtiment d'après le serveur : en sortir (True s'il a fallu sortir et que c'est fait)."""
-        from bot.brain.building import is_building, leave_building
+        from bot.brain.building import indoors, leave_building
 
         game = getattr(self.traveler, "game", None)
         net = getattr(game, "net", None)
-        if net is None or not net.alive() or not is_building(getattr(net, "map_id", None)):
+        if net is None or not net.alive() or not indoors(game, net):
             return False
         hide = getattr(self.traveler.settings, "hide_players_key", "") or ""
         name = getattr(getattr(game, "window", None), "title", "").split(" - ")[0]

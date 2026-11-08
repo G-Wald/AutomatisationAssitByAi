@@ -61,21 +61,40 @@ def is_building(map_id: int | None) -> bool:
     return info.get("sous_zone") in _outdoor_zones().get((info["x"], info["y"]), set())
 
 
+def indoors(game, net) -> bool:
+    """Dans un bâtiment : d'après le serveur (carte annoncée) ; carte pas encore annoncée (08/11 : personnage entré
+    avant que le bot écoute, le serveur ne redit la carte qu'au changement suivant) : fond noir autour de la pièce."""
+    map_id = getattr(net, "map_id", None) if net is not None else None
+    if map_id is not None:
+        return is_building(map_id)
+    from bot.team.bank import INDOOR_DARK, dark_share
+
+    return dark_share(game.look(park=False)) >= INDOOR_DARK
+
+
+def _screen_suns(game) -> list:
+    from bot.perception.exits import find_floor_suns
+
+    return [exit_.cell for exit_ in find_floor_suns(game.look(park=False))]
+
+
 def leave_building(game, net, hide_key: str = "e", name: str = "") -> bool:
     """Le personnage de `game` (écoute `net`) sort du bâtiment où il est. True s'il est dehors (ou n'était pas dans un
-    bâtiment) ; False si une pièce n'a pas de soleil connu, ou si aucun soleil n'a mené ailleurs."""
-    taken: set[tuple[int, tuple[int, int]]] = set()
+    bâtiment) ; False si une pièce n'a ni soleil connu ni soleil vu à l'écran, ou si aucun soleil n'a mené ailleurs.
+    Carte pas encore annoncée : soleils cherchés à l'écran ; la carte d'arrivée, elle, est annoncée."""
+    taken: set[tuple[int | None, tuple[int, int]]] = set()
     for _ in range(MAX_MAPS):
         map_id = getattr(net, "map_id", None)
-        if not is_building(map_id):
+        if not indoors(game, net):
             return True
-        data = current_map(net)
-        if data is None or not data.suns:
-            log.warning("%s : dans le bâtiment (carte %s), sorties inconnues (carte du client pas déchiffrée)", name,
-                        map_id)
+        data = current_map(net) if map_id is not None else None
+        cells = set(data.suns) if data is not None and data.suns else set(_screen_suns(game))
+        if not cells:
+            log.warning("%s : dans un bâtiment (carte %s), aucune sortie connue ni vue à l'écran", name,
+                        map_id if map_id is not None else "pas encore annoncée")
             return False
         me = net.my_grid_cell() if hasattr(net, "my_grid_cell") else None
-        suns = sorted((s for s in data.suns if (map_id, s) not in taken),
+        suns = sorted((s for s in cells if (map_id, s) not in taken),
                       key=lambda s: (distance(me, s) if me else 0, s))
         moved = False
         for sun in suns[:SUN_TRIES]:
@@ -92,7 +111,7 @@ def leave_building(game, net, hide_key: str = "e", name: str = "") -> bool:
         if not moved:
             log.warning("%s : aucun soleil de la carte %s n'a mené ailleurs", name, map_id)
             return False
-    outside = not is_building(getattr(net, "map_id", None))
+    outside = not indoors(game, net)
     log.info("%s : %s", name, "sorti du bâtiment" if outside else f"toujours dedans après {MAX_MAPS} pièces")
     return outside
 
