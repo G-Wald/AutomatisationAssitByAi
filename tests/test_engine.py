@@ -1011,3 +1011,16 @@ def test_support_never_gives_a_stat_boost_of_another_element():
         support = Support({dps: (22.0, 4.0, element)}, {})
         turn = plan_turn((1, 1), 0, [weak], [dps], [chance], new_use(6), OPEN, Weights(), support=support)
         assert any(step.cell == dps for step in turn.steps) is aimed, element
+
+
+def test_nobody_ends_the_turn_in_reach_of_a_gloutoblop():
+    # 08/11 (salle 6 des Blops) : Walarbalete avance de 5 PM pour taper, avalé au tour des monstres. Un monstre
+    # dangereux (menace 3) à 6 cases ou moins de la case de fin : lourde pénalité, même pour un DPS (helper=False).
+    from bot.brain.engine import Support
+
+    glouton = (0, 8)
+    far = plan_turn((0, 0), 3, [glouton], [], [MAGIQUE], new_use(6), OPEN, Weights(),
+                    support=Support({}, {glouton: 3.0}, helper=False))
+    end = lambda turn: [s.cell for s in turn.steps if s.kind in (MOVE, RETREAT)][-1:] or [(0, 0)]  # noqa: E731
+    assert distance(end(far)[0], glouton) > 6
+    assert any(s.kind == CAST for s in far.steps)  # il tape quand même, de loin

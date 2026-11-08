@@ -1403,9 +1403,8 @@ class CombatAI:
     def _support(self, enemies: list[Fighter]) -> Support | None:
         """Mode soutien (08/11, l'utilisateur : les autres que les DPS boostent les DPS et ralentissent les ennemis) : les
         DPS du combat par case (d'après le serveur : `_names`), avec la base des dégâts de leur meilleure attaque et
-        leurs coups par tour, et la menace de chaque ennemi (brain/monsters.py). None sans DPS désigné ou si j'en suis."""
-        if not self.support_of:
-            return None
+        leurs coups par tour, et la menace de chaque ennemi (brain/monsters.py), qui vaut pour tous (DPS compris : ne
+        pas finir à portée d'un Gloutoblop). None sans soutien ni monstre dangereux."""
         dps = {}
         for cell, name in self._names.items():
             other = self.support_of.get(name)
@@ -1421,7 +1420,9 @@ class CombatAI:
                 actor = net.actors.get(who) if who < 0 and cell in cells else None
                 if actor is not None and str(actor.name).isdigit() and monster_threat(int(actor.name)) != 1.0:
                     threat[cell] = monster_threat(int(actor.name))
-        return Support(dps, threat)
+        if not self.support_of and not threat:
+            return None
+        return Support(dps, threat, helper=bool(self.support_of))
 
     def _plan(self, frame: Frame, me: Fighter, enemies: list[Fighter], allies: list[Fighter], pm: int,
               avoid: set[Cell] = frozenset(), missed: set[Cell] = frozenset(), can_move: bool = True,

@@ -160,6 +160,12 @@ SLOW_PM = 5.0
 SLOW_PA = 6.0
 SUPPORT_SHARE = 0.5
 DPS_HITS = 4.0  # coups du DPS par tour touchés par un bonus (2 lancers, 2 ennemis par zone)
+# Monstre dangereux (menace > 1 : Gloutoblop) à THREAT_REACH cases ou moins de la case où je finis : -THREAT_NEAR fois
+# (menace - 1), pour tous, DPS compris. 08/11 (journal 160415, salle 6 des Blops, 4 Gloutoblops) : Walarbalete avance
+# de 5 PM pour deux Flèches Explosives, mort au tour des monstres (Eldieso aussi) ; 14 min de repos ensuite. Le
+# Gloutoblop a 4 PM et attire en ligne : à 6 cases, il arrive au contact.
+THREAT_NEAR = 150.0
+THREAT_REACH = 6
 ZONE_SEARCH = 4  # cases vides visées par une zone : à 4 cases au plus d'un ennemi (au-delà, viser l'ennemi suffit)
 EPSILON = 1e-6
 
@@ -191,6 +197,7 @@ class Weights:
     slow_pm: float = SLOW_PM
     slow_pa: float = SLOW_PA
     support_share: float = SUPPORT_SHARE
+    threat_near: float = THREAT_NEAR
 
 
 @dataclass(frozen=True)
@@ -200,6 +207,7 @@ class Support:
 
     dps: dict[Cell, tuple[float, float, str | None]] = field(default_factory=dict)  # (base, coups, élément)
     threat: dict[Cell, float] = field(default_factory=dict)
+    helper: bool = True  # je soutiens (bonus sur les DPS, ralentir) ; False : seulement la menace (un DPS, 08/11)
 
 
 @dataclass(frozen=True)
@@ -441,7 +449,7 @@ class _Planner:
                  names: dict[Cell, str] | None = None, summons: frozenset[Cell] = frozenset(),
                  resist: dict[Cell, dict[str, int]] | None = None, support: Support | None = None) -> None:
         self.me, self.pm = me, max(pm, 0)
-        self.support = support  # mode soutien (08/11) : bonus sur les DPS, ennemis ralentis
+        self.support = support if support is not None and support.helper else None  # mode soutien (08/11)
         self.enemies = tuple(enemies)
         self.summon_ids = frozenset(i for i, e in enumerate(self.enemies) if e in summons)  # invocations ennemies
         self.allies = frozenset(allies)
@@ -470,6 +478,7 @@ class _Planner:
         self.resist = {i: resist[e] for i, e in enumerate(self.enemies) if e in resist}  # résistances, par ennemi
         threat = support.threat if support is not None else {}
         self.threat = {i: threat.get(e, 1.0) for i, e in enumerate(self.enemies)}  # menace, par ennemi
+        self.dangerous = tuple((e, self.threat[i]) for i, e in enumerate(self.enemies) if self.threat[i] > 1.0)
         self.focus = min(self.hp, key=lambda i: (self.hp[i], i)) if self.hp else None  # la cible de l'équipe
         self.names = names or {}
         self.sequences = 0
@@ -890,6 +899,8 @@ class _Planner:
             value = -self.w.contact if self._nearest(cell, positions) <= 1 else 0.0
             value -= self.w.next_turn * self._steps_to_hit(cell, positions)
             value += self.w.safe * min(self._nearest(cell, self.enemies), self.safe_cap)
+            value -= sum(self.w.threat_near * (t - 1) for e, t in self.dangerous
+                         if e in positions and distance(cell, e) <= THREAT_REACH)
             self._state_cache[key] = value + self._team(cell, positions).value
         return self._state_cache[key]
 
