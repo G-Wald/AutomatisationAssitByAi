@@ -129,9 +129,9 @@ def find_text(frame: Frame, box: tuple[int, int, int, int], wanted: str, zoom: f
     if crop.size == 0:
         return None
     lines = ocr_boxes(cv2.resize(crop, None, fx=zoom, fy=zoom, interpolation=cv2.INTER_CUBIC)) or []
-    target = _plain(wanted).strip(" .•")
+    target = _alike(_plain(wanted).strip(" .•"))
     for text, (a, b, c, d) in lines:
-        line = _plain(text).strip(" .•")
+        line = _alike(_plain(text).strip(" .•"))
         if line == target if exact else target in line:
             return round(x0 + (a + c) / 2 / zoom), round(y0 + (b + d) / 2 / zoom)
     return None
@@ -215,6 +215,15 @@ def join_refused(frame: Frame) -> bool:
 # Windows : les noms et sorts sont bien lus, les chiffres verts des dégâts non (inutiles ici).
 COMBAT_PANE = (36, 388)  # px de référence : haut et bas de la zone du haut du chat (au-dessus du séparateur)
 COMBAT_LINES_HEIGHT = 120  # px de référence : ses dernières lignes, les seules lues
+
+
+# Lettres que l'OCR confond (08/11, bulle de Bibiblop : « Choisir la salle du BIOP Indigo Royal ») : ramenées à une
+# seule des deux côtés de la comparaison.
+ALIKE = str.maketrans({"i": "l", "1": "l", "|": "l"})
+
+
+def _alike(text: str) -> str:
+    return text.translate(ALIKE)
 
 
 def _plain(text: str) -> str:

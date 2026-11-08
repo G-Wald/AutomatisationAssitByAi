@@ -1019,3 +1019,30 @@ def test_choice_npc_talked_to_by_everyone_and_retried_once(monkeypatch):
     assert entry.choose()
     assert talks == [("A", (5, 13), spec.choice_reply), ("B", (5, 13), spec.choice_reply),
                      ("B", (5, 13), spec.choice_reply)]
+
+
+def test_choice_reply_found_although_the_ocr_reads_blop_as_biop(monkeypatch):
+    # 08/11 (journal 160415) : « Choisir la salle du BIOP Indigo Royal » lu dans la bulle de Bibiblop, 8 sur 8 pas
+    # passés : l et I (et 1, |) confondus des deux côtés.
+    from bot.perception import chat
+
+    frame = load_frame(OUTSIDE)
+    monkeypatch.setattr(chat, "ocr_boxes", lambda image: [("Choisir la salle du BIOP Coco Royal", (0, 0, 10, 10)),
+                                                          ("Choisir la salle du BIOP Indigo Royal", (0, 40, 10, 50))])
+    found = chat.find_text(frame, (0, 0, 400, 400), "Choisir la salle du Blop Indigo Royal", exact=True)
+    assert found == (2, 22)
+    assert chat.find_text(frame, (0, 0, 400, 400), "Choisir la salle du Blop Griotte Royal", exact=True) is None
+
+
+def test_resume_at_the_choice_room(monkeypatch):
+    from types import SimpleNamespace
+
+    from bot.team.dungeon import DungeonFarm
+
+    steps = []
+    farm = DungeonFarm(SimpleNamespace(members=[], leader=None, _settings={}), load_dungeons()["blops"], 1)
+    monkeypatch.setattr(farm, "_close_windows", lambda: None)
+    monkeypatch.setattr(farm, "_fight_rooms", lambda first=1, last=None: steps.append(("salles", first, last)) or True)
+    monkeypatch.setattr(farm.entry, "choose", lambda: steps.append("choix") or True)
+    monkeypatch.setattr(farm.entry, "leave", lambda: steps.append("sortie") or True)
+    assert farm.run(start="choix") == 1 and steps == ["choix", ("salles", 8, None), "sortie"]

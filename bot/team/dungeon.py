@@ -366,6 +366,8 @@ class DungeonEntry:
             log.warning("Donjon : %s : salle du choix pas décrite (choix_pnj, choix_reponse)", spec.name)
             return False
         log.info("Donjon : salle du choix : « %s » pour toute l'équipe", spec.choice_reply)
+        for member in self.members:  # bulle restée ouverte (reprise après un arrêt devant le PNJ)
+            self._close_bubble(member)
         stuck = [m for m in self.members
                  if not self._talk(m, spec.choice_npc, spec.choice_reply, "left", "n'a pas changé de salle")]
         for member in list(stuck):
@@ -847,7 +849,7 @@ class DungeonFarm:
         « salles » pour l'équipe déjà passée, aux combats de la salle `room` ; sans : chacun situé (DungeonEntry.enter).
         Avec donjon.cles : clés réparties d'abord, et passages ramenés à ceux que les clés permettent (self.runs)."""
         if self.keys.enabled:
-            if start == "salles":
+            if start in ("salles", "choix"):
                 log.info("Clés : l'équipe déjà dans les salles, pas de répartition des clés")
             else:
                 passes = self.keys.prepare(self.spec.name, self.runs)
@@ -876,12 +878,12 @@ class DungeonFarm:
         estimate = PASS_ESTIMATE
         while done < self.runs:
             run = done + 1
-            if self.keys.enabled and start != "salles" and self._keys_left <= 0:
+            if self.keys.enabled and start not in ("salles", "choix") and self._keys_left <= 0:
                 self._keys_left = self._refill(deadline, min(self.farm_passes, self.runs - done))
                 if self._keys_left <= 0:
                     break
                 self._progress("clés refaites")
-            resuming = run == 1 and start == "salles"  # reprise dans les salles : l'équipe y est, à finir
+            resuming = run == 1 and start in ("salles", "choix")  # reprise dans les salles : l'équipe y est
             if deadline is not None and not resuming and time.monotonic() + estimate > deadline:
                 # 06/11 : --minutes n'arrête plus l'équipe au milieu d'un passage (dans les salles, clé donnée) ; pas de
                 # nouveau passage sans le temps de le finir (durée du précédent, PASS_ESTIMATE pour le premier).
@@ -959,8 +961,9 @@ class DungeonFarm:
     def _one_pass(self, run: int, start: str | None, only: set[str] | None, room: int) -> bool:
         """Un passage : entrée (ou reprise), salles, sortie. False dès qu'une étape échoue."""
         self._close_windows()
-        if run == 1 and start == "salles":
-            log.info("Donjon : l'équipe déjà dans les salles, je reprends aux combats")
+        if run == 1 and start in ("salles", "choix"):
+            log.info("Donjon : l'équipe déjà dans les salles, je reprends %s",
+                     "à la salle du choix" if start == "choix" else "aux combats")
         elif not self._pods_ready():  # équipe dehors : pods vus avant d'entrer (team/pods.py)
             return False
         elif (run > 1 or start is None) and not self._back_to_entrance():
@@ -971,9 +974,10 @@ class DungeonFarm:
             self._progress("équipe entrée dans le donjon")
         first = room if run == 1 and start == "salles" else 1
         choice = self.spec.choice_after
-        if choice and first <= choice:
+        at_choice = run == 1 and start == "choix"  # « --donjon blops:choix » : l'équipe devant le PNJ du choix
+        if choice and (first <= choice or at_choice):
             # 08/11, Blops : les salles d'avant le choix, le PNJ du choix, puis les salles d'après (le Blop royal).
-            if not self._fight_rooms(first, choice):
+            if not at_choice and not self._fight_rooms(first, choice):
                 return False
             self._close_windows()
             if not self.entry.choose():
