@@ -44,3 +44,13 @@ def test_chest_contents_from_the_last_el_of_the_journals(tmp_path):
     assert [(g.template, g.wisdom, g.place) for g in chests["Enu-six-[Gal]"]] == [(0x137, 0, "coffre"),
                                                                                   (0x17d, 20, "coffre")]
     assert chests["Pesopepe"] == []
+
+
+def test_chest_search_text_left_only_by_the_wanted_item():
+    from bot.team.wisdom import unique_query
+
+    others = ["Bottes de l'Aventurier", "Ceinture de l'aventurier", "Anneau de l'Aventurier", "Amulette de la Boule"]
+    query = unique_query("Amulette de l'Aventurier", others)  # rien de seul : « Amulette de l » prend aussi la Boule
+    assert query and "'" not in query and sum(query.lower() in o.lower() for o in others) == 1
+    assert unique_query("Bottes de l'Aventurier", ["Bottes Paysannes", "Ceinture du Rat"]) == "Bottes de l"
+    assert unique_query("Ceinture du Rat", ["Ceinture du Prespic"]) == "Ceinture du Rat"

@@ -31,7 +31,8 @@ def save(name: str, net, folder: Path = FOLDER) -> bool:
     """Écrit le sac connu de `name` s'il a changé depuis la dernière écriture ; True s'il a été écrit."""
     if net is None or not getattr(net, "inventory", None) or not net.inventory.known:
         return False
-    items = [[i.uid, i.template, i.quantity, i.position] for i in net.items()]
+    # 08/11 : les jets (effets) aussi, pour la sagesse des soutiens (team/wisdom.py) sans reconnexion
+    items = [[i.uid, i.template, i.quantity, i.position, i.effects] for i in net.items()]
     pods = list(net.pods) if getattr(net, "pods", None) else None
     if getattr(net, "_saved_items", None) == items and getattr(net, "_saved_pods", None) == pods:
         return False  # rien de changé depuis la dernière écriture
@@ -72,10 +73,12 @@ def restore(name: str, net, folder: Path = FOLDER) -> bool:
     with net._lock:
         if net.inventory.known:  # la connexion est arrivée entre-temps
             return False
-        net.inventory.items = {uid: Item(uid, template, quantity, position)
-                               for uid, template, quantity, position in record.get("objets", [])}
+        rows = record.get("objets", [])
+        net.inventory.items = {row[0]: Item(row[0], row[1], row[2], row[3], row[4] if len(row) > 4 else "")
+                               for row in rows}
         net.inventory.known = True
-        net.inventory.restored = True  # sans les jets des objets (08/11, team/wisdom.py)
+        # Sans les jets (fichier d'avant le 08/11) : la sagesse n'y est pas lisible (team/wisdom.py)
+        net.inventory.restored = not rows or any(len(row) < 5 for row in rows)
         if not net.pods and record.get("pods"):
             net.pods = tuple(record["pods"])
     log.info("Possessions de %s reprises de la session du %s (%d objets) : à jour à la prochaine connexion", name,

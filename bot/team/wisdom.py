@@ -40,6 +40,7 @@ LOGS = ROOT / "logs"
 CHEST_EQUIP_TAB = (624, 220)  # onglet équipement du coffre (capture du 11/10 : à gauche de l'onglet ressources, 702)
 TRADE_EQUIP_TAB = (1344, 186)  # onglet équipement du sac, fenêtre d'échange (à gauche des ressources, 1421)
 EQUIP_WAIT = 2.5  # s : l'objet dans son emplacement d'après le serveur
+MAX_SLOT_TRIES = 3  # cases du coffre filtré essayées quand la recherche laisse d'autres objets
 
 
 @dataclass(eq=False)
@@ -279,7 +280,17 @@ class WisdomGear:
         if not trader.open():
             return False
         try:
-            if not trader.offer_item(move.gear.template, 1, tab=TRADE_EQUIP_TAB):
+            from bot.brain.inventory import BAG
+
+            names = [item_name(i.template) for i in giver.game.net.items()
+                     if i.position == BAG and i.template != move.gear.template]
+            query = unique_query(item_name(move.gear.template), names) or None
+            if not trader.offer_item(move.gear.template, 1, tab=TRADE_EQUIP_TAB, query=query):
+                recorder = getattr(giver.game, "recorder", None)
+                if recorder is not None:  # 08/11 : Pesopepe, objets repris du coffre jamais posés : à voir
+                    path = recorder.save(giver.game.look(park=False).image, "sagesse_echange_rate", lossless=True)
+                    log.info("Sagesse : échange %s -> %s raté (recherche « %s », capture : %s)", giver.name,
+                             taker.name, query, path)
                 trader.cancel()
                 return False
             free = free_pods(taker.game.net)
@@ -337,7 +348,9 @@ def equip_gear(game, template: int, positions: tuple[int, ...]) -> bool:
         return False
     layout = frame.layout
     try:
-        if not search_bag(game, layout, name):
+        # Texte qui ne laisse que cet objet dans le sac (« aventurier » laisserait aussi les bottes, la ceinture...)
+        others = [item_name(i.template) for i in net.items() if i.position == IN_BAG and i.template != template]
+        if not search_bag(game, layout, unique_query(name, others) or name):
             log.info("%s : recherche du sac pas faite : pas de double-clic", name)
             return False
         game.wheel(layout.point(*BAG), -BAG_TOP)
@@ -374,20 +387,59 @@ def take_gear(member, template: int) -> bool:
     layout = game.look(park=False).layout
     game.click(layout.point(*CHEST_EQUIP_TAB), (5, 5))
     game.sleep(0.6)
-    words = search_word(name)
+    exchange, _ = net.trade()
+    others = [item_name(model) for model, _ in (exchange.storage.values() if exchange is not None else [])
+              if model != template]
+    words = unique_query(name, others) or search_word(name)
     if not words or not search_bag(game, layout, words, CHEST_FILTER, CHEST_SEARCH):
         log.info("%s : recherche du coffre sur « %s » pas faite : %s laissé", member.name, words, name)
         return False
+    # Recherche qui laisse aussi d'autres objets (« Amulette de l » : l'Amulette de la Boule aussi) : les cases
+    # suivantes essayées, chaque objet arrivé vérifié par le serveur (un autre objet repris reste dans le sac).
+    plain = words.lower()
+    tries = min(MAX_SLOT_TRIES, 1 + sum(plain in o.lower() for o in others))
+    from bot.team.bank import CHEST_COLUMNS, CHEST_STEP, grid_point
+
     try:
-        game.double_click(layout.point(*CHEST_FIRST_STACK), (3, 3))
-        deadline = time.monotonic() + CHEST_WAIT
-        while time.monotonic() < deadline:
-            if (net.held(template) or 0) > held:
-                log.info("%s : %s repris du coffre", member.name, name)
-                return True
-            game.sleep(0.2)
-        log.warning("%s : %s pas arrivé dans le sac d'après le serveur (autre objet en première case ?)", member.name,
-                    name)
+        for rank in range(tries):
+            game.double_click(layout.point(*grid_point(CHEST_FIRST_STACK, rank, CHEST_STEP, CHEST_COLUMNS)), (3, 3))
+            deadline = time.monotonic() + CHEST_WAIT
+            while time.monotonic() < deadline:
+                if (net.held(template) or 0) > held:
+                    log.info("%s : %s repris du coffre", member.name, name)
+                    return True
+                game.sleep(0.2)
+            if rank + 1 < tries:
+                log.info("%s : case %d du coffre filtré : pas %s, case suivante", member.name, rank + 1, name)
+        log.warning("%s : %s pas arrivé dans le sac d'après le serveur (%d case(s) essayée(s))", member.name, name,
+                    tries)
         return False
     finally:
         close_bag_search(game, layout, CHEST_FILTER, CHEST_SEARCH)
+
+
+def unique_query(name: str, others: list[str]) -> str:
+    """Texte à taper dans la recherche du coffre pour ne laisser que `name` (08/11 : « Aventurier » laissait aussi les
+    bottes, la ceinture et l'anneau de l'Aventurier ; « Ceinture du Rat » donnait un mot vide) : morceaux du nom sans
+    apostrophe ni accent (ils ne se tapent pas en arrière-plan), de 3 lettres ou plus ; celui que le moins d'autres
+    objets du coffre contiennent, le plus long à égalité. "" sans morceau utilisable."""
+    import unicodedata
+
+    def plain(text: str) -> str:
+        text = unicodedata.normalize("NFKD", text)
+        return "".join(c for c in text if not unicodedata.combining(c)).lower()
+
+    runs = [r.strip() for r in re.split(r"[’'-￿]", name) if r.strip()]
+    pieces = set()
+    for run in runs:
+        words = run.split()
+        for i in range(len(words)):
+            for j in range(i + 1, len(words) + 1):
+                piece = " ".join(words[i:j])
+                if len(piece) >= 3:
+                    pieces.add(piece)
+    if not pieces:
+        return ""
+    names = [plain(o) for o in others]
+    return min(pieces, key=lambda q: (sum(plain(q) in n for n in names), -len(q), q))
+

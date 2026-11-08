@@ -52,7 +52,7 @@ def test_login_bag_is_written_as_soon_as_heard(tmp_path, monkeypatch):
     net = ClientFeed("")  # fenêtre pas encore nommée pendant la connexion
     net.feed("ASK|1610317|Fourboun|10|0|0|0|0|0|0|aa~620~24~~;ab~2161~3~~|0")
     record = json.loads((tmp_path / "Fourboun.json").read_text(encoding="utf-8"))
-    assert sorted(t for _, t, _, _ in record["objets"]) == [0x620, 0x2161]
+    assert sorted(row[1] for row in record["objets"]) == [0x620, 0x2161]  # [uid, modèle, quantité, position, jets]
 
 
 def test_pods_are_kept_with_the_bag(tmp_path):
@@ -64,3 +64,16 @@ def test_pods_are_kept_with_the_bag(tmp_path):
     later = ClientFeed("Pesopepe")
     assert possessions.restore("Pesopepe", later, tmp_path)
     assert later.pods == (1452, 1225)
+
+
+def test_rolls_kept_with_the_bag_so_the_wisdom_is_readable_after_a_restart(tmp_path):
+    # 08/11 (team/wisdom.py) : sac repris d'un fichier sans les jets : sagesse lue 0 ; avec eux, pas besoin de reconnexion.
+    from bot.brain import possessions
+    from bot.connection.network import ClientFeed
+
+    old, new = ClientFeed("A"), ClientFeed("B")
+    possessions.write("A", [[1, 0x17d, 1, 7]], tmp_path)
+    possessions.write("B", [[1, 0x17d, 1, 7, "7c#14##0d0+20"]], tmp_path)
+    assert possessions.restore("A", old, tmp_path) and old.inventory.restored
+    assert possessions.restore("B", new, tmp_path) and not new.inventory.restored
+    assert new.items()[0].effects == "7c#14##0d0+20"

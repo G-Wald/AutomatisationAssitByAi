@@ -612,7 +612,7 @@ class ClientFeed:
 
         parts = text.split("|")
         if len(parts) > 2 and parts[2]:
-            items = [[i.uid, i.template, i.quantity, i.position] for i in self.inventory.items.values()]
+            items = [[i.uid, i.template, i.quantity, i.position, i.effects] for i in self.inventory.items.values()]
             if possessions.write(parts[2], items, pods=list(self.pods) if self.pods else None):
                 self._saved_items = items
 

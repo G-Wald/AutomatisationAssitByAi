@@ -424,7 +424,8 @@ class Trader:
             # Moins que demandé : la pile est passée en entier (le jeu ramène le nombre à sa taille) ; pile suivante.
         return offer_weight(self._received(), weights)
 
-    def offer_item(self, template: int, count: int, tab: tuple[float, float] = RESOURCES_TAB) -> bool:
+    def offer_item(self, template: int, count: int, tab: tuple[float, float] = RESOURCES_TAB,
+                   query: str | None = None) -> bool:
         """Pose exactement `count` objets du modèle `template` (clés de donjon, 30/10) : onglet ressources, type
         « Clefs » dans la liste des types du sac de l'échange, une unité d'abord, vérifiée chez le receveur (EmKO :
         uid -> modèle), puis le reste un double-clic par unité (05/11) ; vérifié encore (quantité offerte = `count`). False au
@@ -449,7 +450,8 @@ class Trader:
         try:
             # 31/10, revue : le nom doit être vu dans le champ de recherche avant tout double-clic ; sinon (texte tapé
             # hors du champ) rien n'est posé et l'appelant annule.
-            if not search_bag(game, layout, item_name(template), TRADE_FILTER, TRADE_SEARCH):
+            # `query` : texte qui ne laisse que cet objet dans le sac (team/wisdom.py, unique_query ; 08/11)
+            if not search_bag(game, layout, query or item_name(template), TRADE_FILTER, TRADE_SEARCH):
                 log.warning("Échange %s -> %s : recherche du sac pas faite : rien posé", self.giver.name,
                             self.taker.name)
                 return False
