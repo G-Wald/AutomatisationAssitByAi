@@ -102,3 +102,9 @@ Résistance feu (la Flèche Explosive) entre parenthèses ; agressivité d'aprè
 - **Sortie des bâtiments** (commit 81be2ea, `bot/brain/building.py`) : bâtiment d'après la carte annoncée par le
   serveur et l'index des cartes du client ; sorties par les soleils au sol de la carte du client (objet1 1030, la
   banque : (8, 26)). Au lancement et au début de chaque trajet. Jamais une salle de donjon.
+- **Sortie des bâtiments, vue en jeu** (journaux 135931 et 140049) :
+  - taverne de 5,-17 (carte 7573), Waldhary entré avant le lancement : carte pas encore annoncée par le serveur, pièce
+    sombre à l'écran, soleil vu au sol en (8, 24), sorti au début du trajet, puis l'équipe rejointe ;
+  - banque d'Astrub (7549), même cas : sorti dès le lancement par (8, 26), arrivé sur 7414 (commits b64ec85, 6ca6720).
+  - Premier essai (journal 135508) raté : carte inconnue au lancement (le serveur ne la redit qu'au changement de
+    carte), d'où la recherche des soleils au sol à l'écran.
