@@ -376,7 +376,7 @@ def told_outside(member) -> bool:
     from bot.brain.building import indoors
 
     net = getattr(member.game, "net", None)
-    return net is not None and net.alive() and not indoors(member.game, net)
+    return net is not None and not indoors(member.game, net)
 
 
 def leave_buildings(members, hide_key: str = "", banking: bool = False) -> list[str]:
@@ -388,8 +388,9 @@ def leave_buildings(members, hide_key: str = "", banking: bool = False) -> list[
     stuck = []
     bank = []
     for member in members:
+        # Écoute pas encore « vivante » au lancement (08/11 : aucun message entendu dans les premières secondes) :
+        # l'écran décide (indoors), la carte d'arrivée sera annoncée.
         net = getattr(member.game, "net", None)
-        net = net if net is not None and net.alive() else None
         if net is None or not indoors(member.game, net):
             continue
         if net.map_id == BANK_INSIDE:
