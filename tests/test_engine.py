@@ -922,3 +922,12 @@ def test_desinvocation_is_kept_for_when_no_other_spell_hits(monkeypatch):
     ai._spells = [replace(MAGIQUE, spell_range=(1, 1)), DESINVOCATION]  # plus rien d'autre ne touche
     plan = ai._plan(frame, me, enemies, [], 0)
     assert [(s.spell.spell_id, s.cell) for s in plan.casts] == [("desinvocation", summon)]
+
+
+def test_spells_beyond_the_visible_bar_are_left_out():
+    # 07/11 (Waldhary, Crâ 187, 22 cases de barre d'après le serveur) : un sort en case 16 faisait « Emplacement de sort
+    # invalide » à chaque tour, sans jouer. Seules les 14 cases visibles servent.
+    book = book_of_the_28_09()
+    entries = [spell.entry for spell in book.spells.values()]
+    book.slots = {1: entries[0], 16: entries[1]}
+    assert [s.slot for s in book.combat_spells()] == [1]

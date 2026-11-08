@@ -65,6 +65,7 @@ from bot.perception.spellbook import (
 log = logging.getLogger(__name__)
 
 KNOWLEDGE_FILE = ROOT / "config" / "sorts.yaml"
+BAR_SLOTS = 14  # cases de la barre de sorts visibles (2 rangées de 7) : au-delà, ni clic ni raccourci (07/11)
 READ_TRIES = 3  # fenêtre des sorts pas ouverte ou illisible : nouveaux essais avant de jouer avec le sort configuré
 REFERENCE_FILE = ROOT / "config" / "sorts" / "solomonk.json"
 DAMAGE_EFFECTS = set(range(91, 101))  # vols de vie (91 à 95) et dommages (96 à 100), un par élément
@@ -508,6 +509,7 @@ class SpellBook:
         self.entries: list[SpellEntry] = []  # lus dans la fenêtre des sorts (ou repris de la dernière session)
         self.spells: dict[int, Spell] = {}  # ligne de la liste -> sort appris
         self.slots: dict[int, SpellEntry] = {}  # case de la barre -> sort
+        self._hidden_noted: set[int] = set()  # cases au-delà de BAR_SLOTS déjà dites au journal
         self.class_key: str | None = None
         self.ranking: list[ClassMatch] = []  # classes, de la plus probable d'après la fenêtre à la moins probable
         self.stats: CharacterStats | None = None  # caractéristiques (brain/stats.py) ; None : dégâts de base
@@ -1065,6 +1067,15 @@ class SpellBook:
         spells = []
         for slot, entry in sorted(self.slots.items()):
             spell = self.spells.get(entry.row)
-            if spell is not None and spell.data and spell.role != "autre":
-                spells.append(spell.combat_spell(slot, self.stats))
+            if spell is None or not spell.data or spell.role == "autre":
+                continue
+            if slot > BAR_SLOTS:
+                # 07/11 (Waldhary, Crâ 187 : 22 cases de barre d'après le serveur) : seules les 14 cases visibles se
+                # cliquent ou ont un raccourci ; au-delà, « Emplacement de sort invalide » à chaque tour, sans jouer.
+                if slot not in self._hidden_noted:
+                    self._hidden_noted.add(slot)
+                    log.info("%s en case %d de la barre : hors des %d cases visibles, pas utilisé (à ranger dans "
+                             "les 14 premières pour qu'il serve)", spell.name, slot, BAR_SLOTS)
+                continue
+            spells.append(spell.combat_spell(slot, self.stats))
         return spells
