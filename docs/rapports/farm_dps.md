@@ -88,3 +88,17 @@ Résistance feu (la Flèche Explosive) entre parenthèses ; agressivité d'aprè
 - **Sort cru refusé alors qu'il est parti** (11:02, Flèche Magique « PA inchangés ») : l'annonce du serveur est arrivée
   après le sort suivant ; le bot a écrit « case de la barre fausse » (journal seulement, la barre n'a pas changé).
 - **Case de placement pas annoncée** une fois (10:33) : déplacement du DPS sans effet, repéré à son premier tour.
+
+## 08/11, après-midi : Massif de Cania (Craqueleurs et Blops), corrections
+
+- **Farm** (journal 122923, `engage.level_ratio=0.6`) : 28 combats en ~55 min, **1 mort** (Waldarch, combat 7, gagné).
+  Son énergie est restée à 10 000 : un mort dans un combat gagné ne perd pas d'énergie ; reparti à 1 PV, comme voulu.
+- **« Bot muet » à 13:24** : pas un blocage, un calcul. Plan de Waldhary : 7,4 millions de suites, **79 s** (13 PA,
+  5 PM, une quinzaine de sorts, 9 ennemis) ; son tour fini avant. Calcul limité à 3 s (`PLAN_BUDGET`, le meilleur plan
+  trouvé est gardé, dit au journal) (commit 77a6169).
+- **Relance en plein combat** : les sorts n'étaient jamais repris (lus seulement hors combat) ; Waldhary en mode de
+  secours (« touche 1, Échap, fin de tour ») pendant 17 min. Repris au premier tour de la mémoire et du serveur, sans
+  fenêtre (commit 78a67f5). Vu en jeu : « Sorts repris en combat (29) », double Explosive, combat fini.
+- **Sortie des bâtiments** (commit 81be2ea, `bot/brain/building.py`) : bâtiment d'après la carte annoncée par le
+  serveur et l'index des cartes du client ; sorties par les soleils au sol de la carte du client (objet1 1030, la
+  banque : (8, 26)). Au lancement et au début de chaque trajet. Jamais une salle de donjon.
