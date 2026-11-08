@@ -2058,7 +2058,7 @@ class Journey:
         """Dans un bâtiment d'après le serveur : en sortir (True s'il a fallu sortir et que c'est fait)."""
         from bot.brain.building import is_building, leave_building
 
-        game = self.traveler.game
+        game = getattr(self.traveler, "game", None)
         net = getattr(game, "net", None)
         if net is None or not net.alive() or not is_building(getattr(net, "map_id", None)):
             return False

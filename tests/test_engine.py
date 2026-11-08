@@ -950,3 +950,19 @@ def test_fire_arrow_aims_at_the_enemy_weak_to_fire():
     alone = plan_turn((0, 0), 0, [indigo], [], [explosive], new_use(4), OPEN, Weights())
     weak = plan_turn((0, 0), 0, [indigo], [], [explosive], new_use(4), OPEN, Weights(), resist=resist)
     assert abs(weak.damage - alone.damage * 1.62) < 1
+
+
+def test_plan_search_stops_at_its_time_budget_with_the_best_plan_so_far(monkeypatch):
+    # 08/11 (Waldhary, Crâ 187 : 13 PA, 5 PM, une quinzaine de sorts, 9 ennemis) : 7,4 millions de suites, 79 s de
+    # calcul, son tour fini avant. Le calcul s'arrête au bout de PLAN_BUDGET s avec le meilleur plan trouvé.
+    import bot.brain.engine as engine
+
+    monkeypatch.setattr(engine, "PLAN_BUDGET", 0.2)
+    book = book_of_the_28_09()
+    book.slots = {spell.entry.row + 1: spell.entry for spell in book.spells.values()}
+    spells = book.combat_spells()
+    enemies = [(6, 0), (7, 1), (8, 0), (6, 2), (9, 1), (10, 0), (8, 2), (7, 3), (9, 3)]
+    started = time.perf_counter()
+    turn = plan((0, 0), 5, enemies, spells, pa=13)
+    assert time.perf_counter() - started < 1.5
+    assert turn.casts

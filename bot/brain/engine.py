@@ -41,6 +41,8 @@ repartir dans le même déplacement (en Rétro, quitter le contact expose au tac
 exception, avec la pénalité de tacle.
 """
 
+import logging
+import time
 from collections import Counter
 from dataclasses import dataclass
 from functools import lru_cache
@@ -60,6 +62,8 @@ from bot.brain.tactics import (
     unit,
 )
 from bot.perception.grid import CORNER_TOLERANCE, Cell, distance
+
+log = logging.getLogger(__name__)
 
 NEIGHBOURS = ((1, 1), (1, -1), (-1, 1), (-1, -1))  # un pas = une case voisine (1 PM)
 
@@ -143,6 +147,10 @@ TEAM_BOOST = 0.5
 BOOST_ALLY = 0.05
 BOOST_ALLIES = 3
 MAX_CASTS = 6  # sorts au plus dans un plan (12 PA en sorts à 2 PA)
+# Temps de calcul d'un plan, au plus (08/11, Waldhary, Crâ 187 : 13 PA, 5 PM, une quinzaine de sorts, 9 ennemis :
+# 7,4 millions de suites, 79 s ; son tour était fini avant). Au-delà, le meilleur plan trouvé jusque-là ; les cases
+# les plus proches et les suites les plus courtes passent d'abord.
+PLAN_BUDGET = 3.0
 ZONE_SEARCH = 4  # cases vides visées par une zone : à 4 cases au plus d'un ennemi (au-delà, viser l'ennemi suffit)
 EPSILON = 1e-6
 
@@ -442,6 +450,8 @@ class _Planner:
         self.names = names or {}
         self.sequences = 0
         self.can_hit = False
+        self.out_of_time = False  # PLAN_BUDGET dépassé : plus rien d'exploré
+        self.deadline = float("inf")
         self._options_cache: dict = {}
         self._finish_cache: dict = {}
         self._state_cache: dict = {}
@@ -871,6 +881,10 @@ class _Planner:
 
         def search(pa, positions, extra, boost, min_index, value, damage, bonus):
             leaf(positions, value, damage, bonus)
+            if self.sequences % 256 == 0 and time.monotonic() > self.deadline:
+                self.out_of_time = True
+            if self.out_of_time:
+                return
             if len(sequence) >= MAX_CASTS:
                 return
             for index, option in enumerate(self._options(origin, positions, extra, boost)):
@@ -919,7 +933,10 @@ class _Planner:
         else:
             moves = {self.me: 0}
         chosen, chosen_cell, chosen_pm, chosen_key = None, self.me, 0, (float("-inf"), 0.0)
+        self.deadline = time.monotonic() + PLAN_BUDGET
         for cell, n in sorted(moves.items(), key=lambda kv: (kv[1], kv[0])):  # à score égal : le moins de PM
+            if self.out_of_time and chosen is not None:
+                break  # temps écoulé : les cases plus loin ne sont pas regardées
             if cell != self.me and (cell in self.avoid or cell in self.missed):
                 continue
             result = self._casts_from(cell, self.pm - n)
@@ -927,6 +944,9 @@ class _Planner:
                 (self.w.tackle if start_contact and cell != self.me else 0.0)
             if _better((total, result.damage), chosen_key):
                 chosen, chosen_cell, chosen_pm, chosen_key = result, cell, n, (total, result.damage)
+        if self.out_of_time:
+            log.info("Plan : %.0f s de calcul écoulées (%d suites), le meilleur trouvé est gardé", PLAN_BUDGET,
+                     self.sequences)
         if not chosen.casts:
             return self._position()  # rien ne touche ce tour, ou pas à ce prix : se placer pour le suivant
         steps = []
