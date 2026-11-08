@@ -819,3 +819,35 @@ def test_probe_click_setting():
     assert EngageSettings.from_settings({"engage": {"clic_sonde": "Droit"}}).probe_click == "droit"
     with pytest.raises(ValueError, match="clic_sonde"):
         EngageSettings.from_settings({"engage": {"clic_sonde": "milieu"}})
+
+
+@pytest.mark.parametrize("mode, chosen", [("petits", (5, 15)), ("gros", (9, 19))])
+def test_biggest_group_attacked_first_with_engage_groups_big(mode, chosen):
+    # 08/11 (Waldhary, Crâ 187, aux Blops) : un Biblop seul attaqué, un groupe de 8 à côté. engage.groupes : « gros »
+    # prend le plus de monstres (sous max_level) ; « petits » (défaut) garde le choix prudent d'avant.
+    from types import SimpleNamespace
+
+    from bot.brain.engage import Engager, EngageSettings
+    from bot.perception.grid import distance
+
+    class Stop(Exception):
+        pass
+
+    frame = load_frame("hors_combat")
+    aimed = []
+
+    def move(point, spread=None):
+        aimed.append(frame.grid.cell_at(*point))
+        raise Stop
+
+    game = SimpleNamespace(look=lambda park=True: frame, move=move)
+    settings = EngageSettings.from_settings({"engage": {"groupes": mode, "max_level": 400}})
+    engager = Engager(game, settings)
+    groups = [(-1, (5, 15), [14]), (-2, (9, 19), [30, 32, 34, 36]), (-3, (13, 17), [30, 31])]
+    net = SimpleNamespace(snapshot=lambda: (1234, None), group_list=lambda: groups, my_grid_cell=lambda: (1, 1),
+                          group_cell=lambda gid: None)
+    engager.walk_area = None
+    with pytest.raises(Stop):
+        engager._engage_by_net(net)
+    nearest = min((cell for _, cell, _ in groups), key=lambda c: distance(c, aimed[0]))
+    assert nearest == chosen  # visé un peu au-dessus de sa case (le corps du groupe)

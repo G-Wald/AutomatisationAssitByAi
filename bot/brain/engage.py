@@ -189,6 +189,10 @@ class EngageSettings:
     # droit : à côté, il ne bouge pas (menu « Attaquer » ou attaque directe sur un groupe : à essayer en jeu).
     probe_click: str = "droit"
     fight_at_night: bool = False  # engage.combats_de_nuit : combats lancés la nuit (perception de nuit pas encore sûre)
+    # engage.groupes (08/11, Waldhary Crâ 187 aux Blops : un Biblop seul attaqué, un groupe de 8 à côté) : « petits »
+    # (défaut : le moins de monstres d'abord, prudent pour une équipe faible) ou « gros » (le plus de monstres, puis le
+    # plus haut niveau total, toujours sous max_level : avec un gros DPS, plus d'expérience par combat).
+    biggest: bool = False
 
     @classmethod
     def from_settings(cls, settings: dict) -> "EngageSettings":
@@ -208,7 +212,16 @@ class EngageSettings:
             retry_delay=float(engage.get("retry_delay", cls.retry_delay)),
             probe_click=probe_click,
             fight_at_night=bool(engage.get("combats_de_nuit", cls.fight_at_night)),
+            biggest=_groups_mode(engage.get("groupes", "petits")),
         )
+
+
+def _groups_mode(raw) -> bool:
+    """engage.groupes : « gros » -> True, « petits » -> False ; autre chose : erreur de réglage."""
+    mode = str(raw or "petits").strip().lower()
+    if mode not in ("petits", "gros"):
+        raise ValueError(f"engage.groupes doit valoir petits ou gros (pas {mode!r})")
+    return mode == "gros"
 
 
 @dataclass(frozen=True)
@@ -624,7 +637,8 @@ class Engager:
             elif misses >= len(NET_AIM_UP):
                 left.append("raté déjà")  # les 3 hauteurs de clic essayées
             else:
-                kept.append((misses, len(levels), sum(levels), distance(me, cell) if me else 0, group_id, cell, levels))
+                size, total = (-len(levels), -sum(levels)) if self.settings.biggest else (len(levels), sum(levels))
+                kept.append((misses, size, total, distance(me, cell) if me else 0, group_id, cell, levels))
         if left:
             log.info("Groupe(s) laissé(s) d'après le jeu : %s", ", ".join(left))
         if not kept:
