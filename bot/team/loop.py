@@ -1837,13 +1837,10 @@ class TeamBot:
         team = self._colour_told(host, self._team_colour(placement, len(fighters)))
         known: dict[str, Cell] = {}
         if team is None:
-            # Autant de monstres que de personnages : la couleur se vérifie en déplaçant `host` (comme en solo).
-            self._place(host)
+            # Couleur pas tranchée (autant de combattants de chaque côté, ou pas encore tous arrivés) : personne ne
+            # bouge. 08/11 : l'ancien essai (déplacer `host` pour la voir, _place) n'existait plus ; en mode DPS,
+            # « 'TeamBot' object has no attribute '_place' » toutes les 2 s pendant tout un placement.
             team = self.my_team
-            if getattr(host.ai, "placed_cell", None) is not None:
-                known[host.name] = host.ai.placed_cell
-            frame = host.game.look(park=True)
-            placement = read_placement(frame)
         elif self.learn_team and self.my_team is None:
             self.my_team = team
             log.info("Mon équipe pour ce combat : %s (%d personnages au placement)", team, len(fighters))
