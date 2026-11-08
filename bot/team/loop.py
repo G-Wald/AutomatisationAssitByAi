@@ -684,7 +684,10 @@ class TeamBot:
             ratio = hp_ratio(frame) if ratio is None else ratio
             if ratio is not None:
                 self._hp[member.name] = ratio
-            if ratio is not None and ratio < self.rest_settings.below:
+            # Mode DPS (08/11, l'utilisateur : « il faut vérifier les PV que des DPS, le reste on s'en fiche, ils
+            # peuvent lancer le combat à 1 PV, ça n'a pas d'impact sur la réussite ») : seuls les DPS se reposent.
+            dps = {name for name, _ in getattr(self.team, "dps", ())}
+            if ratio is not None and ratio < self.rest_settings.below and (not dps or member.name in dps):
                 self._tired.append(member)
             self._note_pods(member, frame)
         if len(self._hp) >= 2 and not any(self._hp.values()):

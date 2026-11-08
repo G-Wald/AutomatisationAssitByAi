@@ -849,6 +849,28 @@ def test_result_windows_closed_in_every_window_followers_first():
     assert bot._tired == []
 
 
+def test_only_the_dps_rest_in_dps_mode():
+    # 08/11, l'utilisateur : « il faut vérifier les PV que des DPS, le reste on s'en fiche, ils peuvent lancer le
+    # combat à 1 PV ». Sans team.dps, chacun sous rest.below se repose, comme avant.
+    from types import SimpleNamespace
+
+    screen = Screen()
+    dps = member("Waldhary-[Gal]", screen, load_frame("hors_combat"))
+    low = member("Pesopepe", screen, load_frame("hors_combat"))
+    for m, life in ((dps, 0.95), (low, 0.01)):
+        m.game.net = SimpleNamespace(alive=lambda: True, life_ratio=lambda life=life: life, pods_ratio=lambda: None)
+    bot = team_bot(dps, low, engage=False)
+    bot.team = TeamSettings(enabled=True, dps=(("Waldhary-[Gal]", "distance"),))
+    bot._round()
+    assert bot._tired == []  # Pesopepe à 1 % : pas de repos, seul le DPS compte
+    dps.game.net.life_ratio = lambda: 0.2
+    bot._round()
+    assert [m.name for m in bot._tired] == ["Waldhary-[Gal]"]
+    bot.team = TeamSettings(enabled=True)
+    bot._round()
+    assert {m.name for m in bot._tired} == {"Waldhary-[Gal]", "Pesopepe"}
+
+
 def test_round_reports_a_character_already_in_combat():
     screen = Screen()
     a = member("A", screen, load_frame("hors_combat"))
