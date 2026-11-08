@@ -250,7 +250,10 @@ class WisdomGear:
         for member in self.members:
             # 08/11 (capture de Walitcoin) : fenêtre « Erreur » et inventaire restés ouverts d'un lancement d'avant ;
             # porte de la banque, recherches et échanges ratés ensuite.
+            from bot.team.trade import close_waiting
+
             _close_error(member.game)
+            close_waiting(member.game, member.name)
             escape_menu(member.game)
         moves = self.plan()
         if not moves:

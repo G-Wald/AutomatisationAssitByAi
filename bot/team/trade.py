@@ -114,6 +114,23 @@ def close_wrong_window(game, name: str) -> bool:
     return True
 
 
+def close_waiting(game, name: str) -> bool:
+    """Fenêtre « En attente de la réponse de ... pour un échange » restée ouverte chez le donneur (08/11 : miniature
+    d'un autre personnage cliquée, sa demande refusée par Échap chez lui mais restée en attente ici ; ensuite « Ce
+    joueur est déjà en échange » à chaque demande) : fermée par son « Annuler ». True si elle l'était."""
+    from bot.team.bank import best_text
+
+    frame = game.look(park=False)
+    waiting, _ = best_text(frame, "En attente de la réponse", dark=True)
+    cancel, where = best_text(frame, "Annuler", dark=False)
+    if waiting < PRIVATE_FOUND or cancel < PRIVATE_FOUND:
+        return False
+    log.warning("%s : demande d'échange restée en attente : je l'annule", name)
+    game.click(where, (6, 3))
+    game.sleep(0.8)
+    return True
+
+
 def _exchange_line(frame, box):
     """Point de la ligne « Echange » du menu d'une miniature, lu par l'OCR de Windows ; None sans elle (sa propre
     miniature, quelqu'un sur une autre carte) ou sans OCR."""
@@ -231,6 +248,7 @@ class Trader:
                          self.giver.name, self.taker.name, index + 1, who.name)
                 escape_menu(who.game)  # Échap : « Non » à la demande
                 game.sleep(REFUSE_WAIT)
+                close_waiting(game, self.giver.name)  # 08/11 : la demande restée en attente chez le donneur
         log.info("Échange %s -> %s : aucune miniature n'a donné de demande à %s", self.giver.name, self.taker.name,
                  self.taker.name)
         return False
