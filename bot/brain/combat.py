@@ -1469,6 +1469,10 @@ class CombatAI:
 
     def _use_spellbook(self, frame: Frame) -> None:
         """Premier tour de la session : cases de la barre -> sorts, et ce que la tactique en sait."""
+        if self.spellbook is not None and not self.spellbook.entries:
+            # 08/11 : bot relancé en plein combat (Waldhary : sorts jamais repris, « touche 1, Échap, fin de tour » à
+            # chaque tour) : la mémoire de la dernière session et ce que le serveur a dit, sans ouvrir de fenêtre.
+            getattr(self.spellbook, "resume_in_fight", lambda: False)()
         if self.spellbook is None or not self.spellbook.entries:
             return
         # Cases de la barre déjà connues (01/11 : annoncées par le serveur à la connexion) : les sorts de la tactique

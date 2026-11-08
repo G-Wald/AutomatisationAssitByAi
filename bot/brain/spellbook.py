@@ -555,6 +555,22 @@ class SpellBook:
             self._log_damage()
         return bool(self.entries)
 
+    def resume_in_fight(self) -> bool:
+        """En combat, sans ouvrir de fenêtre (08/11, bot relancé en plein combat) : la mémoire de la dernière session
+        (mode mémoire), les caractéristiques et les cases de la barre annoncées par le serveur. La lecture complète se
+        fera au passage suivant hors combat (read). True si des sorts sont connus."""
+        if not self._resumed:
+            self._resumed = True
+            self._resume()
+        if self.session.stats:
+            self._take_told_stats()
+        if not self._told_taken and self.entries:
+            self._told_taken = True
+            self._take_told_spells()
+        if self.entries:
+            log.info("Sorts repris en combat (%d), sans ouvrir de fenêtre", len(self.entries))
+        return bool(self.entries)
+
     def _take_told_stats(self) -> bool:
         """Caractéristiques annoncées par le serveur (« As », connection/network.py), à la place de celles lues à
         l'écran ou retenues : pas de fenêtre à ouvrir (27/10). True si elles ont changé."""
