@@ -1046,3 +1046,45 @@ def test_resume_at_the_choice_room(monkeypatch):
     monkeypatch.setattr(farm.entry, "choose", lambda: steps.append("choix") or True)
     monkeypatch.setattr(farm.entry, "leave", lambda: steps.append("sortie") or True)
     assert farm.run(start="choix") == 1 and steps == ["choix", ("salles", 8, None), "sortie"]
+
+
+def test_bank_at_the_end_of_the_farm_only_when_a_pass_ended_outside(monkeypatch):
+    # 08/11, utilisateur : à la fin du farm, pods au seuil : retour à la banque.
+    from types import SimpleNamespace
+
+    from bot.team import pods
+    from bot.team.dungeon import DungeonFarm
+
+    calls = []
+    monkeypatch.setattr(pods, "bank_if_full", lambda bot, why: calls.append(why))
+    for ok, expected in ((True, 1), (False, 0)):
+        calls.clear()
+        farm = DungeonFarm(SimpleNamespace(members=[], leader=None, _settings={}), load_dungeons()["champs"], 1)
+        monkeypatch.setattr(farm, "_one_pass", lambda *args, ok=ok: ok)
+        farm.run()
+        assert len(calls) == expected, ok
+
+
+def test_bank_if_full_goes_only_above_the_threshold(monkeypatch):
+    from types import SimpleNamespace
+
+    from bot.team import loop, pods
+
+    trips, visits = [], []
+    monkeypatch.setattr(pods, "team_trip", lambda bot, goal, why: trips.append(goal) or True)
+
+    class Visit:
+        def __init__(self, members, *args):
+            self.members = members
+
+        def run(self):
+            visits.append(len(self.members))
+            return [m.name for m in self.members]
+
+    monkeypatch.setattr(loop, "bank_visit", lambda members, *a: Visit(members))
+    for fill, expected in ((0.5, None), (0.95, True)):
+        trips.clear()
+        monkeypatch.setattr(pods, "fullest", lambda members, fill=fill: ("Walarbalete", fill))
+        bot = SimpleNamespace(members=[SimpleNamespace(name="A")], pods_full=0.9, bank_auto=True)
+        assert pods.bank_if_full(bot) is expected
+        assert trips == ([(4, -16)] if expected else [])

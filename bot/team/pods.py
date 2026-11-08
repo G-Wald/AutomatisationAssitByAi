@@ -100,7 +100,8 @@ def _give(giver, taker, amount: int, free: int, portraits: dict, members) -> boo
 
 def fullest(members) -> tuple[str, float] | None:
     """Le personnage le plus chargé et son remplissage (0 à 1) d'après le serveur ; None si personne n'est connu."""
-    known = [(m.name, used / most) for m in members if (pods := load(m.game.net)) and (used := pods[0]) is not None
+    known = [(m.name, used / most) for m in members
+             if (pods := load(getattr(getattr(m, "game", None), "net", None))) and (used := pods[0]) is not None
              and (most := pods[1])]
     return max(known, key=lambda item: item[1]) if known else None
 
@@ -132,6 +133,37 @@ def team_trip(bot, goal: tuple[int, int], why: str) -> bool:
     if not arrived:
         log.warning("%s : l'équipe n'est pas toute arrivée en %s,%s", why, *goal)
     return arrived
+
+
+def bank_if_full(bot, why: str = "Fin du farm") -> bool | None:
+    """Fin d'un farm (08/11, utilisateur : « à la fin du farm, que le bot détecte si les pods ont atteint leur max et
+    lance un retour vers la banque si c'est dépassé ») : quelqu'un au seuil de la banque (team.pods_banque) : toute
+    l'équipe à la banque d'Astrub, chacun vide ses ressources, et l'équipe y reste. None : rien à faire (pods sous le
+    seuil ou inconnus, team.banque_auto désactivé) ; sinon True si les coffres de toute l'équipe ont été remplis."""
+    from bot.team.bank import BANK_MAP
+    from bot.team.loop import POD_FULL, bank_visit  # import local : loop importe ce module
+
+    if not getattr(bot, "bank_auto", True):
+        return None
+    top = fullest(bot.members)
+    threshold = getattr(bot, "pods_full", POD_FULL)
+    if top is None or top[1] < threshold:
+        if top is not None:
+            log.info("%s : pods au plus %.0f %% (%s), sous le seuil de la banque (%.0f %%)", why, 100 * top[1], top[0],
+                     100 * threshold)
+        return None
+    log.warning("%s : pods de %s à %.0f %% (seuil %.0f %%) : retour à la banque", why, top[0], 100 * top[1],
+                100 * threshold)
+    if not team_trip(bot, BANK_MAP, f"{why} : banque"):
+        return False
+    hide = getattr(getattr(bot, "travel_settings", None), "hide_players_key", "e")
+    done = bank_visit(bot.members, hide, getattr(bot, "bank_mode", "chacun"), getattr(bot, "keep_key", None)).run()
+    missing = [m.name for m in bot.members if m.name not in done]
+    if missing:
+        log.warning("%s : coffre pas rempli pour %s", why, ", ".join(missing))
+    else:
+        log.info("%s : toute l'équipe a vidé ses ressources à la banque", why)
+    return not missing
 
 
 def _leave_rooms(bot) -> None:

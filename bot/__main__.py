@@ -572,6 +572,11 @@ def run_team(args: argparse.Namespace, settings: dict, team: TeamSettings, title
                                     bot.keep_key).run()) == \
                 len(members) else 1
         bot.run()  # erreurs d'un tour de boucle rattrapées là (TeamBot.safe_step) : jamais d'arrêt en plein combat
+        if bot.engager is not None and not args.banque and _normal_end(bot):
+            # 08/11, utilisateur : à la fin du farm, pods au seuil : retour à la banque.
+            from bot.team.pods import bank_if_full
+
+            bank_if_full(bot, "Fin du farm")
         if args.banque:
             arrived = bot.roamer is not None and bot.roamer.traveler.coords == BANK_MAP and not bot._lost
             if not arrived:
@@ -604,6 +609,12 @@ def run_team(args: argparse.Namespace, settings: dict, team: TeamSettings, title
         control.close()
         _keep_summary(recorder)
     return 0
+
+
+def _normal_end(bot) -> bool:
+    """Le farm s'est fini comme prévu (durée écoulée, nombre de combats, nuit), pas sur des erreurs ni une mort."""
+    reason = getattr(bot, "_stop_reason", "") or ""
+    return any(word in reason for word in ("durée de la session", "le maximum demandé", "il fait nuit"))
 
 
 def _capture_windows(members: list, label: str) -> None:

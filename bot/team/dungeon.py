@@ -894,6 +894,7 @@ class DungeonFarm:
             started = time.monotonic()
             if deadline is not None:
                 bot.deadline = None  # rendue à la fin du passage (finally)
+            self._last_ok = False
             try:
                 if not self._one_pass(run, start, only, room):
                     break
@@ -904,8 +905,16 @@ class DungeonFarm:
             self._keys_left -= 1
             estimate = time.monotonic() - started
             log.info("Donjon : passage %d/%d terminé en %.0f min", run, self.runs, estimate / 60)
+            self._last_ok = True
         log.info("Donjon : %d passage(s) complet(s) sur %d", done, self.runs)
+        if done and self._last_ok and not getattr(bot, "finished", False):
+            # 08/11, utilisateur : pods au seuil à la fin du farm : retour à la banque (équipe sortie du donjon).
+            from bot.team import pods
+
+            pods.bank_if_full(bot, "Fin du farm de donjon")
         return done
+
+    _last_ok = False  # le dernier passage commencé s'est fini dehors (pas d'échec dans le donjon)
 
     _keys_left = NO_KEY_LIMIT  # passages que les clés réparties permettent encore (donjon.cles ; sans : pas de limite)
 
