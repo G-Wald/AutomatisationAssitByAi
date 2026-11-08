@@ -114,3 +114,22 @@ Demande de l'utilisateur : « fais-le, mais le bot devrait le faire lui-même »
   et seulement son « Ok ».
 - Reste : Dofus Cawotte (+24) pour Walitcoin pas échangé (recherche de l'échange pas ouverte, capture
   logs/20261108_182302/0001_Fourboun_sagesse_echange_rate.png).
+
+## 08/11 soir : validation du donjon des Blops (3 passages d'affilée)
+
+Règle de l'utilisateur : trois donjons d'affilée sans erreur.
+
+- Premier essai (journal 182811) : passage 1 en 29 min sans mort, puis arrêt : les pods de Walarbalete (95 %)
+  demandaient la banque, et le trajet partait de la salle de Bibiblop (11878, où « Sortir du donjon » ramène), crue la
+  carte de dehors : « aucun chemin ». Corrigé (commit 5e901ea) : avant tout trajet d'équipe, chacun sort de sa salle
+  intérieure par le soleil au sol. Banque faite à part (`--banque`), puis validation relancée.
+- **Validation (journal 191905) : 3 passages sur 3 d'affilée, 30, 42 et 28 min, 0 erreur, 0 blocage, aucune
+  intervention.** Clés reprises des coffres (24) et réparties (7 échanges) au départ, aucune banque entre les passages.
+- 24 combats, **27,6 millions d'XP**, +34 niveaux : Walarbalete 110 -> 112, Elseiso 56 -> 61, Waldarch 57 -> 62,
+  Eldieso 49 -> 54, Walitcoin 42 -> 47, Pesopepe 44 -> 49, Fourboun 51 -> 55, Enu-six 49 -> 53.
+- Morts dans 4 combats, tous gagnés (revenus à 1 PV) : Eldieso 3 fois, Fourboun, Elseiso, et **Walarbalete une fois**
+  (salle 6 du passage 2) : au 2e tour il est allé au contact d'un ennemi pour une Flèche Enflammée (560 prévus) ; la
+  pénalité du Gloutoblop (-300 à 6 cases) pèse moins que ces dégâts. 14 min de repos ensuite (le passage 2 a pris 42
+  min). À régler : pénalité plus forte pour le DPS, ou repos plus court (pain).
+
+**Le donjon des Blops est validé** (critère de l'utilisateur : trois passages d'affilée sans erreur).
