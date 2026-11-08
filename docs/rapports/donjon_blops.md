@@ -57,6 +57,22 @@ Walarbalete était connecté avant le bot : le serveur n'envoie le sac qu'à la 
 - Mode soutien vu en jeu : Tir Puissant sur Walarbalete (Elseiso, Waldarch, Eldieso), Flèche Cinglante et Flèche
   Glacée sur les Gloutoblops.
 
+- **Passage 2** (16:41 à 17:10, toutes les corrections en place) : **29 min, aucun mort de DPS**. Eldieso mort
+  une fois (salle 3, combat gagné), la salle 6 (4 Gloutoblops) faite en 1 min sans mort, la salle 7 et le royal
+  sans mort. Pas de 3e passage : 29 min estimées, 11 restantes.
+- **Bilan 15:36 à 17:10** (outil `tools/suivi_session.py`) : 16 combats, **18,0 millions d'XP**, 28 443 kamas.
+  Walarbalete 108 → 109 (7,5 M), Elseiso 50 → 54, Waldarch 52 → 56, Eldieso 42 → 47, Fourboun 46 → 49, Pesopepe
+  36 → 41, Enu-six 44 → 47, Walitcoin 36 → 40 : **+23 niveaux**. Les Enutrofs (aucune sagesse portée) prennent le
+  moins d'XP : la sagesse compte aussi dans l'XP gagnée.
+
+## Suivi et sagesse (demande de l'utilisateur, 08/11)
+
+- `tools/suivi_session.py --suivre` : page `logs/suivi_session.html` (se recharge toutes les 15 s) : niveaux, XP,
+  kamas, butin par personnage, derniers combats, d'après les fins de combat du serveur.
+- `tools/sagesse_equipement.py` : sagesse portée par chaque soutien, objets des sacs et des coffres qui en donnent
+  plus, répartition (rapport `docs/rapports/sagesse_soutiens.md`). Rien n'est équipé sans l'accord de
+  l'utilisateur ; Fourboun à reconnecter par le bot pour être lu.
+
 ## Reste à faire
 
 - Le libellé du journal « l'ennemi en … » pour un bonus lancé sur un allié (le premier message est corrigé, pas tous).
