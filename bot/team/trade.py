@@ -424,7 +424,7 @@ class Trader:
             # Moins que demandé : la pile est passée en entier (le jeu ramène le nombre à sa taille) ; pile suivante.
         return offer_weight(self._received(), weights)
 
-    def offer_item(self, template: int, count: int) -> bool:
+    def offer_item(self, template: int, count: int, tab: tuple[float, float] = RESOURCES_TAB) -> bool:
         """Pose exactement `count` objets du modèle `template` (clés de donjon, 30/10) : onglet ressources, type
         « Clefs » dans la liste des types du sac de l'échange, une unité d'abord, vérifiée chez le receveur (EmKO :
         uid -> modèle), puis le reste un double-clic par unité (05/11) ; vérifié encore (quantité offerte = `count`). False au
@@ -440,7 +440,8 @@ class Trader:
         from bot.brain.inventory import item_name
 
         layout = game.look(park=False).layout
-        game.click(layout.point(*RESOURCES_TAB), (5, 5))
+        # `tab` : onglet du sac (ressources pour les clés ; équipement pour les objets de sagesse, team/wisdom.py, 08/11)
+        game.click(layout.point(*tab), (5, 5))
         game.sleep(0.6)
         # 31/10 : la place de la pile prévue d'après les numéros d'objet était fausse (Clef des Champs 8143 posée au
         # lieu de la clé Bouftou) : la recherche du sac sur le nom exact du modèle ne laisse que sa pile, en première

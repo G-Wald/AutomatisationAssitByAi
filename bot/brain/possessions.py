@@ -75,6 +75,7 @@ def restore(name: str, net, folder: Path = FOLDER) -> bool:
         net.inventory.items = {uid: Item(uid, template, quantity, position)
                                for uid, template, quantity, position in record.get("objets", [])}
         net.inventory.known = True
+        net.inventory.restored = True  # sans les jets des objets (08/11, team/wisdom.py)
         if not net.pods and record.get("pods"):
             net.pods = tuple(record["pods"])
     log.info("Possessions de %s reprises de la session du %s (%d objets) : à jour à la prochaine connexion", name,

@@ -260,6 +260,10 @@ def main() -> int:
     parser.add_argument("--banque", action="store_true",
                         help="mode équipe : à la banque d'Astrub (4,-16), chaque personnage vide l'onglet ressources de "
                              "son inventaire dans son coffre, puis le bot s'arrête")
+    parser.add_argument("--sagesse", action="store_true",
+                        help="mode équipe : les soutiens (tous sauf team.dps) prennent dans les sacs et les coffres de "
+                             "l'équipe les objets qui leur donnent le plus de sagesse et les équipent, puis le bot "
+                             "s'arrête (bot/team/wisdom.py ; sacs lus à la connexion : avec --connexion)")
     parser.add_argument("--passages", type=int, default=1, metavar="N",
                         help="avec --donjon : N passages complets (entrée, combats de salle en salle, sortie)")
     parser.add_argument("--recolte", type=_harvest, metavar="METIER:NIVEAU",
@@ -543,6 +547,11 @@ def run_team(args: argparse.Namespace, settings: dict, team: TeamSettings, title
                 log.info("Banque : %s encore dedans sans le reste de l'équipe : je les fais sortir",
                          ", ".join(m.name for m in alone))
                 BankVisit(members, bot.travel_settings.hide_players_key).leave(alone)
+        if args.sagesse:
+            from bot.team.wisdom import WisdomGear
+
+            gear = WisdomGear(bot, {name for name, _ in team.dps}, bot.travel_settings.hide_players_key)
+            return 0 if gear.run() > 0 else 1
         if args.donjon:
             name, _, rest = args.donjon.partition(":")
             step, _, who = rest.partition(":")

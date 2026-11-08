@@ -122,3 +122,34 @@ class _Nothing:
 
     def __exit__(self, *args):
         return False
+
+
+def outdoors(map_id: int | None) -> bool | None:
+    """Carte de dehors d'après l'index des cartes du client ; None si la carte est inconnue."""
+    info = _index().get(str(map_id)) if map_id is not None else None
+    return None if not info else bool(info.get("exterieur", True))
+
+
+def leave_room(game, net, hide_key: str = "e", name: str = "") -> bool:
+    """Sortir d'une salle intérieure qui n'est pas un bâtiment (08/11 : salle d'entrée du donjon des Blops, 11878, où
+    « Sortir du donjon » ramène ; sa sortie est un soleil au sol en (4, 26), vu à l'écran, absent des soleils de la
+    carte du client) : le soleil au sol vu à l'écran le plus proche, puis la carte annoncée par le serveur. True si le
+    personnage est dehors (ou l'était)."""
+    map_id = getattr(net, "map_id", None)
+    if outdoors(map_id) is not False:
+        return True
+    suns = _screen_suns(game)
+    if not suns:
+        log.warning("%s : salle %s : aucun soleil vu au sol", name, map_id)
+        return False
+    me = net.my_grid_cell() if hasattr(net, "my_grid_cell") else None
+    for sun in sorted(suns, key=lambda s: (distance(me, s) if me else 0, s))[:SUN_TRIES]:
+        frame = game.look(park=False)
+        clicked = time.monotonic()
+        log.info("%s : salle %s, vers la sortie en %s", name, map_id, sun)
+        hold = game.holding(hide_key) if hide_key and hasattr(game, "holding") else _Nothing()
+        with hold:
+            game.click(frame.grid.center(sun), (2, 2))
+        if net.wait_new_map(clicked, CROSS_WAIT) is not None:
+            return outdoors(net.map_id) is not False
+    return False

@@ -87,6 +87,8 @@ class Inventory:
     def __init__(self) -> None:
         self.items: dict[int, Item] = {}  # uid -> objet, dans l'ordre d'arrivée
         self.known = False  # ASK reçu (connexion suivie) : sans lui, l'inventaire est incomplet
+        # Repris d'un fichier d'une session d'avant (brain/possessions.py) : sans les jets des objets (08/11)
+        self.restored = False
         self.my_id: int | None = None
         self.request: tuple[int, int, int, float] | None = None  # dernier ERK : (demandeur, invité, type, heure)
         self.exchange: Exchange | None = None  # le dernier ouvert (fermé si closed_at)
@@ -118,6 +120,7 @@ class Inventory:
             if item is not None:
                 self.items[item.uid] = item
         self.known = True
+        self.restored = False
         return True
 
     def _added(self, body: str) -> bool:
