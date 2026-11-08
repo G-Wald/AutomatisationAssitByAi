@@ -72,6 +72,18 @@ def _items() -> dict:
         return {}
 
 
+@lru_cache(maxsize=1)
+def set_items() -> frozenset[int]:
+    """Modèles qui font partie d'une panoplie (langue du client, table IS : « i » = ses objets) ; vide sans le client."""
+    try:
+        from tools.langue_client import LangueClient
+
+        sets = LangueClient().table("IS")
+    except (OSError, KeyError):
+        return frozenset()
+    return frozenset(int(t) for info in sets.values() for t in (info.get("i") or {}).values())
+
+
 def item_level(template: int) -> int:
     return int(_items().get(str(template), {}).get("l", 0) or 0)
 
@@ -113,8 +125,17 @@ def plan_wisdom(levels: dict[str, int], gear: list[Gear], supports: set[str], dp
             if index in filled:
                 continue
             current = worn.wisdom if worn is not None else 0
+            # 08/11 (capture de Walitcoin : « Déjà équipé ! ») : deux fois le même objet (deux Anneaux du Sanglier)
+            # refusé par le jeu, pour un objet de panoplie (utilisateur : « pas tout, je crois que c'est les stuffs qui
+            # sont dans des panoplies » ; table IS du client) : pas un modèle de panoplie déjà porté ou prévu dans
+            # l'autre emplacement du même type.
+            twins = {w.template for i, (n, sl, w) in enumerate(places) if n == name and sl == slot and i != index
+                     and w is not None and not any(m.taker == name and m.replaced is w for m in moves)}
+            twins |= {m.gear.template for m in moves if m.taker == name and m.slot == slot}
             for item in candidates:
                 if item.uid in taken or item_slot(item.template) != slot or item_level(item.template) > levels.get(name, 0):
+                    continue
+                if item.template in twins and item.template in set_items():
                     continue
                 gain = item.wisdom - current
                 if gain > 0 and (best is None or gain > best[0]):
@@ -129,25 +150,36 @@ def plan_wisdom(levels: dict[str, int], gear: list[Gear], supports: set[str], dp
 
 
 def chest_contents(names: list[str], logs: Path = LOGS) -> dict[str, list[Gear]]:
-    """Dernier contenu vu du coffre de chacun (« EL... » de son journal réseau, toutes sessions) ; [] s'il n'a jamais
-    été ouvert sous écoute."""
+    """Dernier contenu connu du coffre de chacun, d'après son journal réseau (toutes sessions) : le dernier « EL... »
+    (coffre ouvert), puis les « EsKO » qui le suivent (08/11 : objets repris ensuite, encore crus au coffre :
+    « EsKO-<uid> » retiré, « EsKO+<uid>|<quantité>|<modèle>| » ajouté ou changé ; uid décimal, hexadécimal dans EL).
+    [] s'il n'a jamais été ouvert sous écoute."""
     from bot.brain.inventory import parse_item
 
     out: dict[str, list[Gear]] = {}
     for name in names:
         safe = re.sub(r"[^\w\-]", "_", name)
-        last = None
+        chest: dict[int, Gear] | None = None
         for journal in sorted(logs.glob(f"*/reseau_{safe}.txt")):
             for line in journal.read_text(encoding="utf-8", errors="replace").splitlines():
                 text = line.partition(" ")[2]
                 if text.startswith("EL") and not text.startswith("ELE"):
-                    last = text[2:]
-        items = []
-        for entry in filter(None, (last or "").split(";")):
-            item = parse_item(entry[1:] if entry.startswith("O") else entry)
-            if item is not None:
-                items.append(Gear(item.uid, item.template, wisdom_of(item.effects), name, "coffre"))
-        out[name] = items
+                    chest = {}
+                    for entry in filter(None, text[2:].split(";")):
+                        item = parse_item(entry[1:] if entry.startswith("O") else entry)
+                        if item is not None:
+                            chest[item.uid] = Gear(item.uid, item.template, wisdom_of(item.effects), name, "coffre")
+                elif text.startswith("EsKO") and chest is not None:
+                    body = text[5:]
+                    if text[4:5] == "-" and body.isdigit():
+                        chest.pop(int(body), None)
+                    elif text[4:5] == "+":
+                        fields = body.split("|")
+                        if len(fields) >= 3 and fields[0].isdigit() and fields[2].isdigit():
+                            uid = int(fields[0])
+                            if uid not in chest:  # objet déposé : jets inconnus, sagesse 0 (pas proposé)
+                                chest[uid] = Gear(uid, int(fields[2]), 0, name, "coffre")
+        out[name] = list((chest or {}).values())
     return out
 
 
@@ -372,10 +404,25 @@ def equip_gear(game, template: int, positions: tuple[int, ...]) -> bool:
                 return True
             game.sleep(0.2)
         log.info("%s : pas équipé d'après le serveur (capture : %s)", name, _shot(game, "sagesse_pas_equipe"))
+        _close_error(game)
         return False
     finally:
         close_bag_search(game, layout)
         escape_menu(game)
+
+
+def _close_error(game) -> None:
+    """Fenêtre « Erreur » du jeu (08/11, Walitcoin : « Déjà équipé ! » restée ouverte, les deux recherches suivantes
+    du sac pas ouvertes) : son bouton « Ok », ou ce qui ferme, cliqué ; 3 fenêtres au plus."""
+    from bot.perception.popups import find_generic_close
+
+    for _ in range(3):
+        found = find_generic_close(game.look(park=False))
+        if found is None:
+            return
+        log.info("Fenêtre fermée par « %s »", found[1])
+        game.click(found[0], (3, 3))
+        game.sleep(0.4)
 
 
 def take_gear(member, template: int) -> bool:

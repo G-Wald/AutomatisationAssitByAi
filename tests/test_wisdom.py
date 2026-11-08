@@ -54,3 +54,25 @@ def test_chest_search_text_left_only_by_the_wanted_item():
     assert query and "'" not in query and sum(query.lower() in o.lower() for o in others) == 1
     assert unique_query("Bottes de l'Aventurier", ["Bottes Paysannes", "Ceinture du Rat"]) == "Bottes de l"
     assert unique_query("Ceinture du Rat", ["Ceinture du Prespic"]) == "Ceinture du Rat"
+
+
+def test_items_taken_from_the_chest_after_it_was_listed_are_gone(tmp_path):
+    session = tmp_path / "20261108_172001"
+    session.mkdir()
+    (session / "reseau_Walitcoin.txt").write_text(
+        "17:26:00.000 ELO109f5cde~1b0f~1~~7c#1d##0d0+29;O109f5cdf~17d~1~~7c#14##0d0+20\n"
+        "17:26:38.734 EsKO-278879454\n", encoding="utf-8")  # 0x109f5cde
+    chest = chest_contents(["Walitcoin"], tmp_path)["Walitcoin"]
+    assert [(g.template, g.wisdom) for g in chest] == [(0x17d, 20)]
+
+
+def test_never_the_same_ring_twice():
+    # 08/11 (capture de Walitcoin) : le jeu refuse un 2e Anneau du Sanglier (« Déjà équipé ! »).
+    sanglier, silimelle = template("Anneau du Sanglier"), template("Alliance de Silimelle")
+    worn = Gear(1, sanglier, 8, "Walitcoin", "porté", 2)
+    gear = [worn, Gear(2, sanglier, 10, "Pesopepe", "sac"), Gear(3, silimelle, 25, "Pesopepe", "sac")]
+    moves = plan_wisdom({"Walitcoin": 40}, gear, {"Walitcoin"}, set())
+    rings = sorted((m.gear.uid, m.replaced.uid if m.replaced else None) for m in moves)
+    # la Silimelle dans l'emplacement libre ; le Sanglier +10 remplace le +8 (même emplacement), jamais les deux
+    assert [m.gear.template for m in moves].count(sanglier) <= 1
+    assert any(uid == 3 for uid, _ in rings)
