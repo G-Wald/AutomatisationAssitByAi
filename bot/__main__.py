@@ -538,6 +538,11 @@ def run_team(args: argparse.Namespace, settings: dict, team: TeamSettings, title
             # la banque garde sa sortie connue (coffre ou dialogue refermés d'abord). 07/11 : Waldhary dans une
             # taverne, pris pour la banque à l'écran sombre, bot arrêté.
             leave_buildings(members, bot.travel_settings.hide_players_key, banking=bool(args.banque))
+            # 08/11 : une salle intérieure qui n'est pas un bâtiment (salle de Bibiblop, où « Sortir du donjon » ramène),
+            # quittée par son soleil au sol avant tout trajet.
+            from bot.team.pods import _leave_rooms
+
+            _leave_rooms(bot)
         if not args.observe and not args.donjon and len(members) > 1:
             alone = [m for m in members if bank_inside(m) and not _told_outside(m)]
             if alone and (len(alone) < len(members) or not args.banque):
